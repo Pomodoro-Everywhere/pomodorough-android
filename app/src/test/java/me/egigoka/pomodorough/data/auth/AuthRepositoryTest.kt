@@ -1,6 +1,7 @@
 package me.egigoka.pomodorough.data.auth
 
 import java.io.IOException
+import java.time.Instant
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
@@ -18,12 +19,71 @@ import me.egigoka.pomodorough.data.api.PomodoroughService
 import okhttp3.sse.EventSource
 import okhttp3.sse.EventSourceListener
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AuthRepositoryTest {
+    @Test
+    fun hasTokensReflectsStoreContents() {
+        val store = FakeTokenStore(null)
+        val repository = repository(FakeService(), store)
+
+        assertFalse(repository.hasTokens())
+
+        store.tokens = freshTokens()
+
+        assertTrue(repository.hasTokens())
+    }
+
+    @Test
+    fun clearDelegatesToTokenStoreOnce() {
+        val store = FakeTokenStore(freshTokens())
+
+        repository(FakeService(), store).clear()
+
+        assertNull(store.tokens)
+        assertEquals(1, store.clearCalls)
+    }
+
+    @Test
+    fun logoutWithoutTokensClearsOnceWithoutCallingApi() = runTest {
+        val store = FakeTokenStore(null)
+        val service = FakeService()
+
+        repository(service, store).logout()
+
+        assertEquals(1, store.clearCalls)
+        assertTrue(service.logoutTokens.isEmpty())
+    }
+
+    @Test
+    fun refreshForwardsExactRefreshToken() = runTest {
+        val store = FakeTokenStore(expiredTokens().copy(refreshToken = "exact-refresh-token"))
+        val service = FakeService().apply { refreshHandler = { freshTokens() } }
+
+        repository(service, store).authorized { it }
+
+        assertEquals(listOf("exact-refresh-token"), service.refreshTokens)
+    }
+
+    @Test
+    fun accessTokenExpiringInThirtySecondsIsRefreshed() = runTest {
+        val tokens = freshTokens().copy(
+            accessToken = "expiring-access",
+            accessTokenExpiresAt = Instant.now().plusSeconds(30).toString(),
+        )
+        val store = FakeTokenStore(tokens)
+        val service = FakeService().apply { refreshHandler = { freshTokens() } }
+
+        val accessToken = repository(service, store).authorized { it }
+
+        assertEquals("fresh-access", accessToken)
+        assertEquals(1, service.refreshCalls)
+    }
+
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
     fun concurrentExpiredRequestsShareOneRefresh() = runTest {
@@ -179,15 +239,19 @@ class AuthRepositoryTest {
 
     private class FakeService : PomodoroughService {
         var refreshCalls = 0
+        val refreshTokens = mutableListOf<String>()
         var refreshHandler: suspend (String) -> TokenPair = { error("Unexpected refresh") }
+        val logoutTokens = mutableListOf<String>()
         var logoutFailure: Throwable? = null
 
         override suspend fun refresh(refreshToken: String): TokenPair {
             refreshCalls += 1
+            refreshTokens += refreshToken
             return refreshHandler(refreshToken)
         }
 
         override suspend fun logout(accessToken: String) {
+            logoutTokens += accessToken
             logoutFailure?.let { throw it }
         }
 

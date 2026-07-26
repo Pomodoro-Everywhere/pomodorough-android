@@ -30,6 +30,8 @@ jobs:
           fetch-depth: 0
 
       - name: Validate tag, version name, and version code
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
@@ -51,49 +53,55 @@ jobs:
             exit 1
           fi
 
-          previous_tags=()
-          while IFS= read -r candidate; do
-            if [[ "${candidate}" == "${GITHUB_REF_NAME}" ]]; then
-              continue
-            fi
-            candidate_version="${candidate#v}"
-            if [[ ! "${candidate_version}" =~ ${semver_pattern} ]]; then
-              echo "Existing release tag ${candidate} is not strict SemVer" >&2
-              exit 1
-            fi
-            previous_tags+=("${candidate}")
-          done < <(git tag --list 'v*')
-
-          if (( ${#previous_tags[@]} > 0 )); then
-            highest_previous_version="$(
-              printf '%s\n' "${previous_tags[@]#v}" | sort -V | tail -n 1
-            )"
-            highest_version="$(
-              printf '%s\n' "${highest_previous_version}" "${tag_version}" | sort -V | tail -n 1
-            )"
-            if [[ "${highest_version}" != "${tag_version}" ]] ||
-              [[ "${highest_previous_version}" == "${tag_version}" ]]; then
-              echo "Release ${tag_version} must exceed existing ${highest_previous_version}" >&2
-              exit 1
-            fi
-
-            maximum_previous_code=0
-            maximum_previous_tag=""
-            for previous_tag in "${previous_tags[@]}"; do
-              previous_build="$(git show "${previous_tag}:app/build.gradle.kts")"
-              previous_code="$(sed -nE 's/^[[:space:]]*versionCode[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' <<< "${previous_build}")"
-              if [[ ! "${previous_code}" =~ ^[1-9][0-9]*$ ]]; then
-                echo "${previous_tag} has invalid versionCode" >&2
+          release_state="$(gh release view "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json isDraft \
+            --jq 'if .isDraft then "draft" else "published" end' 2>/dev/null || printf missing)"
+          if [[ "$release_state" != "published" ]]; then
+            previous_tags=()
+            while IFS= read -r candidate; do
+              if [[ "${candidate}" == "${GITHUB_REF_NAME}" ]]; then
+                continue
+              fi
+              candidate_version="${candidate#v}"
+              if [[ ! "${candidate_version}" =~ ${semver_pattern} ]]; then
+                echo "Existing release tag ${candidate} is not strict SemVer" >&2
                 exit 1
               fi
-              if (( 10#${previous_code} > maximum_previous_code )); then
-                maximum_previous_code=$((10#${previous_code}))
-                maximum_previous_tag="${previous_tag}"
+              previous_tags+=("${candidate}")
+            done < <(git tag --list 'v*')
+
+            if (( ${#previous_tags[@]} > 0 )); then
+              highest_previous_version="$(
+                printf '%s\n' "${previous_tags[@]#v}" | sort -V | tail -n 1
+              )"
+              highest_version="$(
+                printf '%s\n' "${highest_previous_version}" "${tag_version}" | sort -V | tail -n 1
+              )"
+              if [[ "${highest_version}" != "${tag_version}" ]] ||
+                [[ "${highest_previous_version}" == "${tag_version}" ]]; then
+                echo "Release ${tag_version} must exceed existing ${highest_previous_version}" >&2
+                exit 1
               fi
-            done
-            if (( 10#${version_code} <= maximum_previous_code )); then
-              echo "versionCode ${version_code} must exceed ${maximum_previous_code} from ${maximum_previous_tag}" >&2
-              exit 1
+
+              maximum_previous_code=0
+              maximum_previous_tag=""
+              for previous_tag in "${previous_tags[@]}"; do
+                previous_build="$(git show "${previous_tag}:app/build.gradle.kts")"
+                previous_code="$(sed -nE 's/^[[:space:]]*versionCode[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' <<< "${previous_build}")"
+                if [[ ! "${previous_code}" =~ ^[1-9][0-9]*$ ]]; then
+                  echo "${previous_tag} has invalid versionCode" >&2
+                  exit 1
+                fi
+                if (( 10#${previous_code} > maximum_previous_code )); then
+                  maximum_previous_code=$((10#${previous_code}))
+                  maximum_previous_tag="${previous_tag}"
+                fi
+              done
+              if (( 10#${version_code} <= maximum_previous_code )); then
+                echo "versionCode ${version_code} must exceed ${maximum_previous_code} from ${maximum_previous_tag}" >&2
+                exit 1
+              fi
             fi
           fi
 
@@ -145,6 +153,7 @@ jobs:
           name: pomodorough-android-${{ github.ref_name }}
           path: dist/
           if-no-files-found: error
+          overwrite: true
           retention-days: 7
 
   instrumented-tests:
@@ -193,7 +202,7 @@ jobs:
           emulator-options: >-
             -no-snapshot -no-window -gpu swiftshader_indirect -noaudio
             -no-boot-anim -camera-back none -camera-front none -timezone Etc/UTC
-          script: ./gradlew --no-daemon --stacktrace :app:connectedDebugAndroidTest
+          script: bash .github/scripts/run-instrumented-tests.sh
 
   release:
     name: Create GitHub release
@@ -211,16 +220,90 @@ jobs:
           name: pomodorough-android-${{ github.ref_name }}
           path: dist
 
-      - name: Create GitHub release
+      - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: >-
-          gh release create "${GITHUB_REF_NAME}" dist/*
-          --repo "${GITHUB_REPOSITORY}"
-          --verify-tag
-          --generate-notes
-          --title "Pomodorough Android ${GITHUB_REF_NAME}"
-          --notes "Artifacts are not production-signed.
-          pomodorough-${GITHUB_REF_NAME}-debug.apk uses an autogenerated debug key and is for testing only.
-          pomodorough-${GITHUB_REF_NAME}-release-unsigned.apk must be signed before installation or distribution.
-          Verify both APKs with SHA256SUMS.txt."
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_assets=(
+            "pomodorough-${GITHUB_REF_NAME}-debug.apk"
+            "pomodorough-${GITHUB_REF_NAME}-release-unsigned.apk"
+          )
+          expected_release_assets=("${expected_assets[@]}" "SHA256SUMS.txt")
+
+          verify_release_assets() {
+            published_dir="$RUNNER_TEMP/published-release"
+            rm -rf "$published_dir"
+            mkdir -p "$published_dir"
+            gh release download "$GITHUB_REF_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --dir "$published_dir"
+            printf '%s\n' "${expected_release_assets[@]}" | sort > "$RUNNER_TEMP/expected-assets.txt"
+            gh release view "$GITHUB_REF_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json assets \
+              --jq '.assets[].name' | sort > "$RUNNER_TEMP/actual-assets.txt"
+            cmp "$RUNNER_TEMP/expected-assets.txt" "$RUNNER_TEMP/actual-assets.txt"
+            (
+              cd "$published_dir"
+              sha256sum --check SHA256SUMS.txt
+              printf '%s\n' "${expected_assets[@]}" | sort > expected-manifest-assets.txt
+              awk '{print $2}' SHA256SUMS.txt | sed 's|^\*||' | sort > actual-manifest-assets.txt
+              cmp expected-manifest-assets.txt actual-manifest-assets.txt
+            )
+          }
+
+          release_state="missing"
+          if release_state="$(gh release view "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json isDraft \
+            --jq 'if .isDraft then "draft" else "published" end' 2>/dev/null)"; then
+            if [[ "$release_state" == "published" ]]; then
+              verify_release_assets
+              echo "Release $GITHUB_REF_NAME is already published"
+              exit 0
+            fi
+          else
+            release_state="missing"
+          fi
+
+          notes_file="$RUNNER_TEMP/release-notes.md"
+          {
+            printf '%s\n' \
+              'Artifacts are not production-signed.' \
+              '' \
+              "- pomodorough-${GITHUB_REF_NAME}-debug.apk uses an autogenerated debug key and is for testing only." \
+              "- pomodorough-${GITHUB_REF_NAME}-release-unsigned.apk must be signed before installation or distribution." \
+              '- Verify both APKs with SHA256SUMS.txt.' \
+              ''
+            gh api --method POST \
+              "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+              -f tag_name="$GITHUB_REF_NAME" \
+              --jq .body
+          } > "$notes_file"
+
+          if [[ "$release_state" == "missing" ]]; then
+            gh release create "$GITHUB_REF_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --draft \
+              --title "Pomodorough Android $GITHUB_REF_NAME" \
+              --notes-file "$notes_file"
+          fi
+          while IFS= read -r asset; do
+            gh release delete-asset "$GITHUB_REF_NAME" "$asset" \
+              --repo "$GITHUB_REPOSITORY" \
+              --yes
+          done < <(gh release view "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json assets \
+            --jq '.assets[].name')
+          gh release upload "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY"
+          verify_release_assets
+          gh release edit "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Pomodorough Android $GITHUB_REF_NAME" \
+            --notes-file "$notes_file" \
+            --draft=false
