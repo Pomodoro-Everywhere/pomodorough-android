@@ -42,6 +42,80 @@ class TaskReducerTest {
     }
 
     @Test
+    fun replayIsInputOrderIndependentAcrossEveryLwwTieBreaker() {
+        val task = requireNotNull(TaskReducer.taskFromTitle("Ship Android"))
+        val olderWall = operation(
+            "operation-z-old-wall",
+            task.id,
+            TaskOperationType.Delete,
+            null,
+            wall = 1,
+            counter = 9,
+        )
+        val olderCounter = operation(
+            "operation-z-old-counter",
+            task.id,
+            TaskOperationType.Delete,
+            null,
+            wall = 2,
+            counter = 0,
+        )
+        val olderId = operation(
+            "operation-a",
+            task.id,
+            TaskOperationType.Delete,
+            null,
+            wall = 2,
+            counter = 1,
+        )
+        val winner = operation(
+            "operation-z",
+            task.id,
+            TaskOperationType.Upsert,
+            task.title,
+            wall = 2,
+            counter = 1,
+        )
+        val operations = listOf(olderWall, olderCounter, olderId, winner)
+
+        permutations(operations).forEach { input ->
+            assertEquals(
+                input.map(TaskOperation::id).toString(),
+                listOf(task),
+                TaskReducer.replay(emptyList(), input),
+            )
+        }
+    }
+
+    @Test
+    fun exactTaskOperationReplayIsIdempotent() {
+        val task = requireNotNull(TaskReducer.taskFromTitle("Ship Android"))
+        val upsert = operation(
+            "operation-upsert",
+            task.id,
+            TaskOperationType.Upsert,
+            task.title,
+            wall = 1,
+        )
+        val delete = operation(
+            "operation-delete",
+            task.id,
+            TaskOperationType.Delete,
+            null,
+            wall = 2,
+        )
+
+        assertEquals(
+            TaskReducer.replay(emptyList(), listOf(upsert, delete)),
+            TaskReducer.replay(emptyList(), listOf(upsert, upsert, delete, delete)),
+        )
+        assertEquals(
+            listOf(task),
+            TaskReducer.replay(listOf(task), listOf(upsert, upsert)),
+        )
+    }
+
+    @Test
     fun dailySummaryCountsCompletedFocusOnly() {
         val task = requireNotNull(TaskReducer.taskFromTitle("Ship Android"))
         val history = listOf(
@@ -68,6 +142,7 @@ class TaskReducerTest {
         type: String,
         title: String?,
         wall: Long,
+        counter: Long = 0,
     ) = TaskOperation(
         id = id,
         taskId = taskId,
@@ -75,7 +150,7 @@ class TaskReducerTest {
         title = title,
         occurredAt = "2026-07-21T00:00:00Z",
         hlcWallMs = wall,
-        hlcCounter = 0,
+        hlcCounter = counter,
     )
 
     private fun history(
@@ -93,4 +168,12 @@ class TaskReducerTest {
         completedAt = "2026-07-21T10:00:00Z",
         taskId = taskId,
     )
+
+    private fun <T> permutations(values: List<T>): List<List<T>> = when (values.size) {
+        0, 1 -> listOf(values)
+        else -> values.flatMapIndexed { index, value ->
+            permutations(values.filterIndexed { candidate, _ -> candidate != index })
+                .map { listOf(value) + it }
+        }
+    }
 }

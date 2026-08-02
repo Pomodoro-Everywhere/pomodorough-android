@@ -3,6 +3,7 @@ package me.egigoka.pomodorough.data
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Required
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 
 object TimerPhase {
     const val Focus = "focus"
@@ -101,6 +102,7 @@ data class TimerCommand(
     val hlcCounter: Long,
     val observedElapsedMs: Long,
     val taskId: String? = null,
+    @Transient val physicalOccurredAt: String? = null,
 )
 
 @Serializable

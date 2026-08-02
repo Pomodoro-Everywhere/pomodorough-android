@@ -20,8 +20,10 @@ import me.egigoka.pomodorough.data.TaskAcknowledgement
 import me.egigoka.pomodorough.data.TaskOperation
 import me.egigoka.pomodorough.data.TaskOperationType
 import me.egigoka.pomodorough.data.TimerPhase
+import me.egigoka.pomodorough.data.TimerCommand
 import me.egigoka.pomodorough.data.TimerSettings
 import me.egigoka.pomodorough.data.TimerStatus
+import me.egigoka.pomodorough.data.UuidV7
 import me.egigoka.pomodorough.data.api.ApiException
 import me.egigoka.pomodorough.data.local.PendingCommandEntity
 import me.egigoka.pomodorough.data.local.PendingDurationOperationEntity
@@ -85,6 +87,63 @@ class TimerRepositoryPositiveTest {
     }
 
     @Test
+    fun newUserMutationIdsArePersistedMonotonicUuidV7AcrossEveryQueue() = runBlocking {
+        val repository = testRepository(context, database.timerDao())
+        repository.initialize()
+
+        repository.addTask("UUID task")
+        repository.changeDuration(TimerPhase.Focus, 1)
+        repository.setAutoStart(true)
+        repository.toggleTimer()
+
+        val taskId = database.timerDao().pendingTaskOperations().single().id
+        val durationId = database.timerDao().pendingDurationOperations().single().id
+        val autoStartId = database.timerDao().pendingAutoStartOperations().single().id
+        val command = database.timerDao().pendingCommands().single()
+        val ids = listOf(taskId, durationId, autoStartId, command.id)
+            .map { requireNotNull(UuidV7.payload(it)) }
+        assertTrue(ids.zipWithNext().all { (left, right) -> UuidV7.compare(left, right) < 0 })
+        assertEquals(command.id, database.timerDao().localState()?.lastUuidV7)
+        assertEquals(4, command.toModel().let { java.util.UUID.fromString(it.timerId).version() })
+    }
+
+    @Test
+    fun missingCursorReconstructsFromMixedQueueAcrossRestart() = runBlocking {
+        val queuedUuid = UuidV7.make(
+            timestampMs = 1_767_225_600_000,
+            randomHigh = 4,
+            randomLow = 5,
+        )
+        val queued = testDurationOperation(
+            id = "duration-operation-$queuedUuid",
+            phase = TimerPhase.Focus,
+            durationMs = 26 * 60_000L,
+        )
+        database.timerDao().insertState(
+            testState(timer = testTimer()).copy(
+                hlcWallMs = 1_767_225_600_000,
+                hlcCounter = 0,
+            ),
+        )
+        database.timerDao().upsertDurationOperation(PendingDurationOperationEntity.from(queued))
+        val repository = testRepository(
+            context,
+            database.timerDao(),
+            uuidEntropy = { error("Reconstruction path must not draw entropy") },
+        )
+
+        repository.initialize()
+        repository.cancelTimer()
+
+        val commandUuid = requireNotNull(
+            UuidV7.payload(database.timerDao().pendingCommands().single().id),
+        )
+        assertEquals(6, UuidV7.parts(commandUuid).randomLow)
+        assertEquals(commandUuid.toString(), database.timerDao().localState()?.lastUuidV7)
+        assertEquals(queued.id, database.timerDao().pendingDurationOperations().single().id)
+    }
+
+    @Test
     fun offlineCommandLifecyclePersistsInMonotonicOrder() = runBlocking {
         val repository = testRepository(context, database.timerDao())
         repository.initialize()
@@ -114,6 +173,132 @@ class TimerRepositoryPositiveTest {
     }
 
     @Test
+    fun uiCancelAndClearPersistsOneAtomicCommandBatch() = runBlocking {
+        val repository = testRepository(context, database.timerDao())
+        repository.initialize()
+        repository.toggleTimer()
+        val timerId = requireNotNull(repository.state.value.timer?.id)
+
+        repository.cancelAndClearTimer()
+
+        val commands = database.timerDao().pendingCommands().map(PendingCommandEntity::toModel)
+        assertNull(repository.state.value.timer)
+        assertEquals(
+            listOf(CommandType.Start, CommandType.Cancel, CommandType.Clear),
+            commands.map(TimerCommand::type),
+        )
+        assertEquals((1L..3L).toList(), commands.map(TimerCommand::deviceSequence))
+        assertTrue(commands.all { it.timerId == timerId })
+        assertEquals(3L, database.timerDao().localState()?.deviceSequence)
+        assertEquals(1, repository.state.value.history.count { it.timerId == timerId })
+        assertEquals(TimerStatus.Cancelled, repository.state.value.history.single().status)
+    }
+
+    @Test
+    fun uiCancelRaceClearsTimerAlreadyCompletedByDeadline() = runBlocking {
+        database.timerDao().insertState(
+            testState(
+                timer = testTimer(
+                    status = TimerStatus.Completed,
+                    elapsedMs = 1_500_000,
+                ),
+                history = listOf(testHistory("completed")),
+            ),
+        )
+        val repository = testRepository(context, database.timerDao())
+        repository.initialize()
+
+        repository.cancelAndClearTimer()
+
+        val commands = database.timerDao().pendingCommands().map(PendingCommandEntity::toModel)
+        assertNull(repository.state.value.timer)
+        assertEquals(listOf(CommandType.Clear), commands.map(TimerCommand::type))
+        assertEquals(1, repository.state.value.history.size)
+    }
+
+    @Test
+    fun uiCancelRaceAdvancesPhaseWhenRunningTimerCompletesAtDeadline() = runBlocking {
+        database.timerDao().insertState(
+            testState(
+                timer = testTimer(
+                    status = TimerStatus.Running,
+                    anchorAt = "2026-01-01T00:00:00Z",
+                ),
+            ),
+        )
+        val repository = testRepository(
+            context,
+            database.timerDao(),
+            currentTimeMillis = { 1_767_227_100_000L },
+        )
+        repository.initialize()
+
+        repository.cancelAndClearTimer()
+
+        val commands = database.timerDao().pendingCommands().map(PendingCommandEntity::toModel)
+        assertNull(repository.state.value.timer)
+        assertEquals(listOf(CommandType.Cancel, CommandType.Clear), commands.map(TimerCommand::type))
+        assertEquals(TimerStatus.Completed, repository.state.value.history.single().status)
+        assertEquals(TimerPhase.ShortBreak, repository.state.value.settings.selectedPhase)
+        val persisted = requireNotNull(database.timerDao().localState())
+        assertEquals(
+            TimerPhase.ShortBreak,
+            repositoryJson.decodeFromString<TimerSettings>(persisted.settingsJson).selectedPhase,
+        )
+    }
+
+    @Test
+    fun revisionStreamLifecycleRecoversAfterTransientOpenFailure() = runBlocking {
+        val profile = testUser()
+        database.timerDao().insertState(testState(user = profile))
+        val service = TestRepositoryService(profile).apply {
+            revisionStreamFailure = java.io.IOException("temporary stream failure")
+        }
+        val repository = testRepository(
+            context,
+            database.timerDao(),
+            service,
+            TestAuthSession(tokensAvailable = true),
+        )
+        repository.initialize()
+        awaitState { service.syncCalls >= 1 }
+
+        repository.onForeground()
+        awaitState { service.revisionStreamCalls == 1 }
+        repository.onBackground()
+        repository.onForeground()
+        awaitState { service.revisionStreamCalls >= 2 && service.revisionListener != null }
+
+        repository.onBackground()
+        awaitState { service.revisionStreamCancelCalls >= 1 }
+    }
+
+    @Test
+    fun foregroundBeforeInitializationRecoversFromTransientStreamFailure() = runBlocking {
+        val profile = testUser()
+        database.timerDao().insertState(testState(user = profile))
+        val service = TestRepositoryService(profile).apply {
+            revisionStreamFailure = java.io.IOException("temporary stream failure")
+        }
+        val repository = testRepository(
+            context,
+            database.timerDao(),
+            service,
+            TestAuthSession(tokensAvailable = true),
+        )
+
+        repository.onForeground()
+        repository.initialize()
+        awaitState { service.revisionStreamCalls == 1 }
+        repository.onBackground()
+        repository.onForeground()
+        awaitState { service.revisionStreamCalls >= 2 && service.revisionListener != null }
+
+        repository.onBackground()
+        awaitState { service.revisionStreamCancelCalls >= 1 }
+    }
+
+    @Test
     fun fourthExpiredFocusTimerAutoStartsLongBreak() = runBlocking {
         val completedFocus = (1..3).map { testHistory("history-$it") }
         val expired = testTimer(elapsedMs = 1_500_000, anchorAt = "2000-01-01T00:00:00Z")
@@ -134,11 +319,41 @@ class TimerRepositoryPositiveTest {
         val commands = database.timerDao().pendingCommands().map(PendingCommandEntity::toModel)
         assertEquals(TimerStatus.Running, state.timer?.status)
         assertEquals(TimerPhase.LongBreak, state.timer?.phase)
+        assertEquals(TimerPhase.LongBreak, state.settings.selectedPhase)
         assertEquals(4, state.history.size)
         assertTrue(state.history.first().pending)
         assertEquals(listOf(CommandType.Finish, CommandType.Start), commands.map { it.type })
         assertEquals(listOf(11L, 12L), commands.map { it.deviceSequence })
         assertEquals(TimerPhase.LongBreak, commands.last().phase)
+    }
+
+    @Test
+    fun manualCompletionAdvancesThroughRepeatingPomodoroCycle() = runBlocking {
+        val repository = testRepository(context, database.timerDao())
+        repository.initialize()
+        val expectedBreaks = listOf(
+            TimerPhase.ShortBreak,
+            TimerPhase.ShortBreak,
+            TimerPhase.ShortBreak,
+            TimerPhase.LongBreak,
+            TimerPhase.ShortBreak,
+        )
+
+        repository.toggleTimer()
+        expectedBreaks.forEachIndexed { index, expectedBreak ->
+            assertEquals(TimerPhase.Focus, repository.state.value.timer?.phase)
+            repository.finishTimer()
+            assertEquals(expectedBreak, repository.state.value.settings.selectedPhase)
+
+            repository.toggleTimer()
+            assertEquals(expectedBreak, repository.state.value.timer?.phase)
+            repository.finishTimer()
+            assertEquals(TimerPhase.Focus, repository.state.value.settings.selectedPhase)
+
+            if (index < expectedBreaks.lastIndex) repository.toggleTimer()
+        }
+
+        assertEquals(5, repository.state.value.history.count { it.phase == TimerPhase.Focus })
     }
 
     @Test
@@ -221,7 +436,7 @@ class TimerRepositoryPositiveTest {
 
     @Test
     fun durationEditsClampNoOpAndCompactOnePendingOperationPerPhase() = runBlocking {
-        val existingWall = System.currentTimeMillis() + 60_000
+        val existingWall = 1_767_225_660_000L
         database.timerDao().insertState(
             testState().copy(hlcWallMs = existingWall, hlcCounter = 4),
         )
@@ -338,7 +553,7 @@ class TimerRepositoryPositiveTest {
                 durationsMs = canonicalDurations,
                 taskAcknowledgements = emptyList(),
                 tasks = emptyList(),
-                serverTime = "2026-01-01T00:00:00Z",
+                serverTime = java.time.Instant.ofEpochMilli(serverHlcWallMs).toString(),
                 serverHlcWallMs = serverHlcWallMs,
                 serverHlcCounter = 7,
             )
@@ -584,63 +799,89 @@ class TimerRepositoryPositiveTest {
     }
 
     @Test
-    fun taskOperationQueueSyncsInProtocolSizedBatches() = runBlocking {
-        val profile = testUser()
-        val operations = (1..257).map { index ->
-            val task = requireNotNull(TaskReducer.taskFromTitle("Batched task $index"))
-            TaskOperation(
-                id = "task-operation-batch-$index",
-                taskId = task.id,
-                type = TaskOperationType.Upsert,
-                title = task.title,
-                occurredAt = "2026-01-01T00:00:00Z",
-                hlcWallMs = 1_767_225_600_000 + index,
-                hlcCounter = 0,
-            )
-        }
-        database.timerDao().insertState(testState(user = profile))
-        operations.forEach {
-            database.timerDao().insertTaskOperation(PendingTaskOperationEntity.from(it))
-        }
-        val canonicalTasks = linkedMapOf<String, FocusTask>()
-        var revision = 0L
-        val service = TestRepositoryService(profile).apply {
-            syncHandler = { request ->
-                request.taskOperations.forEach { operation ->
-                    val task = requireNotNull(operation.title?.let(TaskReducer::taskFromTitle))
-                    canonicalTasks[task.id] = task
+    fun taskOperationQueueCoversProtocolBatchPartitions() = runBlocking {
+        val cases = linkedMapOf(
+            1 to listOf(1),
+            255 to listOf(255),
+            256 to listOf(256),
+            257 to listOf(256, 1),
+            513 to listOf(256, 256, 1),
+        )
+        cases.forEach { (operationCount, expectedBatchSizes) ->
+            val caseDatabase = Room.inMemoryDatabaseBuilder(
+                context,
+                PomodoroughDatabase::class.java,
+            ).build()
+            try {
+                val profile = testUser("batch-user-$operationCount")
+                val operations = (1..operationCount).map { index ->
+                    val task = requireNotNull(
+                        TaskReducer.taskFromTitle("Batched task $operationCount-$index"),
+                    )
+                    TaskOperation(
+                        id = "task-operation-$operationCount-$index",
+                        taskId = task.id,
+                        type = TaskOperationType.Upsert,
+                        title = task.title,
+                        occurredAt = "2026-01-01T00:00:00Z",
+                        hlcWallMs = 1_767_225_600_000 + index,
+                        hlcCounter = 0,
+                    )
                 }
-                revision += 1
-                SyncResponse(
-                    acknowledgements = emptyList(),
-                    revision = revision,
-                    canonicalTimer = null,
-                    history = emptyList(),
-                    durationAcknowledgements = emptyList(),
-                    durationsMs = DurationsMs(),
-                    taskAcknowledgements = request.taskOperations.map {
-                        TaskAcknowledgement(it.id, "applied", "")
-                    },
-                    tasks = canonicalTasks.values.toList(),
-                    serverTime = "2026-01-01T00:00:00Z",
-                    serverHlcWallMs = 1_767_225_600_000 + revision,
-                    serverHlcCounter = 0,
+                caseDatabase.timerDao().insertState(testState(user = profile))
+                operations.forEach {
+                    caseDatabase.timerDao().insertTaskOperation(PendingTaskOperationEntity.from(it))
+                }
+                val canonicalTasks = linkedMapOf<String, FocusTask>()
+                var revision = 0L
+                val service = TestRepositoryService(profile).apply {
+                    syncHandler = { request ->
+                        request.taskOperations.forEach { operation ->
+                            val task = requireNotNull(operation.title?.let(TaskReducer::taskFromTitle))
+                            canonicalTasks[task.id] = task
+                        }
+                        revision += 1
+                        SyncResponse(
+                            acknowledgements = emptyList(),
+                            revision = revision,
+                            canonicalTimer = null,
+                            history = emptyList(),
+                            durationAcknowledgements = emptyList(),
+                            durationsMs = DurationsMs(),
+                            taskAcknowledgements = request.taskOperations.map {
+                                TaskAcknowledgement(it.id, "applied", "")
+                            },
+                            tasks = canonicalTasks.values.toList(),
+                            serverTime = "2026-01-01T00:00:00Z",
+                            serverHlcWallMs = 1_767_225_600_000 + revision,
+                            serverHlcCounter = 0,
+                        )
+                    }
+                }
+                val repository = testRepository(
+                    context,
+                    caseDatabase.timerDao(),
+                    service,
+                    TestAuthSession(tokensAvailable = true),
                 )
+
+                repository.initialize()
+                awaitState {
+                    service.syncCalls == expectedBatchSizes.size &&
+                        repository.state.value.pendingCount == 0
+                }
+
+                assertEquals(
+                    "operation count $operationCount",
+                    expectedBatchSizes,
+                    service.syncRequests.map { it.taskOperations.size },
+                )
+                assertTrue(caseDatabase.timerDao().pendingTaskOperations().isEmpty())
+                assertEquals(operationCount, repository.state.value.tasks.size)
+            } finally {
+                caseDatabase.close()
             }
         }
-        val repository = testRepository(
-            context,
-            database.timerDao(),
-            service,
-            TestAuthSession(tokensAvailable = true),
-        )
-
-        repository.initialize()
-        awaitState { service.syncCalls == 2 && repository.state.value.pendingCount == 0 }
-
-        assertEquals(listOf(256, 1), service.syncRequests.map { it.taskOperations.size })
-        assertTrue(database.timerDao().pendingTaskOperations().isEmpty())
-        assertEquals(257, repository.state.value.tasks.size)
     }
 
     @Test

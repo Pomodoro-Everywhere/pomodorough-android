@@ -14,9 +14,12 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 import me.egigoka.pomodorough.ui.PomodoroughScreen
 import me.egigoka.pomodorough.ui.PomodoroughTheme
 import me.egigoka.pomodorough.ui.PomodoroughViewModel
+import me.egigoka.pomodorough.data.auth.SystemGoogleCredentialProvider
 
 class MainActivity : ComponentActivity() {
     private val viewModel by viewModels<PomodoroughViewModel> {
@@ -43,8 +46,9 @@ class MainActivity : ComponentActivity() {
             PomodoroughTheme {
                 PomodoroughScreen(
                     state = state,
-                    onSignIn = { viewModel.signIn(this) },
+                    onSignIn = ::signIn,
                     onLogout = viewModel::logout,
+                    onRefresh = viewModel::refresh,
                     onToggleTimer = ::startOrToggleTimer,
                     onFinishTimer = viewModel::finishTimer,
                     onCancelTimer = viewModel::cancelTimer,
@@ -66,15 +70,25 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun signIn() {
+        lifecycleScope.launch {
+            viewModel.signIn(SystemGoogleCredentialProvider(this@MainActivity))
+        }
+    }
+
     private fun startOrToggleTimer() {
-        val needsPermission = Build.VERSION.SDK_INT >= 33 &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
-            PackageManager.PERMISSION_GRANTED &&
-            viewModel.state.value.timer?.status != "running"
-        if (needsPermission) {
-            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-        } else {
-            viewModel.toggleTimer()
+        val decision = TimerNotificationPermissionPolicy.decide(
+            sdkInt = Build.VERSION.SDK_INT,
+            permissionGranted = ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.POST_NOTIFICATIONS,
+            ) == PackageManager.PERMISSION_GRANTED,
+            timerStatus = viewModel.state.value.timer?.status,
+        )
+        when (decision) {
+            TimerNotificationPermissionAction.RequestPermission ->
+                notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+            TimerNotificationPermissionAction.ToggleTimer -> viewModel.toggleTimer()
         }
     }
 }

@@ -1,6 +1,5 @@
 package me.egigoka.pomodorough.integration
 
-import android.app.Activity
 import android.content.Context
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeout
@@ -27,6 +26,7 @@ import me.egigoka.pomodorough.data.TokenPair
 import me.egigoka.pomodorough.data.User
 import me.egigoka.pomodorough.data.api.PomodoroughService
 import me.egigoka.pomodorough.data.auth.AuthSession
+import me.egigoka.pomodorough.data.auth.GoogleCredentialProvider
 import me.egigoka.pomodorough.data.local.LocalStateEntity
 import me.egigoka.pomodorough.data.local.TimerDao
 import okhttp3.sse.EventSource
@@ -42,13 +42,16 @@ internal class TestAuthSession(
     var tokensAvailable: Boolean = false,
 ) : AuthSession {
     var signInCalls = 0
-    var signInHandler: (suspend (Activity, String) -> TokenPair)? = null
+    var signInHandler: (suspend (GoogleCredentialProvider, String) -> TokenPair)? = null
     var logoutCalls = 0
     var logoutFailure: Throwable? = null
 
-    override suspend fun signIn(activity: Activity, deviceId: String): TokenPair {
+    override suspend fun signIn(
+        credentialProvider: GoogleCredentialProvider,
+        deviceId: String,
+    ): TokenPair {
         signInCalls += 1
-        return signInHandler?.invoke(activity, deviceId) ?: error("Unused")
+        return signInHandler?.invoke(credentialProvider, deviceId) ?: error("Unused")
     }
     override fun hasTokens(): Boolean = tokensAvailable
     override suspend fun <T> authorized(block: suspend (String) -> T): T = block("access-token")
@@ -64,6 +67,12 @@ internal class TestAuthSession(
     }
 }
 
+internal fun testCredentialProvider(
+    identityToken: String = "test-id-token",
+): GoogleCredentialProvider = object : GoogleCredentialProvider {
+    override suspend fun identityToken(serverClientId: String, nonce: String): String = identityToken
+}
+
 internal class TestRepositoryService(
     var profile: User = testUser(),
 ) : PomodoroughService {
@@ -72,6 +81,7 @@ internal class TestRepositoryService(
     var resolveCalls = 0
     var revisionStreamCalls = 0
     var revisionStreamCancelCalls = 0
+    var revisionStreamFailure: Throwable? = null
     var revisionListener: EventSourceListener? = null
     val syncRequests = mutableListOf<SyncRequest>()
     val resolutionRequests = mutableListOf<BootstrapResolutionRequest>()
@@ -141,6 +151,10 @@ internal class TestRepositoryService(
     override suspend fun logout(accessToken: String) = Unit
     override fun revisionStream(accessToken: String, listener: EventSourceListener): EventSource {
         revisionStreamCalls += 1
+        revisionStreamFailure?.let { failure ->
+            revisionStreamFailure = null
+            throw failure
+        }
         revisionListener = listener
         return object : EventSource {
             override fun request(): Request = Request.Builder()
@@ -160,6 +174,11 @@ internal fun testRepository(
     service: PomodoroughService = TestRepositoryService(),
     auth: TestAuthSession = TestAuthSession(),
     online: Boolean = true,
+    currentTimeMillis: () -> Long = { 1_767_225_600_000L },
+    elapsedRealtimeMillis: () -> Long = { 10_000L },
+    bootId: () -> String? = { "test-boot" },
+    uuidEntropy: () -> ByteArray = me.egigoka.pomodorough.data.UuidV7::secureEntropy,
+    initialSyncRetryDelayMs: Long = 1_000L,
 ) = TimerRepository(
     context = context,
     dao = dao,
@@ -167,6 +186,11 @@ internal fun testRepository(
     auth = auth,
     json = repositoryJson,
     networkAvailable = { online },
+    currentTimeMillis = currentTimeMillis,
+    elapsedRealtimeMillis = elapsedRealtimeMillis,
+    bootId = bootId,
+    uuidEntropy = uuidEntropy,
+    initialSyncRetryDelayMs = initialSyncRetryDelayMs,
 )
 
 internal fun testState(

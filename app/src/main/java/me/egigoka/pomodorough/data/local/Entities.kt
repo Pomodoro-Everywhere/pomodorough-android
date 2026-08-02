@@ -26,6 +26,12 @@ data class LocalStateEntity(
     val selectedTaskId: String? = null,
     val canonicalAutoStartBreaks: Boolean = false,
     val ownedTimerId: String? = null,
+    val serverClockOffsetMs: Long? = null,
+    val serverClockUncertaintyMs: Long? = null,
+    val serverClockSamplePhysicalMs: Long? = null,
+    val serverClockSampleElapsedRealtimeMs: Long? = null,
+    val serverClockBootId: String? = null,
+    val lastUuidV7: String? = null,
 )
 
 @Entity(tableName = "pending_bootstrap_resolution")
@@ -43,7 +49,10 @@ data class PendingBootstrapResolutionEntity(
     val autoStartOperationsJson: String? = null,
 )
 
-@Entity(tableName = "pending_commands")
+@Entity(
+    tableName = "pending_commands",
+    indices = [Index(value = ["deviceSequence"], unique = true)],
+)
 data class PendingCommandEntity(
     @PrimaryKey val id: String,
     val deviceSequence: Long,
@@ -57,6 +66,7 @@ data class PendingCommandEntity(
     val observedElapsedMs: Long,
     val taskId: String? = null,
     val generatedByFinishCommandId: String? = null,
+    val physicalOccurredAt: String? = null,
 ) {
     fun toModel() = TimerCommand(
         id = id,
@@ -70,6 +80,7 @@ data class PendingCommandEntity(
         hlcCounter = hlcCounter,
         observedElapsedMs = observedElapsedMs,
         taskId = taskId,
+        physicalOccurredAt = physicalOccurredAt,
     )
 
     companion object {
@@ -89,6 +100,7 @@ data class PendingCommandEntity(
             observedElapsedMs = command.observedElapsedMs,
             taskId = command.taskId,
             generatedByFinishCommandId = generatedByFinishCommandId,
+            physicalOccurredAt = command.physicalOccurredAt,
         )
     }
 }

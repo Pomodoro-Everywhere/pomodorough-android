@@ -2,6 +2,7 @@ package me.egigoka.pomodorough.data.auth
 
 import java.io.IOException
 import java.time.Instant
+import java.util.concurrent.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
@@ -26,6 +27,103 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AuthRepositoryTest {
+    @Test
+    fun signInForwardsChallengeToCredentialProviderAndPersistsExchange() = runTest {
+        val tokens = freshTokens()
+        val store = FakeTokenStore(null)
+        val service = FakeService().apply {
+            challenge = NativeChallenge(
+                challenge = "signed-challenge",
+                nonce = "challenge-nonce",
+                expiresAt = "2026-01-01T00:05:00Z",
+            )
+            exchangeHandler = { tokens }
+        }
+        val credentials = FakeGoogleCredentialProvider("google-id-token")
+
+        val result = repository(service, store).signIn(credentials, "device-123")
+
+        assertEquals(tokens, result)
+        assertEquals(listOf("client-id" to "challenge-nonce"), credentials.requests)
+        assertEquals(
+            listOf(
+                NativeExchangeRequest(
+                    idToken = "google-id-token",
+                    challenge = "signed-challenge",
+                    deviceId = "device-123",
+                    platform = "android",
+                ),
+            ),
+            service.exchangeRequests,
+        )
+        assertEquals(tokens, store.tokens)
+        assertEquals(1, store.writeCalls)
+    }
+
+    @Test
+    fun credentialFailureStopsBeforeExchangeAndDoesNotPersistTokens() = runTest {
+        val store = FakeTokenStore(null)
+        val service = FakeService()
+        val failure = IOException("credential provider unavailable")
+        val credentials = FakeGoogleCredentialProvider(failure = failure)
+
+        val error = capture<IOException> {
+            repository(service, store).signIn(credentials, "device-123")
+        }
+
+        assertSame(failure, error)
+        assertTrue(service.exchangeRequests.isEmpty())
+        assertNull(store.tokens)
+        assertEquals(0, store.writeCalls)
+    }
+
+    @Test
+    fun credentialCancellationPropagatesWithoutExchangeOrTokenMutation() = runTest {
+        val store = FakeTokenStore(null)
+        val service = FakeService()
+        val cancellation = CancellationException("user cancelled")
+        val credentials = FakeGoogleCredentialProvider(failure = cancellation)
+
+        val error = capture<CancellationException> {
+            repository(service, store).signIn(credentials, "device-123")
+        }
+
+        assertSame(cancellation, error)
+        assertTrue(service.exchangeRequests.isEmpty())
+        assertNull(store.tokens)
+        assertEquals(0, store.writeCalls)
+    }
+
+    @Test
+    fun blankCredentialTokenIsRejectedBeforeExchange() = runTest {
+        val store = FakeTokenStore(null)
+        val service = FakeService()
+
+        val error = capture<AuthenticationRequired> {
+            repository(service, store).signIn(FakeGoogleCredentialProvider("   "), "device-123")
+        }
+
+        assertEquals("Google did not return an ID token", error.message)
+        assertTrue(service.exchangeRequests.isEmpty())
+        assertNull(store.tokens)
+    }
+
+    @Test
+    fun exchangeFailureDoesNotPersistTokens() = runTest {
+        val store = FakeTokenStore(null)
+        val failure = ApiException(401, "invalid identity token")
+        val service = FakeService().apply { exchangeHandler = { throw failure } }
+
+        val error = capture<ApiException> {
+            repository(service, store).signIn(FakeGoogleCredentialProvider("id-token"), "device-123")
+        }
+
+        assertSame(failure, error)
+        assertEquals(1, service.exchangeRequests.size)
+        assertNull(store.tokens)
+        assertEquals(0, store.writeCalls)
+    }
+
     @Test
     fun hasTokensReflectsStoreContents() {
         val store = FakeTokenStore(null)
@@ -224,11 +322,13 @@ class AuthRepositoryTest {
     private class FakeTokenStore(initial: TokenPair?) : TokenStore {
         var tokens = initial
         var clearCalls = 0
+        var writeCalls = 0
 
         override fun read(): TokenPair? = tokens
 
         override fun write(tokens: TokenPair) {
             this.tokens = tokens
+            writeCalls += 1
         }
 
         override fun clear() {
@@ -243,6 +343,15 @@ class AuthRepositoryTest {
         var refreshHandler: suspend (String) -> TokenPair = { error("Unexpected refresh") }
         val logoutTokens = mutableListOf<String>()
         var logoutFailure: Throwable? = null
+        var challenge = NativeChallenge(
+            challenge = "challenge",
+            nonce = "nonce",
+            expiresAt = "2026-01-01T00:05:00Z",
+        )
+        val exchangeRequests = mutableListOf<NativeExchangeRequest>()
+        var exchangeHandler: suspend (NativeExchangeRequest) -> TokenPair = {
+            error("Unexpected exchange")
+        }
 
         override suspend fun refresh(refreshToken: String): TokenPair {
             refreshCalls += 1
@@ -255,8 +364,11 @@ class AuthRepositoryTest {
             logoutFailure?.let { throw it }
         }
 
-        override suspend fun createChallenge(): NativeChallenge = error("Unused")
-        override suspend fun exchange(request: NativeExchangeRequest): TokenPair = error("Unused")
+        override suspend fun createChallenge(): NativeChallenge = challenge
+        override suspend fun exchange(request: NativeExchangeRequest): TokenPair {
+            exchangeRequests += request
+            return exchangeHandler(request)
+        }
         override suspend fun me(accessToken: String): MeResponse = error("Unused")
         override suspend fun bootstrap(accessToken: String): SyncResponse = error("Unused")
         override suspend fun resolveBootstrap(
@@ -266,5 +378,18 @@ class AuthRepositoryTest {
         override suspend fun sync(accessToken: String, request: SyncRequest): SyncResponse = error("Unused")
         override fun revisionStream(accessToken: String, listener: EventSourceListener): EventSource =
             error("Unused")
+    }
+
+    private class FakeGoogleCredentialProvider(
+        private val token: String = "",
+        private val failure: Throwable? = null,
+    ) : GoogleCredentialProvider {
+        val requests = mutableListOf<Pair<String, String>>()
+
+        override suspend fun identityToken(serverClientId: String, nonce: String): String {
+            requests += serverClientId to nonce
+            failure?.let { throw it }
+            return token
+        }
     }
 }

@@ -1,10 +1,20 @@
 package me.egigoka.pomodorough.ui
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.rememberScrollableState
+import androidx.compose.foundation.gestures.scrollable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -23,25 +33,37 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Checklist
+import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.Timer
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ContainedLoadingIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -60,11 +82,16 @@ import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import java.time.Instant
 import java.time.ZoneId
@@ -96,6 +123,7 @@ fun PomodoroughScreen(
     state: AppState,
     onSignIn: () -> Unit,
     onLogout: () -> Unit,
+    onRefresh: () -> Unit,
     onToggleTimer: () -> Unit,
     onFinishTimer: () -> Unit,
     onCancelTimer: () -> Unit,
@@ -121,6 +149,7 @@ fun PomodoroughScreen(
                 state = state,
                 onSignIn = onSignIn,
                 onLogout = onLogout,
+                onRefresh = onRefresh,
                 onToggleTimer = onToggleTimer,
                 onFinishTimer = onFinishTimer,
                 onCancelTimer = onCancelTimer,
@@ -159,7 +188,7 @@ private fun LoadingScreen() {
                 indicatorColor = Violet,
             )
             Spacer(Modifier.height(28.dp))
-            Text("Syncing your clock", color = Color.White, style = MaterialTheme.typography.titleLarge)
+            Text("Syncing your clock", color = Cloud, style = MaterialTheme.typography.titleLarge)
         }
     }
 }
@@ -197,7 +226,7 @@ private fun SignInScreen(
             Spacer(Modifier.height(30.dp))
             Text(
                 text = "Make time\nfeel yours.",
-                color = Color.White,
+                color = Cloud,
                 style = MaterialTheme.typography.headlineLarge,
             )
             Spacer(Modifier.height(10.dp))
@@ -225,7 +254,7 @@ private fun SignInScreen(
                     Text(
                         "Google sign-in keeps timers and completed sessions shared across your devices. Offline actions wait safely for sync.",
                         style = MaterialTheme.typography.bodyLarge,
-                        color = MutedInk,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Spacer(Modifier.height(24.dp))
                     Button(
@@ -236,13 +265,13 @@ private fun SignInScreen(
                             .height(64.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = Violet,
-                            contentColor = Color.White,
+                            contentColor = Cloud,
                         ),
                     ) {
                         if (signingIn) {
                             ContainedLoadingIndicator(
                                 modifier = Modifier.size(36.dp),
-                                containerColor = Color.White,
+                                containerColor = Cloud,
                                 indicatorColor = Violet,
                             )
                             Spacer(Modifier.width(12.dp))
@@ -261,11 +290,13 @@ private fun SignInScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TimerScreen(
     state: AppState,
     onSignIn: () -> Unit,
     onLogout: () -> Unit,
+    onRefresh: () -> Unit,
     onToggleTimer: () -> Unit,
     onFinishTimer: () -> Unit,
     onCancelTimer: () -> Unit,
@@ -289,15 +320,16 @@ private fun TimerScreen(
         state.historyResolution?.pendingStrategy,
         state.historyResolution?.recovery,
     ) { mutableStateOf<BootstrapStrategy?>(null) }
-    var activeScreen by remember { mutableStateOf(SignedInScreen.Timer) }
+    var activeTab by remember { mutableStateOf(MainTab.Timer) }
+    val tasksListState = rememberLazyListState()
+    val patternListState = rememberLazyListState()
+    val arrivalsListState = rememberLazyListState()
     val mutationsEnabled = state.authStatus != AuthStatus.Loading &&
         state.authStatus != AuthStatus.SigningIn &&
         state.historyResolution == null &&
         state.accountSwitch == null
-    val completedHistory = remember(state.history) {
-        state.history
-            .filter { it.status == TimerStatus.Completed }
-            .sortedByDescending(::historyEpoch)
+    val recentHistory = remember(state.history) {
+        state.history.sortedByDescending(::historyEpoch)
     }
     LaunchedEffect(state.notice) {
         if (state.notice != null) {
@@ -306,12 +338,84 @@ private fun TimerScreen(
         }
     }
 
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .systemBarsPadding(),
-        contentPadding = PaddingValues(bottom = 20.dp),
-    ) {
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val landscape = maxWidth > maxHeight
+        if (landscape && activeTab == MainTab.Timer) {
+            LandscapeTimerScreen(
+                state = state,
+                mutationsEnabled = mutationsEnabled,
+                onToggleTimer = onToggleTimer,
+                onFinishTimer = onFinishTimer,
+                onCancelTimer = onCancelTimer,
+                onClearTimer = onClearTimer,
+                onSelectTask = onSelectTask,
+                onDismissConflict = onDismissConflict,
+                onDismissNotice = onDismissNotice,
+            )
+        } else {
+            Scaffold(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .systemBarsPadding(),
+                bottomBar = {
+                    MainNavigationBar(
+                        active = activeTab,
+                        onSelect = { activeTab = it },
+                    )
+                },
+            ) { scaffoldPadding ->
+                if (activeTab == MainTab.Timer) {
+                    val pullGestureState = rememberScrollableState { 0f }
+                    val content = @Composable {
+                        PortraitTimerScreen(
+                            state = state,
+                            mutationsEnabled = mutationsEnabled,
+                            onSignIn = onSignIn,
+                            onLogout = { showLogoutDialog = true },
+                            onToggleTimer = onToggleTimer,
+                            onFinishTimer = onFinishTimer,
+                            onCancelTimer = onCancelTimer,
+                            onClearTimer = onClearTimer,
+                            onSelectTask = onSelectTask,
+                            onDismissConflict = onDismissConflict,
+                            onDismissNotice = onDismissNotice,
+                        )
+                    }
+                    if (state.authStatus == AuthStatus.SignedIn) {
+                        PullToRefreshBox(
+                            isRefreshing = state.syncStatus == SyncStatus.Syncing,
+                            onRefresh = onRefresh,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(scaffoldPadding),
+                        ) {
+                            Box(
+                                Modifier
+                                    .fillMaxSize()
+                                    .scrollable(pullGestureState, Orientation.Vertical),
+                            ) { content() }
+                        }
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(scaffoldPadding),
+                        ) { content() }
+                    }
+                    return@Scaffold
+                }
+                LazyColumn(
+                    state = when (activeTab) {
+                        MainTab.Timer -> error("Timer tab does not use a list")
+                        MainTab.Tasks -> tasksListState
+                        MainTab.Pattern -> patternListState
+                        MainTab.Arrivals -> arrivalsListState
+                    },
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(scaffoldPadding),
+                    contentPadding = PaddingValues(bottom = 20.dp),
+                ) {
         item {
             AppHeader(
                 state = state,
@@ -319,19 +423,12 @@ private fun TimerScreen(
                 onLogout = { showLogoutDialog = true },
             )
         }
-        item {
-            ScreenSwitcher(
-                active = activeScreen,
-                onSelect = { activeScreen = it },
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
-            )
-        }
         if (state.conflict != null) {
             item {
                 MessageCard(
                     title = "Changes resolved on another device",
                     message = state.conflict,
-                    containerColor = Tomato,
+                    containerColor = Lavender,
                     onDismiss = onDismissConflict,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                 )
@@ -346,31 +443,49 @@ private fun TimerScreen(
                 )
             }
         }
-        if (activeScreen == SignedInScreen.Timer) item {
-            Column(
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 18.dp),
-                verticalArrangement = Arrangement.spacedBy(24.dp),
-            ) {
-                TimerHero(
-                    timer = state.timer,
-                    settings = state.settings,
-                    taskTitle = state.timer?.taskId?.let { taskId ->
-                        state.knownTasks.firstOrNull { it.id == taskId }?.title
-                    },
-                    ready = state.ready && mutationsEnabled,
-                    onToggleTimer = onToggleTimer,
-                    onFinishTimer = onFinishTimer,
-                    onCancelTimer = onCancelTimer,
-                    onClearTimer = onClearTimer,
-                )
-                TaskSelector(
-                    tasks = state.tasks,
-                    selectedTaskId = state.selectedTaskId,
-                    timer = state.timer,
-                    selectedPhase = state.settings.selectedPhase,
-                    mutationsEnabled = mutationsEnabled,
-                    onSelectTask = onSelectTask,
-                )
+        when (activeTab) {
+            MainTab.Timer -> Unit
+            MainTab.Tasks -> {
+                item {
+                    TaskBoardHeader(
+                        summaries = state.taskSummaries,
+                        mutationsEnabled = mutationsEnabled,
+                        onAddTask = onAddTask,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp),
+                    )
+                }
+                if (state.taskSummaries.isEmpty()) {
+                    item {
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                            color = Lavender,
+                            shape = MaterialTheme.shapes.large,
+                        ) {
+                            Text(
+                                "Add a task to give the next focus session a destination.",
+                                modifier = Modifier.padding(22.dp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodyLarge,
+                            )
+                        }
+                    }
+                } else {
+                    item {
+                        TaskColumnLabels(Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
+                    }
+                    items(state.taskSummaries, key = { it.task.id }) { summary ->
+                        TaskSummaryRow(
+                            summary = summary,
+                            mutationsEnabled = mutationsEnabled,
+                            onDelete = { onDeleteTask(summary.task.id) },
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 5.dp),
+                        )
+                    }
+                }
+            }
+            MainTab.Pattern -> item {
                 PatternSection(
                     settings = state.settings,
                     timer = state.timer,
@@ -378,84 +493,49 @@ private fun TimerScreen(
                     onSelectPhase = onSelectPhase,
                     onChangeDuration = onChangeDuration,
                     onSetAutoStart = onSetAutoStart,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 18.dp),
                 )
-                HistoryTitle(completedHistory.size)
             }
-        }
-        if (activeScreen == SignedInScreen.Timer && completedHistory.isEmpty()) {
-            item {
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp),
-                    color = Lavender,
-                    shape = MaterialTheme.shapes.large,
-                ) {
-                    Text(
-                        "Finish your first session and it will land here.",
-                        modifier = Modifier.padding(22.dp),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MutedInk,
+            MainTab.Arrivals -> {
+                item {
+                    HistoryTitle(
+                        count = recentHistory.size,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 18.dp),
                     )
                 }
-            }
-        } else if (activeScreen == SignedInScreen.Timer) {
-            items(items = completedHistory, key = { it.id }) { item ->
-                HistoryRow(
-                    item = item,
-                    taskTitle = item.taskId?.let { taskId ->
-                        state.knownTasks.firstOrNull { it.id == taskId }?.title
-                    },
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 5.dp),
-                )
-            }
-        }
-        if (activeScreen == SignedInScreen.Tasks) {
-            item {
-                TaskBoardHeader(
-                    summaries = state.taskSummaries,
-                    mutationsEnabled = mutationsEnabled,
-                    onAddTask = onAddTask,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-                )
-            }
-            if (state.taskSummaries.isEmpty()) {
-                item {
-                    Surface(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                        color = Lavender,
-                        shape = MaterialTheme.shapes.large,
-                    ) {
-                        Text(
-                            "Add a task to give the next focus session a destination.",
-                            modifier = Modifier.padding(22.dp),
-                            color = MutedInk,
-                            style = MaterialTheme.typography.bodyLarge,
+                if (recentHistory.isEmpty()) {
+                    item {
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp),
+                            color = Lavender,
+                            shape = MaterialTheme.shapes.large,
+                        ) {
+                            Text(
+                                "Your first completed or cancelled session will land here.",
+                                modifier = Modifier.padding(22.dp),
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                } else {
+                    items(items = recentHistory, key = { it.id }) { item ->
+                        HistoryRow(
+                            item = item,
+                            taskTitle = item.taskId?.let { taskId ->
+                                state.knownTasks.firstOrNull { it.id == taskId }?.title
+                            },
+                            showPending = state.authStatus == AuthStatus.SignedIn,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 5.dp),
                         )
                     }
                 }
-            } else {
-                item {
-                    TaskColumnLabels(Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
-                }
-                items(state.taskSummaries, key = { it.task.id }) { summary ->
-                    TaskSummaryRow(
-                        summary = summary,
-                        mutationsEnabled = mutationsEnabled,
-                        onDelete = { onDeleteTask(summary.task.id) },
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 5.dp),
-                    )
-                }
             }
         }
-        item {
-            Footer(
-                deviceId = state.deviceId,
-                signedIn = state.authStatus == AuthStatus.SignedIn,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 22.dp),
-            )
+            }
+            }
         }
     }
 
@@ -554,7 +634,7 @@ private fun TimerScreen(
                         } else if (resolution.corrupted) {
                             "Discard only the corrupted saved request, then fetch account history again. Local timer, history, tasks, settings, and queued operations stay on this device."
                         } else if (selected == null) {
-                            "This device and your account both have completed sessions. Choose how to continue before making more changes."
+                            "This device and your account both contain synchronized timer, history, task, or settings data. Choose how to continue before making more changes."
                         } else {
                             resolutionWarning(selected)
                         },
@@ -655,14 +735,126 @@ private fun TimerScreen(
 }
 
 @Composable
+private fun PortraitTimerScreen(
+    state: AppState,
+    mutationsEnabled: Boolean,
+    onSignIn: () -> Unit,
+    onLogout: () -> Unit,
+    onToggleTimer: () -> Unit,
+    onFinishTimer: () -> Unit,
+    onCancelTimer: () -> Unit,
+    onClearTimer: () -> Unit,
+    onSelectTask: (String?) -> Unit,
+    onDismissConflict: () -> Unit,
+    onDismissNotice: () -> Unit,
+) {
+    Column(Modifier.fillMaxSize()) {
+        AppHeader(state = state, onSignIn = onSignIn, onLogout = onLogout)
+        state.conflict?.let {
+            MessageCard(
+                title = "Changes resolved on another device",
+                message = it,
+                containerColor = Lavender,
+                onDismiss = onDismissConflict,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+            )
+        }
+        state.notice?.let {
+            NoticeCard(
+                message = it,
+                onDismiss = onDismissNotice,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+            )
+        }
+        BoxWithConstraints(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            val orbitSize = (maxHeight - 230.dp).coerceIn(132.dp, 318.dp)
+            TimerHero(
+                timer = state.timer,
+                settings = state.settings,
+                taskTitle = state.timer?.taskId?.let { taskId ->
+                    state.knownTasks.firstOrNull { it.id == taskId }?.title
+                },
+                ready = state.ready && mutationsEnabled,
+                onToggleTimer = onToggleTimer,
+                onFinishTimer = onFinishTimer,
+                onCancelTimer = onCancelTimer,
+                onClearTimer = onClearTimer,
+                tasks = state.tasks,
+                selectedTaskId = state.selectedTaskId,
+                mutationsEnabled = mutationsEnabled,
+                onSelectTask = onSelectTask,
+                orbitMaxSize = orbitSize,
+            )
+        }
+    }
+}
+
+@Composable
+private fun LandscapeTimerScreen(
+    state: AppState,
+    mutationsEnabled: Boolean,
+    onToggleTimer: () -> Unit,
+    onFinishTimer: () -> Unit,
+    onCancelTimer: () -> Unit,
+    onClearTimer: () -> Unit,
+    onSelectTask: (String?) -> Unit,
+    onDismissConflict: () -> Unit,
+    onDismissNotice: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .systemBarsPadding()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        state.conflict?.let {
+            MessageCard(
+                title = "Changes resolved on another device",
+                message = it,
+                containerColor = Lavender,
+                onDismiss = onDismissConflict,
+            )
+        }
+        state.notice?.let {
+            NoticeCard(message = it, onDismiss = onDismissNotice)
+        }
+        TimerHero(
+            timer = state.timer,
+            settings = state.settings,
+            taskTitle = state.timer?.taskId?.let { taskId ->
+                state.knownTasks.firstOrNull { it.id == taskId }?.title
+            },
+            ready = state.ready && mutationsEnabled,
+            onToggleTimer = onToggleTimer,
+            onFinishTimer = onFinishTimer,
+            onCancelTimer = onCancelTimer,
+            onClearTimer = onClearTimer,
+            tasks = state.tasks,
+            selectedTaskId = state.selectedTaskId,
+            mutationsEnabled = mutationsEnabled,
+            onSelectTask = onSelectTask,
+            landscape = true,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
 private fun AppHeader(state: AppState, onSignIn: () -> Unit, onLogout: () -> Unit) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         color = Ink,
-        contentColor = Color.White,
-        shape = RoundedCornerShape(bottomStart = 40.dp, bottomEnd = 40.dp),
+        contentColor = Cloud,
+        shape = RoundedCornerShape(bottomStart = 28.dp, bottomEnd = 28.dp),
     ) {
-        Column(Modifier.padding(start = 20.dp, top = 18.dp, end = 14.dp, bottom = 20.dp)) {
+        Column(Modifier.padding(start = 16.dp, top = 8.dp, end = 10.dp, bottom = 10.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -684,7 +876,7 @@ private fun AppHeader(state: AppState, onSignIn: () -> Unit, onLogout: () -> Uni
                     }
                 }
             }
-            Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.height(4.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Surface(
                     color = syncColor(state.syncStatus),
@@ -692,7 +884,7 @@ private fun AppHeader(state: AppState, onSignIn: () -> Unit, onLogout: () -> Uni
                     shape = CircleShape,
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Box(Modifier.size(8.dp).background(Ink, CircleShape))
@@ -705,10 +897,11 @@ private fun AppHeader(state: AppState, onSignIn: () -> Unit, onLogout: () -> Uni
                     text = when (state.authStatus) {
                         AuthStatus.SignedIn -> state.user?.name?.ifBlank { state.user.email } ?: "Signed in"
                         AuthStatus.Loading -> "Checking account"
-                        else -> "Saved on this device"
+                        AuthStatus.SigningIn -> "Signing in"
+                        AuthStatus.SignedOut -> ""
                     },
                     modifier = Modifier.weight(1f),
-                    color = Color.White,
+                    color = Cloud,
                     style = MaterialTheme.typography.bodyMedium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -719,29 +912,36 @@ private fun AppHeader(state: AppState, onSignIn: () -> Unit, onLogout: () -> Uni
     }
 }
 
-private enum class SignedInScreen { Timer, Tasks }
+private enum class MainTab(val label: String) {
+    Timer("Timer"),
+    Tasks("Tasks"),
+    Pattern("Pattern"),
+    Arrivals("Arrivals"),
+}
 
 @Composable
-private fun ScreenSwitcher(
-    active: SignedInScreen,
-    onSelect: (SignedInScreen) -> Unit,
-    modifier: Modifier = Modifier,
+private fun MainNavigationBar(
+    active: MainTab,
+    onSelect: (MainTab) -> Unit,
 ) {
-    Row(modifier = modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        SignedInScreen.entries.forEach { screen ->
-            val selected = screen == active
-            Button(
-                onClick = { onSelect(screen) },
-                modifier = Modifier
-                    .weight(1f)
-                    .height(50.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (selected) Violet else Lavender,
-                    contentColor = if (selected) Color.White else Ink,
-                ),
-            ) {
-                Text(screen.name.uppercase(), fontWeight = FontWeight.Black)
-            }
+    NavigationBar {
+        MainTab.entries.forEach { tab ->
+            NavigationBarItem(
+                selected = tab == active,
+                onClick = { onSelect(tab) },
+                icon = {
+                    Icon(
+                        imageVector = when (tab) {
+                            MainTab.Timer -> Icons.Outlined.Timer
+                            MainTab.Tasks -> Icons.Outlined.Checklist
+                            MainTab.Pattern -> Icons.Outlined.Tune
+                            MainTab.Arrivals -> Icons.Outlined.History
+                        },
+                        contentDescription = tab.label,
+                    )
+                },
+                label = { Text(tab.label) },
+            )
         }
     }
 }
@@ -751,6 +951,7 @@ private fun TaskSelector(
     tasks: List<FocusTask>,
     selectedTaskId: String?,
     timer: CanonicalTimer?,
+    taskTitle: String?,
     selectedPhase: String,
     mutationsEnabled: Boolean,
     onSelectTask: (String?) -> Unit,
@@ -758,59 +959,50 @@ private fun TaskSelector(
     var expanded by remember { mutableStateOf(false) }
     val active = timer?.status == TimerStatus.Running || timer?.status == TimerStatus.Paused
     val enabled = mutationsEnabled && !active && selectedPhase == TimerPhase.Focus
-    val selectedTitle = tasks.firstOrNull { it.id == selectedTaskId }?.title ?: "No task"
+    val selectedTitle = if (active) {
+        taskTitle ?: "No task"
+    } else {
+        tasks.firstOrNull { it.id == selectedTaskId }?.title ?: "No task"
+    }
 
-    Surface(color = Mint, contentColor = Ink, shape = MaterialTheme.shapes.large) {
-        Column(Modifier.padding(18.dp)) {
-            SectionLabel("FOCUS TASK")
-            Spacer(Modifier.height(5.dp))
+    Box(Modifier.fillMaxWidth()) {
+        OutlinedButton(
+            onClick = { expanded = true },
+            enabled = enabled,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(42.dp),
+            border = BorderStroke(1.dp, Ink.copy(alpha = 0.35f)),
+        ) {
+            Text("FOCUS TASK", style = MaterialTheme.typography.labelMedium)
+            Spacer(Modifier.width(10.dp))
             Text(
-                if (enabled) "Choose a task or keep this pomodoro unassigned."
-                else if (active) "Task selection is locked while timer is active."
-                else "Breaks stay unassigned.",
-                color = MutedInk,
-                style = MaterialTheme.typography.bodyMedium,
+                selectedTitle,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.End,
             )
-            Spacer(Modifier.height(12.dp))
-            Box(Modifier.fillMaxWidth()) {
-                OutlinedButton(
-                    onClick = { expanded = true },
-                    enabled = enabled,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(52.dp),
-                    border = BorderStroke(1.5.dp, Violet),
-                ) {
-                    Text(
-                        selectedTitle,
-                        modifier = Modifier.weight(1f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        textAlign = TextAlign.Start,
-                    )
-                    Text("CHANGE", style = MaterialTheme.typography.labelMedium)
-                }
-                DropdownMenu(
-                    expanded = expanded,
-                    onDismissRequest = { expanded = false },
-                ) {
-                    DropdownMenuItem(
-                        text = { Text("No task") },
-                        onClick = {
-                            expanded = false
-                            onSelectTask(null)
-                        },
-                    )
-                    tasks.forEach { task ->
-                        DropdownMenuItem(
-                            text = { Text(task.title, maxLines = 2, overflow = TextOverflow.Ellipsis) },
-                            onClick = {
-                                expanded = false
-                                onSelectTask(task.id)
-                            },
-                        )
-                    }
-                }
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+        ) {
+            DropdownMenuItem(
+                text = { Text("No task") },
+                onClick = {
+                    expanded = false
+                    onSelectTask(null)
+                },
+            )
+            tasks.forEach { task ->
+                DropdownMenuItem(
+                    text = { Text(task.title, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+                    onClick = {
+                        expanded = false
+                        onSelectTask(task.id)
+                    },
+                )
             }
         }
     }
@@ -951,10 +1143,18 @@ private fun TimerHero(
     onFinishTimer: () -> Unit,
     onCancelTimer: () -> Unit,
     onClearTimer: () -> Unit,
+    tasks: List<FocusTask>,
+    selectedTaskId: String?,
+    mutationsEnabled: Boolean,
+    onSelectTask: (String?) -> Unit,
+    landscape: Boolean = false,
+    orbitMaxSize: Dp = 318.dp,
+    modifier: Modifier = Modifier,
 ) {
     val status = timer?.status ?: "idle"
     val phase = timer?.phase ?: settings.selectedPhase
     val active = status == TimerStatus.Running || status == TimerStatus.Paused
+    val clearable = timer != null && !active
     val palette = phasePalette(phase)
     val containerColor by animateColorAsState(palette.container, label = "timer container")
     val corner by animateDpAsState(
@@ -967,26 +1167,44 @@ private fun TimerHero(
     )
 
     Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = containerColor,
-        contentColor = palette.onContainer,
-        shape = RoundedCornerShape(
-            topStart = corner,
-            topEnd = 22.dp,
-            bottomStart = 22.dp,
-            bottomEnd = corner,
-        ),
+        modifier = modifier.fillMaxWidth(),
+        color = if (landscape) Ink else containerColor,
+        contentColor = if (landscape) Cloud else palette.onContainer,
+        shape = if (landscape) {
+            RoundedCornerShape(24.dp)
+        } else {
+            RoundedCornerShape(
+                topStart = corner,
+                topEnd = 22.dp,
+                bottomStart = 22.dp,
+                bottomEnd = corner,
+            )
+        },
     ) {
-        Column(Modifier.padding(20.dp)) {
+        if (landscape) {
+            LandscapeTimerHero(
+                timer = timer,
+                settings = settings,
+                taskTitle = taskTitle,
+                tasks = tasks,
+                selectedTaskId = selectedTaskId,
+                ready = ready,
+                mutationsEnabled = mutationsEnabled,
+                onToggleTimer = onToggleTimer,
+                onFinishTimer = onFinishTimer,
+                onCancelTimer = onCancelTimer,
+                onClearTimer = onClearTimer,
+                onSelectTask = onSelectTask,
+            )
+            return@Surface
+        }
+        Column(Modifier.padding(14.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Column {
-                    SectionLabel("CURRENT TIMER")
-                    Text(statusLabel(status), style = MaterialTheme.typography.titleLarge)
-                }
+                SectionLabel("CURRENT TIMER")
                 Surface(color = palette.accent, contentColor = Ink, shape = CircleShape) {
                     Text(
                         phaseLabel(phase),
@@ -995,24 +1213,19 @@ private fun TimerHero(
                     )
                 }
             }
-            Spacer(Modifier.height(12.dp))
-            if (timer?.taskId != null) {
-                Surface(
-                    color = palette.onContainer.copy(alpha = 0.1f),
-                    contentColor = palette.onContainer,
-                    shape = CircleShape,
-                ) {
-                    Text(
-                        "Focus task · ${taskTitle ?: "Deleted task"}",
-                        modifier = Modifier.padding(horizontal = 13.dp, vertical = 7.dp),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        style = MaterialTheme.typography.labelLarge,
-                    )
-                }
-                Spacer(Modifier.height(8.dp))
-            }
-            TimerOrbit(timer = timer, settings = settings, palette = palette)
+            Spacer(Modifier.height(6.dp))
+            TimerOrbit(timer = timer, settings = settings, palette = palette, maxSize = orbitMaxSize)
+            Spacer(Modifier.height(6.dp))
+            TaskSelector(
+                tasks = tasks,
+                selectedTaskId = selectedTaskId,
+                timer = timer,
+                taskTitle = taskTitle,
+                selectedPhase = settings.selectedPhase,
+                mutationsEnabled = mutationsEnabled,
+                onSelectTask = onSelectTask,
+            )
+            Spacer(Modifier.height(8.dp))
             Text(
                 timerInstruction(status),
                 modifier = Modifier.fillMaxWidth(),
@@ -1020,57 +1233,149 @@ private fun TimerHero(
                 style = MaterialTheme.typography.bodyMedium,
                 textAlign = TextAlign.Center,
             )
-            Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.height(6.dp))
             Button(
                 onClick = onToggleTimer,
                 enabled = ready,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(64.dp),
+                    .height(54.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = Ink,
-                    contentColor = Color.White,
+                    contentColor = Cloud,
                 ),
             ) {
                 Text(
                     when (status) {
                         TimerStatus.Running -> "Pause"
                         TimerStatus.Paused -> "Resume"
-                        else -> "Start ${phaseLabel(phase).lowercase()}"
+                        else -> "Start ${phaseLabel(settings.selectedPhase).lowercase()}"
                     },
                 )
             }
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(6.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 FilledTonalButton(
                     onClick = onFinishTimer,
                     enabled = ready && active,
                     modifier = Modifier
                         .weight(1f)
-                        .height(52.dp),
+                        .height(46.dp),
                 ) { Text("Finish") }
                 OutlinedButton(
-                    onClick = onCancelTimer,
-                    enabled = ready && active,
+                    onClick = {
+                        if (active) onCancelTimer() else onClearTimer()
+                    },
+                    enabled = ready && (active || clearable),
                     modifier = Modifier
                         .weight(1f)
-                        .height(52.dp),
+                        .height(46.dp),
                     border = BorderStroke(1.5.dp, palette.onContainer.copy(alpha = 0.55f)),
                 ) { Text("Cancel") }
-            }
-            if (timer != null && !active) {
-                TextButton(
-                    onClick = onClearTimer,
-                    enabled = ready,
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text("Clear timer", color = palette.onContainer) }
             }
         }
     }
 }
 
 @Composable
-private fun TimerOrbit(timer: CanonicalTimer?, settings: TimerSettings, palette: PhasePalette) {
+private fun LandscapeTimerHero(
+    timer: CanonicalTimer?,
+    settings: TimerSettings,
+    taskTitle: String?,
+    tasks: List<FocusTask>,
+    selectedTaskId: String?,
+    ready: Boolean,
+    mutationsEnabled: Boolean,
+    onToggleTimer: () -> Unit,
+    onFinishTimer: () -> Unit,
+    onCancelTimer: () -> Unit,
+    onClearTimer: () -> Unit,
+    onSelectTask: (String?) -> Unit,
+) {
+    val status = timer?.status ?: "idle"
+    val phase = timer?.phase ?: settings.selectedPhase
+    val active = status == TimerStatus.Running || status == TimerStatus.Paused
+    val clearable = timer != null && !active
+
+    Column(
+        modifier = Modifier.padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("CURRENT SERVICE", color = Cloud, style = MaterialTheme.typography.labelMedium)
+        }
+        LandscapeTimerReadout(
+            timer = timer,
+            settings = settings,
+            modifier = Modifier.weight(1f),
+        )
+        LandscapeTaskSelector(
+            tasks = tasks,
+            selectedTaskId = selectedTaskId,
+            timer = timer,
+            taskTitle = taskTitle,
+            selectedPhase = settings.selectedPhase,
+            mutationsEnabled = mutationsEnabled,
+            onSelectTask = onSelectTask,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Button(
+                onClick = onToggleTimer,
+                enabled = ready,
+                modifier = Modifier
+                    .weight(1f)
+                    .height(54.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Butter, contentColor = Ink),
+            ) {
+                Text(
+                    when (status) {
+                        TimerStatus.Running -> "Pause"
+                        TimerStatus.Paused -> "Resume"
+                        else -> "Start ${phaseLabel(settings.selectedPhase).lowercase()}"
+                    },
+                    maxLines = 1,
+                )
+            }
+            if (active) {
+                FilledTonalButton(
+                    onClick = onFinishTimer,
+                    enabled = ready,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(54.dp),
+                ) { Text("Finish") }
+                OutlinedButton(
+                    onClick = onCancelTimer,
+                    enabled = ready,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(54.dp),
+                    border = BorderStroke(1.5.dp, Cloud.copy(alpha = 0.65f)),
+                ) { Text("Cancel", color = Cloud) }
+            } else if (clearable) {
+                OutlinedButton(
+                    onClick = onClearTimer,
+                    enabled = ready,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(54.dp),
+                    border = BorderStroke(1.5.dp, Cloud.copy(alpha = 0.65f)),
+                ) { Text("Cancel", color = Cloud) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LandscapeTimerReadout(
+    timer: CanonicalTimer?,
+    settings: TimerSettings,
+    modifier: Modifier = Modifier,
+) {
     var now by remember(timer?.id, timer?.status) { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(timer?.id, timer?.status, timer?.anchorAt) {
         while (timer?.status == TimerStatus.Running) {
@@ -1086,10 +1391,150 @@ private fun TimerOrbit(timer: CanonicalTimer?, settings: TimerSettings, palette:
     val minutes = totalSeconds / 60
     val seconds = totalSeconds % 60
     val progress = if (duration > 0) elapsed.toFloat() / duration else 0f
+    val animatedProgress by animateFloatAsState(
+        targetValue = progress.coerceIn(0f, 1f),
+        animationSpec = tween(durationMillis = 250, easing = LinearEasing),
+        label = "Landscape timer progress",
+    )
     val status = timer?.status ?: "idle"
+    val timeText = timerTimeText(minutes, seconds, status == TimerStatus.Paused, Butter)
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(Cloud.copy(alpha = 0.07f), RoundedCornerShape(20.dp))
+            .semantics {
+                progressBarRangeInfo = ProgressBarRangeInfo(progress.coerceIn(0f, 1f), 0f..1f)
+                contentDescription = "$minutes minutes $seconds seconds remaining, ${phaseLabel(phase)}, $status"
+            }
+            .padding(horizontal = 20.dp, vertical = 8.dp),
+    ) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(phaseRouteLabel(phase).uppercase(), color = Cloud, style = MaterialTheme.typography.labelMedium)
+            Spacer(Modifier.width(8.dp))
+            Text(phaseLabel(phase).uppercase(), color = Butter, style = MaterialTheme.typography.labelMedium)
+        }
+        Text(
+            text = timeText,
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth(),
+            color = Butter,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Black,
+            fontSize = 112.sp,
+            letterSpacing = (-6).sp,
+            maxLines = 1,
+            textAlign = TextAlign.Center,
+        )
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(9.dp)
+                .background(Cloud.copy(alpha = 0.15f), CircleShape),
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth(animatedProgress)
+                    .height(9.dp)
+                    .background(Danger, CircleShape),
+            )
+        }
+    }
+}
+
+@Composable
+private fun LandscapeTaskSelector(
+    tasks: List<FocusTask>,
+    selectedTaskId: String?,
+    timer: CanonicalTimer?,
+    taskTitle: String?,
+    selectedPhase: String,
+    mutationsEnabled: Boolean,
+    onSelectTask: (String?) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val active = timer?.status == TimerStatus.Running || timer?.status == TimerStatus.Paused
+    val enabled = mutationsEnabled && !active && selectedPhase == TimerPhase.Focus
+    val title = if (active) {
+        taskTitle ?: "No task"
+    } else {
+        tasks.firstOrNull { it.id == selectedTaskId }?.title ?: "No task"
+    }
+
+    Box {
+        OutlinedButton(
+            onClick = { expanded = true },
+            enabled = enabled,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(42.dp),
+            border = BorderStroke(1.dp, Cloud.copy(alpha = 0.5f)),
+        ) {
+            Text("FOCUS TASK", color = Cloud, style = MaterialTheme.typography.labelMedium)
+            Spacer(Modifier.width(12.dp))
+            Text(
+                title,
+                modifier = Modifier.weight(1f),
+                color = Butter,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.End,
+            )
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text("No task") },
+                onClick = {
+                    expanded = false
+                    onSelectTask(null)
+                },
+            )
+            tasks.forEach { task ->
+                DropdownMenuItem(
+                    text = { Text(task.title, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+                    onClick = {
+                        expanded = false
+                        onSelectTask(task.id)
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TimerOrbit(
+    timer: CanonicalTimer?,
+    settings: TimerSettings,
+    palette: PhasePalette,
+    maxSize: Dp,
+) {
+    var now by remember(timer?.id, timer?.status) { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(timer?.id, timer?.status, timer?.anchorAt) {
+        while (timer?.status == TimerStatus.Running) {
+            now = System.currentTimeMillis()
+            delay(250)
+        }
+    }
+    val phase = timer?.phase ?: settings.selectedPhase
+    val duration = timer?.plannedDurationMs ?: settings.durationMsFor(phase)
+    val elapsed = if (timer == null) 0 else TimerReducer.elapsedAt(timer, now)
+    val remaining = (duration - elapsed).coerceAtLeast(0)
+    val totalSeconds = ceil(remaining / 1000.0).toLong()
+    val minutes = totalSeconds / 60
+    val seconds = totalSeconds % 60
+    val progress = if (duration > 0) elapsed.toFloat() / duration else 0f
+    val animatedProgress by animateFloatAsState(
+        targetValue = progress.coerceIn(0f, 1f),
+        animationSpec = tween(durationMillis = 250, easing = LinearEasing),
+        label = "Timer progress",
+    )
+    val status = timer?.status ?: "idle"
+    val timeText = timerTimeText(minutes, seconds, status == TimerStatus.Paused, palette.onContainer)
 
     BoxWithConstraints(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-        val orbitSize = min(maxWidth.value, 318f).dp
+        val orbitSize = min(min(maxWidth.value, maxSize.value), 318f).dp
         Box(
             modifier = Modifier
                 .size(orbitSize)
@@ -1112,7 +1557,7 @@ private fun TimerOrbit(timer: CanonicalTimer?, settings: TimerSettings, palette:
                     size = arcSize,
                     style = Stroke(strokeWidth, cap = StrokeCap.Round),
                 )
-                val sweep = 360f * progress.coerceIn(0f, 1f)
+                val sweep = 360f * animatedProgress
                 drawArc(
                     color = palette.accent,
                     startAngle = -90f,
@@ -1122,7 +1567,7 @@ private fun TimerOrbit(timer: CanonicalTimer?, settings: TimerSettings, palette:
                     size = arcSize,
                     style = Stroke(strokeWidth, cap = StrokeCap.Round),
                 )
-                if (progress > 0f) {
+                if (animatedProgress > 0f) {
                     val radius = (size.minDimension - strokeWidth) / 2
                     val angle = (sweep - 90f) * (PI.toFloat() / 180f)
                     val center = Offset(size.width / 2, size.height / 2)
@@ -1138,7 +1583,7 @@ private fun TimerOrbit(timer: CanonicalTimer?, settings: TimerSettings, palette:
             }
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
-                    text = "%02d:%02d".format(minutes, seconds),
+                    text = timeText,
                     color = palette.onContainer,
                     fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Black,
@@ -1157,7 +1602,7 @@ private fun TimerOrbit(timer: CanonicalTimer?, settings: TimerSettings, palette:
                     shape = CircleShape,
                 ) {
                     Text(
-                        "${statusLabel(status)} · ${duration / 60_000} min",
+                        "${duration / 60_000} min",
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                         style = MaterialTheme.typography.labelMedium,
                     )
@@ -1175,15 +1620,16 @@ private fun PatternSection(
     onSelectPhase: (String) -> Unit,
     onChangeDuration: (String, Int) -> Unit,
     onSetAutoStart: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val active = timer?.status == TimerStatus.Running || timer?.status == TimerStatus.Paused
-    Column {
+    Column(modifier) {
         SectionLabel("YOUR RHYTHM")
         Text("Shape your session", style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(6.dp))
         Text(
             "Choose what comes next, then tune its length.",
-            color = MutedInk,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodyMedium,
         )
         Spacer(Modifier.height(16.dp))
@@ -1214,7 +1660,7 @@ private fun PatternSection(
             onChangeDuration = onChangeDuration,
         )
         Spacer(Modifier.height(12.dp))
-        Surface(color = Ink, contentColor = Color.White, shape = MaterialTheme.shapes.large) {
+        Surface(color = Ink, contentColor = Cloud, shape = MaterialTheme.shapes.large) {
             Row(
                 modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -1270,12 +1716,12 @@ private fun PhaseCard(
             Box(
                 modifier = Modifier
                     .size(14.dp)
-                    .background(if (selected) palette.accent else Outline, CircleShape),
+                    .background(if (selected) palette.accent else MaterialTheme.colorScheme.outline, CircleShape),
             )
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(phaseLabel(phase), style = MaterialTheme.typography.titleLarge)
-                Text(supportingText, color = MutedInk, style = MaterialTheme.typography.bodyMedium)
+                Text(supportingText, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
             }
             StepButton("−", "Decrease ${phaseLabel(phase)} duration", enabled) {
                 onChangeDuration(phase, -1)
@@ -1316,9 +1762,9 @@ private fun StepButton(
 }
 
 @Composable
-private fun HistoryTitle(count: Int) {
+private fun HistoryTitle(count: Int, modifier: Modifier = Modifier) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.Bottom,
     ) {
@@ -1326,7 +1772,7 @@ private fun HistoryTitle(count: Int) {
             SectionLabel("COMPLETED SESSIONS")
             Text("Recent focus", style = MaterialTheme.typography.headlineMedium)
         }
-        Surface(color = Violet, contentColor = Color.White, shape = CircleShape) {
+        Surface(color = Violet, contentColor = Cloud, shape = CircleShape) {
             Text(
                 count.toString().padStart(2, '0'),
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
@@ -1338,7 +1784,12 @@ private fun HistoryTitle(count: Int) {
 }
 
 @Composable
-private fun HistoryRow(item: HistoryItem, taskTitle: String?, modifier: Modifier = Modifier) {
+private fun HistoryRow(
+    item: HistoryItem,
+    taskTitle: String?,
+    showPending: Boolean,
+    modifier: Modifier = Modifier,
+) {
     val palette = phasePalette(item.phase)
     Surface(
         modifier = modifier.fillMaxWidth(),
@@ -1363,10 +1814,10 @@ private fun HistoryRow(item: HistoryItem, taskTitle: String?, modifier: Modifier
             Spacer(Modifier.width(13.dp))
             Column(Modifier.weight(1f)) {
                 Text(
-                    phaseLabel(item.phase) + if (item.pending) " · queued" else "",
+                    phaseLabel(item.phase) + if (item.pending && showPending) " · queued" else "",
                     style = MaterialTheme.typography.titleLarge,
                 )
-                Text(formatHistoryDate(item), color = MutedInk, style = MaterialTheme.typography.bodyMedium)
+                Text(formatHistoryDate(item), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
                 if (taskTitle != null) {
                     Text(taskTitle, color = Violet, style = MaterialTheme.typography.labelMedium)
                 }
@@ -1414,38 +1865,15 @@ private fun NoticeCard(message: String, onDismiss: () -> Unit, modifier: Modifie
 }
 
 @Composable
-private fun Footer(deviceId: String, signedIn: Boolean, modifier: Modifier = Modifier) {
-    Row(
-        modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            if (signedIn) "Local clock · shared account" else "Local clock · sign in to sync",
-            color = MutedInk,
-            style = MaterialTheme.typography.labelMedium,
-        )
-        Text("${deviceId.takeLast(4).uppercase()}", color = Violet, style = MaterialTheme.typography.labelMedium)
-    }
-}
-
-@Composable
 private fun BrandMark(compact: Boolean = false) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         BrandOrb(if (compact) 38.dp else 52.dp)
         Spacer(Modifier.width(if (compact) 10.dp else 14.dp))
-        Column {
-            Text(
-                "pomodorough",
-                color = Color.White,
-                style = if (compact) MaterialTheme.typography.titleLarge else MaterialTheme.typography.headlineMedium,
-            )
-            Text(
-                "FOCUS IN MOTION",
-                color = Butter,
-                style = MaterialTheme.typography.labelMedium,
-            )
-        }
+        Text(
+            "pomodorough",
+            color = Cloud,
+            style = if (compact) MaterialTheme.typography.titleLarge else MaterialTheme.typography.headlineMedium,
+        )
     }
 }
 
@@ -1457,13 +1885,13 @@ private fun BrandOrb(size: androidx.compose.ui.unit.Dp) {
             .background(Butter, RoundedCornerShape(topStart = 50.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 50.dp)),
         contentAlignment = Alignment.Center,
     ) {
-        Box(Modifier.size(size * 0.4f).background(Tomato, CircleShape))
+        Box(Modifier.size(size * 0.4f).background(Danger, CircleShape))
     }
 }
 
 @Composable
 private fun SectionLabel(text: String) {
-    Text(text, color = MutedInk, style = MaterialTheme.typography.labelMedium)
+    Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelMedium)
 }
 
 private data class PhasePalette(
@@ -1473,9 +1901,8 @@ private data class PhasePalette(
 )
 
 private fun phasePalette(phase: String): PhasePalette = when (phase) {
-    TimerPhase.ShortBreak -> PhasePalette(container = Mint, accent = Violet)
-    TimerPhase.LongBreak -> PhasePalette(container = Lavender, accent = Tomato)
-    else -> PhasePalette(container = Butter, accent = Tomato)
+    TimerPhase.ShortBreak, TimerPhase.LongBreak -> PhasePalette(container = Lavender, accent = Danger)
+    else -> PhasePalette(container = Butter, accent = Danger)
 }
 
 private fun syncLabel(state: AppState): String {
@@ -1484,11 +1911,7 @@ private fun syncLabel(state: AppState): String {
         return when (state.authStatus) {
             AuthStatus.Loading -> "Checking account"
             AuthStatus.SigningIn -> "Signing in"
-            else -> if (state.pendingCount > 0) {
-                "Local · ${state.pendingCount} saved"
-            } else {
-                "Local only"
-            }
+            else -> "Local only"
         }
     }
     return when (state.syncStatus) {
@@ -1518,34 +1941,56 @@ private fun resolutionWarning(strategy: BootstrapStrategy): String = when (strat
 }
 
 private fun syncColor(status: SyncStatus): Color = when (status) {
-    SyncStatus.Synced -> Mint
-    SyncStatus.Offline -> Color(0xFFD0C8D8)
-    SyncStatus.Conflict, SyncStatus.Retrying -> Tomato
+    SyncStatus.Synced, SyncStatus.Offline -> Lavender
+    SyncStatus.Conflict, SyncStatus.Retrying -> Butter
     SyncStatus.Syncing, SyncStatus.Queued, SyncStatus.Checking -> Butter
 }
 
-private fun statusLabel(status: String): String = when (status) {
-    TimerStatus.Running -> "Running"
-    TimerStatus.Paused -> "Paused"
-    TimerStatus.Completed -> "Complete"
-    TimerStatus.Cancelled -> "Cancelled"
-    TimerStatus.Superseded -> "Moved"
-    else -> "Ready"
+private fun timerInstruction(status: String): String = when (status) {
+    TimerStatus.Running -> "Pause whenever you need."
+    TimerStatus.Paused -> "Resume when ready."
+    TimerStatus.Completed -> "Session complete."
+    TimerStatus.Cancelled -> "Start again when ready."
+    TimerStatus.Superseded -> "This timer continued on another device."
+    else -> "Start when ready."
 }
 
-private fun timerInstruction(status: String): String = when (status) {
-    TimerStatus.Running -> "Stay here, or keep going from another device."
-    TimerStatus.Paused -> "Your place is held until you are ready."
-    TimerStatus.Completed -> "Session complete. Clear it or begin another."
-    TimerStatus.Cancelled -> "Session cancelled. Clear it or begin again."
-    TimerStatus.Superseded -> "This timer continued on another device."
-    else -> "Choose a rhythm, then start when it feels right."
+@Composable
+private fun timerTimeText(minutes: Long, seconds: Long, paused: Boolean, color: Color): AnnotatedString {
+    val blinkingAlpha = if (paused) {
+        val transition = rememberInfiniteTransition(label = "Paused timer separator")
+        val alpha by transition.animateFloat(
+            initialValue = 1f,
+            targetValue = 0.15f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 450, easing = LinearEasing),
+                repeatMode = RepeatMode.Reverse,
+            ),
+            label = "Paused timer separator alpha",
+        )
+        alpha
+    } else {
+        1f
+    }
+    return buildAnnotatedString {
+        append("%02d".format(minutes))
+        withStyle(SpanStyle(color = color.copy(alpha = blinkingAlpha))) {
+            append(":")
+        }
+        append("%02d".format(seconds))
+    }
 }
 
 private fun phaseLabel(phase: String): String = when (phase) {
     TimerPhase.ShortBreak -> "Short break"
     TimerPhase.LongBreak -> "Long break"
     else -> "Focus"
+}
+
+private fun phaseRouteLabel(phase: String): String = when (phase) {
+    TimerPhase.ShortBreak -> "Reset"
+    TimerPhase.LongBreak -> "Recover"
+    else -> "Work"
 }
 
 private fun phaseStamp(phase: String): String = when (phase) {

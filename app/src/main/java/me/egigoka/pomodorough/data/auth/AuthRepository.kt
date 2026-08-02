@@ -18,26 +18,25 @@ import me.egigoka.pomodorough.data.api.PomodoroughService
 class AuthenticationRequired(message: String = "Sign in required") : Exception(message)
 
 interface AuthSession {
-    suspend fun signIn(activity: Activity, deviceId: String): TokenPair
+    suspend fun signIn(credentialProvider: GoogleCredentialProvider, deviceId: String): TokenPair
     fun hasTokens(): Boolean
     suspend fun <T> authorized(block: suspend (String) -> T): T
     suspend fun logout()
     fun clear()
 }
 
-class AuthRepository(
-    private val api: PomodoroughService,
-    private val tokenVault: TokenStore,
-    private val googleServerClientId: String,
-) : AuthSession {
-    private val refreshMutex = Mutex()
+interface GoogleCredentialProvider {
+    suspend fun identityToken(serverClientId: String, nonce: String): String
+}
 
+class SystemGoogleCredentialProvider(
+    private val activity: Activity,
+) : GoogleCredentialProvider {
     @SuppressLint("CredentialManagerSignInWithGoogle")
-    override suspend fun signIn(activity: Activity, deviceId: String): TokenPair {
-        val challenge = api.createChallenge()
+    override suspend fun identityToken(serverClientId: String, nonce: String): String {
         val googleOption = GetGoogleIdOption.Builder()
-            .setServerClientId(googleServerClientId)
-            .setNonce(challenge.nonce)
+            .setServerClientId(serverClientId)
+            .setNonce(nonce)
             .setFilterByAuthorizedAccounts(false)
             .setAutoSelectEnabled(false)
             .build()
@@ -53,7 +52,25 @@ class AuthRepository(
         ) {
             throw AuthenticationRequired("Google did not return an ID token")
         }
-        val idToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
+        return GoogleIdTokenCredential.createFrom(credential.data).idToken
+    }
+}
+
+class AuthRepository(
+    private val api: PomodoroughService,
+    private val tokenVault: TokenStore,
+    private val googleServerClientId: String,
+) : AuthSession {
+    private val refreshMutex = Mutex()
+
+    override suspend fun signIn(
+        credentialProvider: GoogleCredentialProvider,
+        deviceId: String,
+    ): TokenPair {
+        val challenge = api.createChallenge()
+        val idToken = credentialProvider.identityToken(googleServerClientId, challenge.nonce)
+            .takeIf(String::isNotBlank)
+            ?: throw AuthenticationRequired("Google did not return an ID token")
         return api.exchange(
             NativeExchangeRequest(
                 idToken = idToken,

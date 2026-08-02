@@ -1,6 +1,5 @@
 package me.egigoka.pomodorough.ui
 
-import android.app.Activity
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -12,11 +11,12 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import me.egigoka.pomodorough.data.BootstrapStrategy
-import me.egigoka.pomodorough.data.TimerRepository
+import me.egigoka.pomodorough.data.TimerRepositoryContract
 import me.egigoka.pomodorough.data.TimerStatus
+import me.egigoka.pomodorough.data.auth.GoogleCredentialProvider
 
 class PomodoroughViewModel(
-    private val repository: TimerRepository,
+    private val repository: TimerRepositoryContract,
 ) : ViewModel() {
     val state = repository.state
     private var timerTickJob: Job? = null
@@ -25,11 +25,14 @@ class PomodoroughViewModel(
         viewModelScope.launch { repository.initialize() }
     }
 
-    fun signIn(activity: Activity) = launch { repository.signIn(activity) }
+    suspend fun signIn(credentialProvider: GoogleCredentialProvider) {
+        repository.signIn(credentialProvider)
+    }
     fun logout() = launch { repository.logout() }
+    fun refresh() = repository.refresh()
     fun toggleTimer() = launch { repository.toggleTimer() }
     fun finishTimer() = launch { repository.finishTimer() }
-    fun cancelTimer() = launch { repository.cancelTimer() }
+    fun cancelTimer() = launch { repository.cancelAndClearTimer() }
     fun clearTimer() = launch { repository.clearTimer() }
     fun selectPhase(phase: String) = launch { repository.selectPhase(phase) }
     fun changeDuration(phase: String, delta: Int) = launch {
@@ -55,7 +58,7 @@ class PomodoroughViewModel(
                 if (timerId == null) return@collectLatest
                 while (isActive) {
                     delay(500)
-                    repository.finishExpiredTimer()
+                    if (repository.finishExpiredTimer()) return@collectLatest
                 }
             }
         }
@@ -71,7 +74,7 @@ class PomodoroughViewModel(
         viewModelScope.launch { block() }
     }
 
-    class Factory(private val repository: TimerRepository) : ViewModelProvider.Factory {
+    class Factory(private val repository: TimerRepositoryContract) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             return PomodoroughViewModel(repository) as T

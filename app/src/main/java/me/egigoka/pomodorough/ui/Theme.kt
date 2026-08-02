@@ -15,42 +15,38 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-val Ink = Color(0xFF211A2F)
-val Violet = Color(0xFF6750E6)
-val Tomato = Color(0xFFFF6846)
-val Butter = Color(0xFFFFDE76)
-val Mint = Color(0xFF8BE0C2)
-val Lavender = Color(0xFFE9E3FF)
-val Cloud = Color(0xFFF9F7FF)
-val MutedInk = Color(0xFF625B6D)
-val Outline = Color(0xFF7B7387)
-val Danger = Color(0xFFB3261E)
+val Ink = Color(0xFF111923)
+val Violet = Color(0xFF142C5C)
+val Butter = Color(0xFFF5D05B)
+val Lavender = Color(0xFF8FA8B8)
+val Cloud = Color(0xFFE8F0F1)
+val Danger = Color(0xFFFF604F)
 
 private val colors = lightColorScheme(
     primary = Violet,
-    onPrimary = Color.White,
+    onPrimary = Cloud,
     primaryContainer = Lavender,
     onPrimaryContainer = Ink,
-    secondary = Tomato,
+    secondary = Danger,
     onSecondary = Ink,
-    secondaryContainer = Color(0xFFFFDBD2),
+    secondaryContainer = Cloud,
     onSecondaryContainer = Ink,
-    tertiary = Color(0xFF007A60),
-    onTertiary = Color.White,
-    tertiaryContainer = Mint,
+    tertiary = Butter,
+    onTertiary = Ink,
+    tertiaryContainer = Butter,
     onTertiaryContainer = Ink,
     background = Cloud,
     onBackground = Ink,
     surface = Cloud,
     onSurface = Ink,
     surfaceVariant = Lavender,
-    onSurfaceVariant = MutedInk,
-    outline = Outline,
-    outlineVariant = Color(0xFFD0C8D8),
+    onSurfaceVariant = Ink,
+    outline = Violet,
+    outlineVariant = Lavender,
     error = Danger,
-    onError = Color.White,
-    errorContainer = Color(0xFFFFDAD6),
-    onErrorContainer = Color(0xFF410002),
+    onError = Ink,
+    errorContainer = Danger,
+    onErrorContainer = Ink,
 )
 
 private val typography = Typography(

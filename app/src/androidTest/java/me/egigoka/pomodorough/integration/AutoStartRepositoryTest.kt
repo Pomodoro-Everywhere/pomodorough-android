@@ -72,7 +72,7 @@ class AutoStartRepositoryTest {
         val lower = testAutoStartOperation(
             id = "00000000-0000-4000-8000-000000000001",
             enabled = false,
-            wallMs = 9_000_000_000_000,
+            wallMs = 1_767_225_600_000,
             counter = 3,
         )
         val winner = lower.copy(
@@ -82,7 +82,11 @@ class AutoStartRepositoryTest {
         database.timerDao().insertState(testState().copy(hlcWallMs = lower.hlcWallMs, hlcCounter = 3))
         database.timerDao().insertAutoStartOperation(PendingAutoStartOperationEntity.from(winner))
         database.timerDao().insertAutoStartOperation(PendingAutoStartOperationEntity.from(lower))
-        val repository = testRepository(context, database.timerDao())
+        val repository = testRepository(
+            context,
+            database.timerDao(),
+            currentTimeMillis = { lower.hlcWallMs },
+        )
 
         repository.initialize()
 
@@ -335,7 +339,7 @@ class AutoStartRepositoryTest {
         val commands = database.timerDao().pendingCommands().map(PendingCommandEntity::toModel)
         assertEquals(4, focusHistory.size)
         assertTrue(focusHistory.all { it.taskId == task.id })
-        assertEquals(4 * 60_000L, repository.state.value.taskSummaries.single().timeSpentMs)
+        assertEquals(4 * 60_000L, focusHistory.sumOf(HistoryItem::plannedDurationMs))
         commands.filter { it.type == CommandType.Finish && it.phase == TimerPhase.Focus }.forEach { finish ->
             val next = commands.single { it.deviceSequence == finish.deviceSequence + 1 }
             assertEquals(CommandType.Start, next.type)
@@ -425,7 +429,7 @@ class AutoStartRepositoryTest {
     }
 
     @Test
-    fun lostResponseThenRestartRetriesSameOperationAndAcceptsIgnoredAck() = runBlocking {
+    fun normalSyncSurvivesEveryRestartCheckpoint() = runBlocking {
         val profile = testUser()
         val operation = testAutoStartOperation(
             "00000000-0000-4000-8000-000000000001",
@@ -433,6 +437,18 @@ class AutoStartRepositoryTest {
         )
         database.timerDao().insertState(testState(user = profile))
         database.timerDao().insertAutoStartOperation(PendingAutoStartOperationEntity.from(operation))
+        val beforeHttpService = TestRepositoryService(profile)
+        val beforeHttp = testRepository(
+            context,
+            database.timerDao(),
+            beforeHttpService,
+            TestAuthSession(tokensAvailable = true),
+            online = false,
+        )
+        beforeHttp.initialize()
+        assertEquals(0, beforeHttpService.syncCalls)
+        assertEquals(operation.id, database.timerDao().pendingAutoStartOperations().single().id)
+
         var calls = 0
         val failedService = TestRepositoryService(profile).apply {
             syncHandler = {
@@ -475,6 +491,23 @@ class AutoStartRepositoryTest {
         assertEquals(listOf(operation), retryService.syncRequests.single().autoStartOperations)
         assertTrue(restarted.state.value.settings.autoStartBreaks)
         assertTrue(database.timerDao().pendingAutoStartOperations().isEmpty())
+
+        val afterApplyService = TestRepositoryService(profile).apply {
+            bootstrapResponse = syncResponse.copy(revision = 1, autoStartBreaks = true)
+            syncResponse = syncResponse.copy(revision = 1, autoStartBreaks = true)
+        }
+        val afterApply = testRepository(
+            context,
+            database.timerDao(),
+            afterApplyService,
+            TestAuthSession(tokensAvailable = true),
+        )
+        afterApply.initialize()
+        awaitState { afterApplyService.syncCalls == 1 }
+
+        assertTrue(afterApplyService.syncRequests.single().autoStartOperations.isEmpty())
+        assertEquals(0, afterApply.state.value.pendingCount)
+        assertTrue(afterApply.state.value.settings.autoStartBreaks)
     }
 
     @Test

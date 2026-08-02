@@ -59,6 +59,56 @@ class PomodoroughDatabaseNegativeTest {
     }
 
     @Test
+    fun duplicateDeviceSequenceRollsBackCommandAndClockStateUpdate() = runBlocking {
+        val dao = database.timerDao()
+        val initialState = LocalStateEntity(
+            deviceId = "device-1",
+            deviceSequence = 1,
+            hlcWallMs = 100,
+            settingsJson = "{}",
+        )
+        val existing = PendingCommandEntity.from(command(sequence = 1))
+        dao.insertState(initialState)
+        dao.insertCommand(existing)
+        val duplicateSequence = PendingCommandEntity.from(command(sequence = 1)).copy(
+            id = "command-different-id",
+            hlcWallMs = 102,
+        )
+        val changedState = initialState.copy(deviceSequence = 2, hlcWallMs = 102)
+
+        assertThrows(SQLiteConstraintException::class.java) {
+            runBlocking { dao.persistCommand(duplicateSequence, changedState) }
+        }
+
+        assertEquals(initialState, dao.localState())
+        assertEquals(listOf(existing), dao.pendingCommands())
+    }
+
+    @Test
+    fun secondCommandFailureRollsBackWholeBatchAndClockStateUpdate() = runBlocking {
+        val dao = database.timerDao()
+        val initialState = LocalStateEntity(
+            deviceId = "device-1",
+            deviceSequence = 1,
+            hlcWallMs = 100,
+            settingsJson = "{}",
+        )
+        val existing = PendingCommandEntity.from(command(sequence = 1))
+        dao.insertState(initialState)
+        dao.insertCommand(existing)
+        val first = PendingCommandEntity.from(command(sequence = 2)).copy(id = "command-first")
+        val failingSecond = PendingCommandEntity.from(command(sequence = 3)).copy(id = existing.id)
+        val changedState = initialState.copy(deviceSequence = 3, hlcWallMs = 103)
+
+        assertThrows(SQLiteConstraintException::class.java) {
+            runBlocking { dao.persistCommands(listOf(first, failingSecond), changedState) }
+        }
+
+        assertEquals(initialState, dao.localState())
+        assertEquals(listOf(existing), dao.pendingCommands())
+    }
+
+    @Test
     fun duplicateAutoStartOperationRollsBackClockStateUpdate() = runBlocking {
         val dao = database.timerDao()
         val initialState = LocalStateEntity(

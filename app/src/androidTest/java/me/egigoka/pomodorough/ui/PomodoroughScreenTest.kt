@@ -2,13 +2,14 @@ package me.egigoka.pomodorough.ui
 
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasClickAction
-import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeDown
 import me.egigoka.pomodorough.data.AppState
 import me.egigoka.pomodorough.data.AccountSwitchState
 import me.egigoka.pomodorough.data.AuthStatus
@@ -72,10 +73,36 @@ class PomodoroughScreenTest {
         )
 
         composeRule.onNodeWithText("Sign in").assertExists()
+        composeRule.onNodeWithText("Local only").assertExists()
+        composeRule.onNodeWithText("Local clock · sign in to sync").assertDoesNotExist()
+        composeRule.onNodeWithText("Arrivals").performClick()
         composeRule.onNodeWithText("Recent focus").assertExists()
-        composeRule.onNodeWithText("Local · 2 saved").assertExists()
-        composeRule.onNode(hasScrollAction()).performScrollToNode(hasText("Focus · queued"))
-        composeRule.onNodeWithText("Focus · queued").assertExists()
+        composeRule.onNodeWithText("Focus · queued").assertDoesNotExist()
+        composeRule.onNodeWithText("Focus").assertExists()
+    }
+
+    @Test
+    fun pullToRefreshIsUnavailableWhileSignedOut() {
+        var refreshCalls = 0
+        setScreen(
+            AppState(ready = true, authStatus = AuthStatus.SignedOut),
+            onRefresh = { refreshCalls += 1 },
+        )
+
+        composeRule.onRoot().performTouchInput { swipeDown() }
+        assertEquals(0, refreshCalls)
+    }
+
+    @Test
+    fun pullToRefreshIsAvailableWhileSignedIn() {
+        var refreshCalls = 0
+        setScreen(
+            AppState(ready = true, authStatus = AuthStatus.SignedIn),
+            onRefresh = { refreshCalls += 1 },
+        )
+        composeRule.onRoot().performTouchInput { swipeDown() }
+
+        composeRule.waitUntil(timeoutMillis = 2_000) { refreshCalls == 1 }
     }
 
     @Test
@@ -83,6 +110,7 @@ class PomodoroughScreenTest {
         setScreen(AppState(ready = true, authStatus = AuthStatus.Loading))
 
         composeRule.onNodeWithText("Start focus").assertIsNotEnabled()
+        composeRule.onNodeWithText("Pattern").performClick()
         composeRule.onNodeWithContentDescription("Increase Focus duration").assertIsNotEnabled()
     }
 
@@ -206,6 +234,7 @@ class PomodoroughScreenTest {
     private fun setScreen(
         state: AppState,
         onSignIn: () -> Unit = {},
+        onRefresh: () -> Unit = {},
         onResolve: (BootstrapStrategy) -> Unit = {},
         onRecover: () -> Unit = {},
         onConfirmAccountSwitch: () -> Unit = {},
@@ -217,6 +246,7 @@ class PomodoroughScreenTest {
                     state = state,
                     onSignIn = onSignIn,
                     onLogout = {},
+                    onRefresh = onRefresh,
                     onToggleTimer = {},
                     onFinishTimer = {},
                     onCancelTimer = {},

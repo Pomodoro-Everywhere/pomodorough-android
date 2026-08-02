@@ -43,6 +43,7 @@ class PomodoroughDatabasePositiveTest {
             deviceSequence = 2,
             revision = 7,
             settingsJson = "{}",
+            lastUuidV7 = "017f22e2-79b0-7cc3-98c4-dc0c0c07398f",
         )
         val first = PendingCommandEntity.from(command(sequence = 1))
         val second = PendingCommandEntity.from(command(sequence = 2))
@@ -97,6 +98,9 @@ class PomodoroughDatabasePositiveTest {
         PomodoroughDatabase.Migration4To5,
         PomodoroughDatabase.Migration5To6,
         PomodoroughDatabase.Migration6To7,
+        PomodoroughDatabase.Migration7To8,
+        PomodoroughDatabase.Migration8To9,
+        PomodoroughDatabase.Migration9To10,
     ).build()
 
     private fun command(sequence: Long) = TimerCommand(

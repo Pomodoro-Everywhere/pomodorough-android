@@ -1,5 +1,6 @@
 package me.egigoka.pomodorough.domain
 
+import java.time.Duration
 import java.time.Instant
 import me.egigoka.pomodorough.data.CanonicalTimer
 import me.egigoka.pomodorough.data.CommandType
@@ -17,7 +18,7 @@ object TimerReducer {
     ): TimerProjection {
         var timer = canonicalTimer
         val history = canonicalHistory.toMutableList()
-        commands.sortedBy(TimerCommand::deviceSequence).forEach { command ->
+        commands.sortedWith(compareBy(TimerCommand::deviceSequence, TimerCommand::id)).forEach { command ->
             timer = reduce(timer, history, command)
         }
         return TimerProjection(timer, history)
@@ -34,22 +35,33 @@ object TimerReducer {
     }
 
     private fun reduce(
-        current: CanonicalTimer?,
+        initial: CanonicalTimer?,
         history: MutableList<HistoryItem>,
         command: TimerCommand,
     ): CanonicalTimer? {
+        val physicalOccurredAt = command.physicalOccurredAt ?: command.occurredAt
+        val current = autoComplete(initial, history, physicalOccurredAt)
         val intent = TimerIntent(command.type, command.id, command.occurredAt)
         return when (command.type) {
-            CommandType.Start -> CanonicalTimer(
-                id = command.timerId,
-                phase = command.phase,
-                status = TimerStatus.Running,
-                plannedDurationMs = command.plannedDurationMs,
-                elapsedAtAnchorMs = 0,
-                anchorAt = command.occurredAt,
-                taskId = command.taskId,
-                lastIntent = intent,
-            )
+            CommandType.Start -> if (
+                current?.id == command.timerId || history.any { it.timerId == command.timerId }
+            ) {
+                current
+            } else {
+                current?.takeIf { it.status in activeStatuses }?.let { timer ->
+                    addTerminalHistory(history, timer, command, TimerStatus.Superseded)
+                }
+                CanonicalTimer(
+                    id = command.timerId,
+                    phase = command.phase,
+                    status = TimerStatus.Running,
+                    plannedDurationMs = command.plannedDurationMs,
+                    elapsedAtAnchorMs = 0,
+                    anchorAt = physicalOccurredAt,
+                    taskId = command.taskId,
+                    lastIntent = intent,
+                )
+            }
 
             CommandType.Pause -> current?.takeIf {
                 it.id == command.timerId && it.status == TimerStatus.Running
@@ -57,51 +69,83 @@ object TimerReducer {
                 timer.copy(
                     status = TimerStatus.Paused,
                     elapsedAtAnchorMs = command.observedElapsedMs.coerceIn(0, timer.plannedDurationMs),
-                    anchorAt = command.occurredAt,
+                    anchorAt = physicalOccurredAt,
                     lastIntent = intent,
                 )
             } ?: current
 
             CommandType.Resume -> current?.takeIf {
-                it.id == command.timerId &&
-                    (it.status == TimerStatus.Paused || it.status == TimerStatus.Superseded)
+                it.id == command.timerId && it.status in resumableStatuses
             }?.let { timer ->
+                if (timer.status == TimerStatus.Superseded) {
+                    history.removeAll {
+                        it.timerId == timer.id && it.status == TimerStatus.Superseded
+                    }
+                }
                 timer.copy(
                     status = TimerStatus.Running,
                     elapsedAtAnchorMs = command.observedElapsedMs.coerceIn(0, timer.plannedDurationMs),
-                    anchorAt = command.occurredAt,
+                    anchorAt = physicalOccurredAt,
+                    lastIntent = intent,
+                )
+            } ?: history.firstOrNull {
+                it.timerId == command.timerId && it.status == TimerStatus.Superseded
+            }?.let { target ->
+                current?.takeIf { it.status in activeStatuses }?.let { timer ->
+                    addTerminalHistory(history, timer, command, TimerStatus.Superseded)
+                }
+                history.removeAll {
+                    it.timerId == target.timerId && it.status == TimerStatus.Superseded
+                }
+                CanonicalTimer(
+                    id = target.timerId,
+                    phase = target.phase,
+                    status = TimerStatus.Running,
+                    plannedDurationMs = target.plannedDurationMs,
+                    elapsedAtAnchorMs = command.observedElapsedMs.coerceIn(
+                        0,
+                        target.plannedDurationMs,
+                    ),
+                    anchorAt = physicalOccurredAt,
+                    taskId = target.taskId,
                     lastIntent = intent,
                 )
             } ?: current
 
-            CommandType.Finish -> current?.takeIf {
-                it.id == command.timerId && it.status in activeStatuses
-            }?.let { timer ->
-                timer.copy(
-                    status = TimerStatus.Completed,
-                    elapsedAtAnchorMs = timer.plannedDurationMs,
-                    anchorAt = command.occurredAt,
-                    lastIntent = intent,
-                )
-            }?.also { completedTimer ->
-                if (history.none { item -> item.commandId == command.id }) {
-                    history.add(
-                        0,
-                        HistoryItem(
-                            id = "${command.timerId}:${command.id}",
-                            timerId = command.timerId,
-                            commandId = command.id,
-                            phase = command.phase,
-                            status = TimerStatus.Completed,
-                            plannedDurationMs = command.plannedDurationMs,
-                            completedAt = command.occurredAt,
-                            endedAt = command.occurredAt,
-                            pending = true,
-                            taskId = completedTimer.taskId,
-                        ),
-                    )
+            CommandType.Finish -> {
+                val unclaimedCompletion = history.indexOfFirst {
+                    current?.id == command.timerId &&
+                        it.timerId == command.timerId &&
+                        it.status == TimerStatus.Completed &&
+                        it.commandId == null
                 }
-            } ?: current
+                when {
+                    current?.status == TimerStatus.Completed && unclaimedCompletion >= 0 -> {
+                        history[unclaimedCompletion] = history[unclaimedCompletion].copy(
+                            commandId = command.id,
+                            pending = true,
+                        )
+                        current.copy(lastIntent = intent)
+                    }
+
+                    current?.id == command.timerId && current.status in activeStatuses -> current.copy(
+                        status = TimerStatus.Completed,
+                        elapsedAtAnchorMs = current.plannedDurationMs,
+                        anchorAt = physicalOccurredAt,
+                        lastIntent = intent,
+                    ).also { completedTimer ->
+                        addTerminalHistory(
+                            history,
+                            completedTimer,
+                            command,
+                            TimerStatus.Completed,
+                            physicalOccurredAt,
+                        )
+                    }
+
+                    else -> current
+                }
+            }
 
             CommandType.Cancel -> current?.takeIf {
                 it.id == command.timerId && it.status in activeStatuses
@@ -109,18 +153,97 @@ object TimerReducer {
                 timer.copy(
                     status = TimerStatus.Cancelled,
                     elapsedAtAnchorMs = command.observedElapsedMs.coerceIn(0, timer.plannedDurationMs),
-                    anchorAt = command.occurredAt,
+                    anchorAt = physicalOccurredAt,
                     lastIntent = intent,
+                )
+            }?.also { cancelledTimer ->
+                addTerminalHistory(
+                    history,
+                    cancelledTimer,
+                    command,
+                    TimerStatus.Cancelled,
+                    physicalOccurredAt,
                 )
             } ?: current
 
             CommandType.Clear -> if (
-                current?.id == command.timerId && current.status !in activeStatuses
+                current?.id == command.timerId &&
+                current.status in setOf(
+                    TimerStatus.Completed,
+                    TimerStatus.Cancelled,
+                    TimerStatus.Superseded,
+                )
             ) null else current
 
             else -> current
         }
     }
 
+    private fun autoComplete(
+        current: CanonicalTimer?,
+        history: MutableList<HistoryItem>,
+        occurredAt: String,
+    ): CanonicalTimer? {
+        if (current == null || current.status != TimerStatus.Running) return current
+        val anchor = runCatching { Instant.parse(current.anchorAt) }.getOrNull() ?: return current
+        val occurrence = runCatching { Instant.parse(occurredAt) }.getOrNull() ?: return current
+        val planned = current.plannedDurationMs.coerceAtLeast(0)
+        val stored = current.elapsedAtAnchorMs.coerceIn(0, planned)
+        val elapsedSinceAnchor = runCatching {
+            Duration.between(anchor, occurrence).toMillis()
+        }.getOrNull()?.coerceAtLeast(0) ?: return current
+        val remaining = planned - stored
+        if (elapsedSinceAnchor < remaining) return current
+        val completedAt = runCatching { anchor.plusMillis(remaining).toString() }.getOrNull()
+            ?: return current
+        val completed = current.copy(
+            status = TimerStatus.Completed,
+            elapsedAtAnchorMs = current.plannedDurationMs,
+            anchorAt = completedAt,
+        )
+        if (history.none { it.timerId == current.id }) {
+            history.add(
+                0,
+                HistoryItem(
+                    id = current.id,
+                    timerId = current.id,
+                    phase = current.phase,
+                    status = TimerStatus.Completed,
+                    plannedDurationMs = current.plannedDurationMs,
+                    completedAt = completedAt,
+                    endedAt = completedAt,
+                    taskId = current.taskId,
+                ),
+            )
+        }
+        return completed
+    }
+
+    private fun addTerminalHistory(
+        history: MutableList<HistoryItem>,
+        timer: CanonicalTimer,
+        command: TimerCommand,
+        status: String,
+        physicalOccurredAt: String = command.physicalOccurredAt ?: command.occurredAt,
+    ) {
+        if (history.any { it.commandId == command.id }) return
+        history.add(
+            0,
+            HistoryItem(
+                id = "${timer.id}:${command.id}",
+                timerId = timer.id,
+                commandId = command.id,
+                phase = timer.phase,
+                status = status,
+                plannedDurationMs = timer.plannedDurationMs,
+                completedAt = physicalOccurredAt.takeIf { status == TimerStatus.Completed },
+                endedAt = physicalOccurredAt,
+                pending = true,
+                taskId = timer.taskId,
+            ),
+        )
+    }
+
     private val activeStatuses = setOf(TimerStatus.Running, TimerStatus.Paused)
+    private val resumableStatuses = setOf(TimerStatus.Paused, TimerStatus.Superseded)
 }

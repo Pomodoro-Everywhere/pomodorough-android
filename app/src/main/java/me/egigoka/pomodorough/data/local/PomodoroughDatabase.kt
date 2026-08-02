@@ -1,8 +1,6 @@
 package me.egigoka.pomodorough.data.local
 
 import android.content.Context
-import java.time.Instant
-import java.util.UUID
 import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Delete
@@ -15,6 +13,8 @@ import androidx.room.Transaction
 import androidx.room.Update
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import java.time.Instant
+import java.util.UUID
 import org.json.JSONObject
 
 @Dao
@@ -51,6 +51,15 @@ interface TimerDao {
 
     @Update
     suspend fun updateCommands(commands: List<PendingCommandEntity>)
+
+    @Update
+    suspend fun updateTaskOperations(operations: List<PendingTaskOperationEntity>)
+
+    @Update
+    suspend fun updateDurationOperations(operations: List<PendingDurationOperationEntity>)
+
+    @Update
+    suspend fun updateAutoStartOperations(operations: List<PendingAutoStartOperationEntity>)
 
     @Insert
     suspend fun insertTaskOperation(operation: PendingTaskOperationEntity)
@@ -131,6 +140,40 @@ interface TimerDao {
     }
 
     @Transaction
+    suspend fun updateMutationState(
+        state: LocalStateEntity,
+        commands: List<PendingCommandEntity>,
+        taskOperations: List<PendingTaskOperationEntity>,
+        durationOperations: List<PendingDurationOperationEntity>,
+        autoStartOperations: List<PendingAutoStartOperationEntity>,
+    ) {
+        if (commands.isNotEmpty()) updateCommands(commands)
+        if (taskOperations.isNotEmpty()) updateTaskOperations(taskOperations)
+        if (durationOperations.isNotEmpty()) updateDurationOperations(durationOperations)
+        if (autoStartOperations.isNotEmpty()) updateAutoStartOperations(autoStartOperations)
+        updateState(state)
+    }
+
+    @Transaction
+    suspend fun persistBootstrapPreparation(
+        state: LocalStateEntity,
+        commands: List<PendingCommandEntity>,
+        taskOperations: List<PendingTaskOperationEntity>,
+        durationOperations: List<PendingDurationOperationEntity>,
+        autoStartOperations: List<PendingAutoStartOperationEntity>,
+        resolution: PendingBootstrapResolutionEntity,
+    ) {
+        updateMutationState(
+            state,
+            commands,
+            taskOperations,
+            durationOperations,
+            autoStartOperations,
+        )
+        upsertBootstrapResolution(resolution)
+    }
+
+    @Transaction
     suspend fun applySync(
         acknowledged: List<PendingCommandEntity>,
         state: LocalStateEntity,
@@ -146,7 +189,10 @@ interface TimerDao {
         acknowledgedDurationOperationIds: List<String>,
         state: LocalStateEntity,
         acknowledgedAutoStartOperations: List<PendingAutoStartOperationEntity> = emptyList(),
-        releasedCommands: List<PendingCommandEntity> = emptyList(),
+        updatedCommands: List<PendingCommandEntity> = emptyList(),
+        updatedTaskOperations: List<PendingTaskOperationEntity> = emptyList(),
+        updatedDurationOperations: List<PendingDurationOperationEntity> = emptyList(),
+        updatedAutoStartOperations: List<PendingAutoStartOperationEntity> = emptyList(),
         discardedCommands: List<PendingCommandEntity> = emptyList(),
     ) {
         if (acknowledgedCommands.isNotEmpty()) deleteCommands(acknowledgedCommands)
@@ -157,8 +203,13 @@ interface TimerDao {
         if (acknowledgedAutoStartOperations.isNotEmpty()) {
             deleteAutoStartOperations(acknowledgedAutoStartOperations)
         }
-        if (releasedCommands.isNotEmpty()) updateCommands(releasedCommands)
         if (discardedCommands.isNotEmpty()) deleteCommands(discardedCommands)
+        if (updatedCommands.isNotEmpty()) updateCommands(updatedCommands)
+        if (updatedTaskOperations.isNotEmpty()) updateTaskOperations(updatedTaskOperations)
+        if (updatedDurationOperations.isNotEmpty()) updateDurationOperations(updatedDurationOperations)
+        if (updatedAutoStartOperations.isNotEmpty()) {
+            updateAutoStartOperations(updatedAutoStartOperations)
+        }
         updateState(state)
     }
 
@@ -177,12 +228,17 @@ interface TimerDao {
         state: LocalStateEntity,
         clearAutoStartOperations: Boolean = true,
         retainedCommands: List<PendingCommandEntity> = emptyList(),
+        retainedAutoStartOperations: List<PendingAutoStartOperationEntity> = emptyList(),
     ) {
         deleteAllCommands()
         if (retainedCommands.isNotEmpty()) insertCommands(retainedCommands)
         deleteAllTaskOperations()
         deleteAllDurationOperations()
-        if (clearAutoStartOperations) deleteAllAutoStartOperations()
+        if (clearAutoStartOperations) {
+            deleteAllAutoStartOperations()
+        } else if (retainedAutoStartOperations.isNotEmpty()) {
+            updateAutoStartOperations(retainedAutoStartOperations)
+        }
         deleteBootstrapResolution()
         updateState(state)
     }
@@ -197,7 +253,7 @@ interface TimerDao {
         PendingBootstrapResolutionEntity::class,
         PendingAutoStartOperationEntity::class,
     ],
-    version = 7,
+    version = 10,
     exportSchema = true,
 )
 abstract class PomodoroughDatabase : RoomDatabase() {
@@ -216,6 +272,9 @@ abstract class PomodoroughDatabase : RoomDatabase() {
                 Migration4To5,
                 Migration5To6,
                 Migration6To7,
+                Migration7To8,
+                Migration8To9,
+                Migration9To10,
             ).build()
 
         val Migration1To2 = object : Migration(1, 2) {
@@ -335,16 +394,12 @@ abstract class PomodoroughDatabase : RoomDatabase() {
                 )
 
                 db.query(
-                    "SELECT deviceId, settingsJson, hlcWallMs, hlcCounter FROM local_state WHERE id = 0",
+                    "SELECT deviceId, settingsJson FROM local_state WHERE id = 0",
                 ).use { cursor ->
                     if (!cursor.moveToFirst()) return
                     val settings = runCatching { JSONObject(cursor.getString(1)) }.getOrNull() ?: return
                     if (!settings.optBoolean("autoStartBreaks", false)) return
 
-                    val now = System.currentTimeMillis()
-                    val previousWall = cursor.getLong(2)
-                    val wall = maxOf(now, previousWall, 1L)
-                    val counter = if (wall == previousWall) cursor.getLong(3) + 1 else 0
                     db.execSQL(
                         """INSERT INTO pending_auto_start_operations (
                             id, deviceId, enabled, occurredAt, hlcWallMs, hlcCounter
@@ -352,16 +407,13 @@ abstract class PomodoroughDatabase : RoomDatabase() {
                         arrayOf<Any>(
                             UUID.randomUUID().toString(),
                             cursor.getString(0),
-                            Instant.ofEpochMilli(now).toString(),
-                            wall,
-                            counter,
+                            Instant.EPOCH.toString(),
+                            0L,
+                            0L,
                         ),
                     )
                     db.execSQL(
-                        """UPDATE local_state
-                            SET canonicalAutoStartBreaks = 1, hlcWallMs = ?, hlcCounter = ?
-                            WHERE id = 0""".trimIndent(),
-                        arrayOf<Any>(wall, counter),
+                        "UPDATE local_state SET canonicalAutoStartBreaks = 1 WHERE id = 0",
                     )
                 }
             }
@@ -382,6 +434,47 @@ abstract class PomodoroughDatabase : RoomDatabase() {
                             ORDER BY deviceSequence DESC LIMIT 1
                         )
                         WHERE id = 0""".trimIndent(),
+                )
+            }
+        }
+
+        val Migration7To8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE local_state ADD COLUMN serverClockOffsetMs INTEGER")
+                db.execSQL("ALTER TABLE local_state ADD COLUMN serverClockUncertaintyMs INTEGER")
+                db.execSQL("ALTER TABLE local_state ADD COLUMN serverClockSamplePhysicalMs INTEGER")
+                db.execSQL(
+                    "ALTER TABLE local_state ADD COLUMN serverClockSampleElapsedRealtimeMs INTEGER",
+                )
+                db.execSQL("ALTER TABLE local_state ADD COLUMN serverClockBootId TEXT")
+                db.execSQL("ALTER TABLE pending_commands ADD COLUMN physicalOccurredAt TEXT")
+                db.execSQL("UPDATE pending_commands SET physicalOccurredAt = occurredAt")
+            }
+        }
+
+        val Migration8To9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE local_state ADD COLUMN lastUuidV7 TEXT")
+            }
+        }
+
+        val Migration9To10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """UPDATE pending_commands
+                        SET deviceSequence = -9223372036854775807 + rowid
+                        WHERE typeof(deviceSequence) != 'integer'
+                            OR deviceSequence <= 0 OR deviceSequence IN (
+                            SELECT deviceSequence
+                            FROM pending_commands
+                            GROUP BY deviceSequence
+                            HAVING COUNT(*) > 1
+                        )""".trimIndent(),
+                )
+                db.execSQL(
+                    """CREATE UNIQUE INDEX IF NOT EXISTS
+                        index_pending_commands_deviceSequence
+                        ON pending_commands(deviceSequence)""".trimIndent(),
                 )
             }
         }

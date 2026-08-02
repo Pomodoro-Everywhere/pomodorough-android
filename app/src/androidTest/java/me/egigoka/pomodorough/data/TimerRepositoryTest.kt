@@ -1,6 +1,5 @@
 package me.egigoka.pomodorough.data
 
-import android.app.Activity
 import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
@@ -14,6 +13,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import me.egigoka.pomodorough.data.api.PomodoroughService
 import me.egigoka.pomodorough.data.auth.AuthSession
+import me.egigoka.pomodorough.data.auth.GoogleCredentialProvider
 import me.egigoka.pomodorough.data.local.LocalStateEntity
 import me.egigoka.pomodorough.data.local.PendingCommandEntity
 import me.egigoka.pomodorough.data.local.PendingDurationOperationEntity
@@ -225,7 +225,10 @@ class TimerRepositoryTest {
     private class FakeAuthSession : AuthSession {
         var logoutCalls = 0
 
-        override suspend fun signIn(activity: Activity, deviceId: String): TokenPair = error("Unused")
+        override suspend fun signIn(
+            credentialProvider: GoogleCredentialProvider,
+            deviceId: String,
+        ): TokenPair = error("Unused")
         override fun hasTokens(): Boolean = true
         override suspend fun <T> authorized(block: suspend (String) -> T): T = block("access-token")
         override suspend fun logout() {

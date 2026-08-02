@@ -12,7 +12,6 @@ import me.egigoka.pomodorough.data.Acknowledgement
 import me.egigoka.pomodorough.data.AuthStatus
 import me.egigoka.pomodorough.data.DurationAcknowledgement
 import me.egigoka.pomodorough.data.DurationsMs
-import me.egigoka.pomodorough.data.FocusTask
 import me.egigoka.pomodorough.data.SyncResponse
 import me.egigoka.pomodorough.data.SyncStatus
 import me.egigoka.pomodorough.data.TaskAcknowledgement
@@ -20,6 +19,7 @@ import me.egigoka.pomodorough.data.TaskOperation
 import me.egigoka.pomodorough.data.TaskOperationType
 import me.egigoka.pomodorough.data.TimerPhase
 import me.egigoka.pomodorough.data.TimerSettings
+import me.egigoka.pomodorough.data.UuidV7
 import me.egigoka.pomodorough.data.api.ApiException
 import me.egigoka.pomodorough.data.auth.AuthenticationRequired
 import me.egigoka.pomodorough.data.local.LocalStateEntity
@@ -38,6 +38,7 @@ import me.egigoka.pomodorough.integration.testRepository
 import me.egigoka.pomodorough.integration.testState
 import me.egigoka.pomodorough.integration.testTimer
 import me.egigoka.pomodorough.integration.testUser
+import me.egigoka.pomodorough.domain.TaskReducer
 import me.egigoka.pomodorough.timer.TimerAlarmScheduler
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -81,6 +82,68 @@ class TimerRepositoryNegativeTest {
     }
 
     @Test
+    fun malformedUuidV7CursorBlocksOnlyNewMutationWithoutChangingState() = runBlocking {
+        val initial = testState().copy(lastUuidV7 = "not-a-uuid")
+        database.timerDao().insertState(initial)
+        val repository = testRepository(context, database.timerDao())
+
+        repository.initialize()
+        repository.toggleTimer()
+
+        assertTrue(repository.state.value.ready)
+        assertEquals(0, repository.state.value.pendingCount)
+        assertEquals(initial, database.timerDao().localState())
+        assertTrue(repository.state.value.notice?.contains("UUID", ignoreCase = true) == true)
+    }
+
+    @Test
+    fun uuidV7CursorBehindQueuedMutationBlocksNewMutationWithoutChangingState() = runBlocking {
+        val stored = UuidV7.make(timestampMs = 1_000, randomHigh = 0, randomLow = 1)
+        val queued = UuidV7.make(timestampMs = 1_000, randomHigh = 0, randomLow = 2)
+        val initial = testState().copy(lastUuidV7 = stored.toString())
+        val operation = testDurationOperation(
+            id = "duration-operation-$queued",
+            phase = TimerPhase.Focus,
+            durationMs = 26 * 60_000L,
+        )
+        database.timerDao().insertState(initial)
+        database.timerDao().upsertDurationOperation(PendingDurationOperationEntity.from(operation))
+        val repository = testRepository(context, database.timerDao())
+
+        repository.initialize()
+        repository.toggleTimer()
+
+        assertEquals(initial, database.timerDao().localState())
+        assertTrue(database.timerDao().pendingCommands().isEmpty())
+        assertEquals(operation.id, database.timerDao().pendingDurationOperations().single().id)
+        assertTrue(repository.state.value.notice?.contains("behind", ignoreCase = true) == true)
+    }
+
+    @Test
+    fun generatedBreakBatchRollsBackWhenUuidV7TailExhausts() = runBlocking {
+        val cursor = UuidV7.make(
+            timestampMs = UuidV7.MaxTimestampMs,
+            randomHigh = UuidV7.MaxRandomHigh,
+            randomLow = UuidV7.MaxRandomLow - 1,
+        )
+        val initial = testState(
+            timer = testTimer(),
+            settings = TimerSettings(autoStartBreaks = true),
+        ).copy(lastUuidV7 = cursor.toString())
+        database.timerDao().insertState(initial)
+        val repository = testRepository(context, database.timerDao())
+
+        repository.initialize()
+        repository.finishTimer()
+
+        assertEquals(initial, database.timerDao().localState())
+        assertTrue(database.timerDao().pendingCommands().isEmpty())
+        assertEquals(0, repository.state.value.pendingCount)
+        assertEquals(TimerPhase.Focus, repository.state.value.settings.selectedPhase)
+        assertTrue(repository.state.value.notice?.contains("UUID", ignoreCase = true) == true)
+    }
+
+    @Test
     fun activeTimerRejectsPhaseAndDurationChanges() = runBlocking {
         val repository = testRepository(context, database.timerDao())
         repository.initialize()
@@ -101,26 +164,51 @@ class TimerRepositoryNegativeTest {
     }
 
     @Test
-    fun malformedPersistedJsonFallsBackWithoutBlockingStartup() = runBlocking {
-        database.timerDao().insertState(
-            LocalStateEntity(
-                deviceId = "device-1",
-                canonicalTimerJson = "not-json",
-                historyJson = "not-json",
-                settingsJson = "not-json",
-                userJson = "not-json",
-            ),
+    fun malformedPersistedJsonIsQuarantinedWithoutChangingRawState() = runBlocking {
+        val variants = listOf<(LocalStateEntity) -> LocalStateEntity>(
+            { it.copy(canonicalTimerJson = "not-json") },
+            { it.copy(historyJson = "not-json") },
+            { it.copy(settingsJson = "not-json") },
+            { it.copy(tasksJson = "not-json") },
+            { it.copy(knownTasksJson = "not-json") },
+            { it.copy(userJson = "not-json") },
         )
-        val repository = testRepository(context, database.timerDao())
+        variants.forEachIndexed { index, mutate ->
+            val caseDatabase = Room.inMemoryDatabaseBuilder(
+                context,
+                PomodoroughDatabase::class.java,
+            ).build()
+            try {
+                val initial = mutate(testState())
+                caseDatabase.timerDao().insertState(initial)
+                val service = TestRepositoryService()
+                val repository = testRepository(
+                    context,
+                    caseDatabase.timerDao(),
+                    service,
+                    TestAuthSession(tokensAvailable = true),
+                )
 
-        repository.initialize()
+                repository.initialize()
+                repository.toggleTimer()
+                repository.addTask("Blocked")
+                repository.changeDuration(TimerPhase.Focus, 1)
 
-        val state = repository.state.value
-        assertTrue(state.ready)
-        assertEquals(TimerSettings(), state.settings)
-        assertNull(state.timer)
-        assertNull(state.user)
-        assertTrue(state.history.isEmpty())
+                val state = repository.state.value
+                assertTrue("variant $index", state.ready)
+                assertEquals("variant $index", AuthStatus.SignedOut, state.authStatus)
+                assertTrue(
+                    "variant $index",
+                    state.conflict?.contains("corrupted", ignoreCase = true) == true,
+                )
+                assertEquals("variant $index", initial, caseDatabase.timerDao().localState())
+                assertTrue("variant $index", caseDatabase.timerDao().pendingCommands().isEmpty())
+                assertEquals("variant $index", 0, service.bootstrapCalls)
+                assertEquals("variant $index", 0, service.syncCalls)
+            } finally {
+                caseDatabase.close()
+            }
+        }
     }
 
     @Test
@@ -299,7 +387,7 @@ class TimerRepositoryNegativeTest {
     @Test
     fun duplicateTaskAcknowledgementsCannotMutateQueueOrSnapshot() = runBlocking {
         val profile = testUser()
-        val task = FocusTask("task-1", "Ship")
+        val task = requireNotNull(TaskReducer.taskFromTitle("Ship"))
         val operation = TaskOperation(
             id = "task-operation-1",
             taskId = task.id,

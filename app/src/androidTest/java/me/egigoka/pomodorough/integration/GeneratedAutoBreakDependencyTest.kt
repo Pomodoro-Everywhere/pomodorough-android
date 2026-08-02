@@ -22,6 +22,7 @@ import me.egigoka.pomodorough.data.TimerCommand
 import me.egigoka.pomodorough.data.TimerPhase
 import me.egigoka.pomodorough.data.TimerSettings
 import me.egigoka.pomodorough.data.TimerStatus
+import me.egigoka.pomodorough.data.UuidV7
 import me.egigoka.pomodorough.data.local.PendingCommandEntity
 import me.egigoka.pomodorough.data.local.PomodoroughDatabase
 import me.egigoka.pomodorough.domain.TimerReducer
@@ -152,6 +153,12 @@ class GeneratedAutoBreakDependencyTest {
         assertEquals(listOf(finish.id), service.syncRequests[0].commands.map { it.id })
         assertEquals(listOf(finish.id), service.syncRequests[1].commands.map { it.id })
         assertEquals(listOf(generated.id), service.syncRequests[2].commands.map { it.id })
+        assertTrue(UuidV7.payload(finish.id) != null)
+        assertTrue(UuidV7.payload(generated.id) != null)
+        assertTrue(UuidV7.compare(
+            requireNotNull(UuidV7.payload(finish.id)),
+            requireNotNull(UuidV7.payload(generated.id)),
+        ) < 0)
     }
 
     @Test
@@ -186,9 +193,135 @@ class GeneratedAutoBreakDependencyTest {
 
         assertEquals(1, service.syncCalls)
         assertEquals(paused, repository.state.value.timer)
+        assertEquals(TimerPhase.Focus, repository.state.value.settings.selectedPhase)
         assertEquals(focus.id, database.timerDao().localState()?.ownedTimerId)
         assertTrue(database.timerDao().pendingCommands().isEmpty())
         assertFalse(repository.finishExpiredTimer())
+    }
+
+    @Test
+    fun appliedFinishWithoutExactCanonicalEvidenceDoesNotReleaseGeneratedBreak() = runBlocking {
+        val profile = testUser("applied-without-evidence-owner")
+        val focus = queueOfflineGeneratedBreak(profile)
+        val queued = database.timerDao().pendingCommands()
+        val finish = queued.first { it.type == CommandType.Finish }
+        val generated = queued.first { it.generatedByFinishCommandId != null }
+        val service = TestRepositoryService(profile).apply {
+            bootstrapResponse = response(timer = focus, autoStart = true)
+            syncHandler = { request ->
+                if (syncCalls == 1) {
+                    response(
+                        revision = 1,
+                        timer = completedTimer(focus),
+                        acknowledgements = listOf(Acknowledgement(finish.id, "applied", "")),
+                        autoStart = true,
+                    )
+                } else {
+                    acceptedCommandsResponse(
+                        revision = 2,
+                        commands = request.commands,
+                        history = listOf(completedHistory(focus, finish.id)),
+                    )
+                }
+            }
+        }
+        val repository = testRepository(
+            context,
+            database.timerDao(),
+            service,
+            TestAuthSession(tokensAvailable = true),
+        )
+
+        repository.initialize()
+        awaitState { repository.state.value.pendingCount == 0 }
+
+        assertEquals(1, service.syncCalls)
+        assertEquals(listOf(finish.id), service.syncRequests.single().commands.map { it.id })
+        assertTrue(database.timerDao().pendingCommands().none { it.id == generated.id })
+    }
+
+    @Test
+    fun inFlightExplicitPhaseSelectionAbaSurvivesFinishAcknowledgement() = runBlocking {
+        val profile = testUser("phase-race-owner")
+        val focus = testTimer(status = TimerStatus.Running)
+        database.timerDao().insertState(
+            testState(
+                user = profile,
+                timer = focus,
+                settings = TimerSettings(selectedPhase = TimerPhase.Focus),
+            ),
+        )
+        val syncStarted = CompletableDeferred<Unit>()
+        val releaseSync = CompletableDeferred<Unit>()
+        val service = TestRepositoryService(profile).apply {
+            bootstrapResponse = response(timer = focus)
+            syncHandler = { request ->
+                if (request.commands.isEmpty()) {
+                    response(timer = focus)
+                } else {
+                    syncStarted.complete(Unit)
+                    releaseSync.await()
+                    acceptedFinishResponse(1, focus, request.commands.single(), completedCount = 4)
+                }
+            }
+        }
+        val repository = testRepository(
+            context,
+            database.timerDao(),
+            service,
+            TestAuthSession(tokensAvailable = true),
+        )
+
+        repository.initialize()
+        awaitState { service.syncCalls == 1 }
+        repository.finishTimer()
+        syncStarted.await()
+        repository.selectPhase(TimerPhase.LongBreak)
+        repository.selectPhase(TimerPhase.ShortBreak)
+        releaseSync.complete(Unit)
+        awaitState { repository.state.value.pendingCount == 0 }
+
+        assertEquals(TimerPhase.ShortBreak, repository.state.value.settings.selectedPhase)
+    }
+
+    @Test
+    fun rejectedBreakFinishWithoutCanonicalCompletionRollsPhaseBackToBreak() = runBlocking {
+        val profile = testUser("rejected-break-owner")
+        val breakTimer = testTimer(
+            id = "break-source",
+            phase = TimerPhase.ShortBreak,
+            status = TimerStatus.Running,
+            anchorAt = "2000-01-01T00:00:00Z",
+        )
+        database.timerDao().insertState(
+            testState(
+                user = profile,
+                timer = breakTimer,
+                settings = TimerSettings(selectedPhase = TimerPhase.Focus),
+            ),
+        )
+        val offline = testRepository(context, database.timerDao())
+        offline.initialize()
+        offline.finishTimer()
+        val finish = database.timerDao().pendingCommands().single().toModel()
+        val service = TestRepositoryService(profile).apply {
+            bootstrapResponse = response(timer = breakTimer)
+            syncResponse = response(
+                revision = 1,
+                acknowledgements = listOf(Acknowledgement(finish.id, "rejected", "stale")),
+            )
+        }
+        val repository = testRepository(
+            context,
+            database.timerDao(),
+            service,
+            TestAuthSession(tokensAvailable = true),
+        )
+
+        repository.initialize()
+        awaitState { service.syncCalls == 1 && repository.state.value.pendingCount == 0 }
+
+        assertEquals(TimerPhase.ShortBreak, repository.state.value.settings.selectedPhase)
     }
 
     @Test
@@ -243,7 +376,6 @@ class GeneratedAutoBreakDependencyTest {
         val finish = queued.first { it.type == CommandType.Finish }
         assertEquals(TimerPhase.ShortBreak, queued.first { it.generatedByFinishCommandId != null }.phase)
         val globalHistory = listOf(
-            completedHistory(focus, finish.id),
             testHistory("global-3"),
             testHistory("global-2"),
             testHistory("global-1"),
@@ -257,13 +389,17 @@ class GeneratedAutoBreakDependencyTest {
                     response(
                         revision = 1,
                         timer = completedTimer(focus),
-                        history = globalHistory,
+                        history = listOf(completedHistory(focus, finish.id)) + globalHistory,
                         acknowledgements = listOf(Acknowledgement(finish.id, "applied", "")),
                         autoStart = true,
                     )
                 } else {
                     assertEquals(TimerPhase.LongBreak, request.commands.single().phase)
-                    acceptedCommandsResponse(2, request.commands, globalHistory)
+                    acceptedCommandsResponse(
+                        2,
+                        request.commands,
+                        listOf(completedHistory(focus, finish.id)) + globalHistory,
+                    )
                 }
             }
         }
@@ -279,6 +415,272 @@ class GeneratedAutoBreakDependencyTest {
 
         assertEquals(TimerPhase.LongBreak, service.syncRequests[1].commands.single().phase)
         assertEquals(TimerPhase.LongBreak, repository.state.value.timer?.phase)
+        assertEquals(TimerPhase.LongBreak, repository.state.value.settings.selectedPhase)
+    }
+
+    @Test
+    fun provisionalChainCoversEveryOutcomePhaseRestartAndResponseLoss() = runBlocking {
+        val chains = listOf(
+            listOf(CommandType.Start),
+            listOf(CommandType.Start, CommandType.Pause),
+            listOf(CommandType.Start, CommandType.Pause, CommandType.Resume),
+            listOf(CommandType.Start, CommandType.Finish),
+            listOf(CommandType.Start, CommandType.Cancel),
+            listOf(CommandType.Start, CommandType.Finish, CommandType.Clear),
+        )
+        var caseIndex = 0
+        for (chain in chains) {
+            for (outcome in listOf("applied", "ignored", "rejected")) {
+                for (correctsToLong in listOf(false, true)) {
+                    for (restartsBeforeHttp in listOf(false, true)) {
+                        for (losesResponse in listOf(false, true)) {
+                            caseIndex += 1
+                            database.clearAllTables()
+                            val profile = testUser("matrix-owner-$caseIndex")
+                            val focus = expiredFocus().copy(id = "matrix-focus-$caseIndex")
+                            database.timerDao().insertState(
+                                testState(
+                                    user = profile,
+                                    timer = focus,
+                                    settings = TimerSettings(autoStartBreaks = true),
+                                ),
+                            )
+                            var local = testRepository(context, database.timerDao())
+                            local.initialize()
+                            assertTrue(local.finishExpiredTimer())
+                            for (action in chain.drop(1)) {
+                                when (action) {
+                                    CommandType.Pause, CommandType.Resume -> local.toggleTimer()
+                                    CommandType.Finish -> local.finishTimer()
+                                    CommandType.Cancel -> local.cancelTimer()
+                                    CommandType.Clear -> local.clearTimer()
+                                }
+                            }
+                            val queued = database.timerDao().pendingCommands()
+                            val source = queued.first {
+                                it.timerId == focus.id && it.type == CommandType.Finish
+                            }
+                            val generated = queued.first {
+                                it.generatedByFinishCommandId == source.id
+                            }
+                            val dependent = queued.filter {
+                                it.generatedByFinishCommandId == source.id
+                            }
+                            assertEquals(chain, dependent.map { it.type })
+                            if (restartsBeforeHttp) {
+                                local = testRepository(context, database.timerDao())
+                                local.initialize()
+                                assertEquals(
+                                    chain,
+                                    database.timerDao().pendingCommands()
+                                        .filter { it.generatedByFinishCommandId == source.id }
+                                        .map { it.type },
+                                )
+                            }
+                            var successfulRevision = 0L
+                            val service = TestRepositoryService(profile).apply {
+                                bootstrapResponse = response(timer = focus, autoStart = true)
+                                syncHandler = { request ->
+                                    if (losesResponse && syncCalls == 1) {
+                                        throw IOException("matrix response lost")
+                                    }
+                                    successfulRevision += 1
+                                    if (request.commands.any { it.id == source.id }) {
+                                        acceptedFinishResponse(
+                                            revision = successfulRevision,
+                                            focus = focus,
+                                            finish = source.toModel(),
+                                            completedCount = if (correctsToLong) 4 else 1,
+                                            outcome = outcome,
+                                        )
+                                    } else {
+                                        acceptedCommandsResponse(
+                                            revision = successfulRevision,
+                                            commands = request.commands,
+                                            history = listOf(
+                                                completedHistory(focus, source.id),
+                                            ) + if (correctsToLong) {
+                                                (1..3).map {
+                                                    testHistory("matrix-global-$caseIndex-$it")
+                                                }
+                                            } else {
+                                                emptyList()
+                                            },
+                                        )
+                                    }
+                                }
+                            }
+                            val signed = testRepository(
+                                context,
+                                database.timerDao(),
+                                service,
+                                TestAuthSession(tokensAvailable = true),
+                                initialSyncRetryDelayMs = 1,
+                            )
+
+                            signed.initialize()
+                            val releases = outcome != "rejected"
+                            val expectedCalls = (if (losesResponse) 1 else 0) +
+                                1 +
+                                (if (releases) 1 else 0)
+                            awaitState {
+                                service.syncCalls == expectedCalls &&
+                                    signed.state.value.pendingCount == 0
+                            }
+
+                            val uploaded = service.syncRequests
+                                .flatMap { it.commands }
+                                .filter { it.timerId == generated.timerId }
+                            if (!releases) {
+                                assertTrue(uploaded.isEmpty())
+                            } else {
+                                assertEquals(chain, uploaded.map { it.type })
+                                val expectedPhase = if (
+                                    correctsToLong && CommandType.Finish !in chain
+                                ) {
+                                    TimerPhase.LongBreak
+                                } else {
+                                    TimerPhase.ShortBreak
+                                }
+                                assertTrue(uploaded.all {
+                                    it.phase == expectedPhase &&
+                                        it.plannedDurationMs ==
+                                        TimerSettings().durationMsFor(expectedPhase)
+                                })
+                            }
+                            val reopened = testRepository(context, database.timerDao())
+                            reopened.initialize()
+                            assertTrue(database.timerDao().pendingCommands().isEmpty())
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun completedProvisionalShortBreakIsNotRetroactivelyRewrittenToLong() = runBlocking {
+        val profile = testUser("completed-provisional-owner")
+        val focus = queueOfflineGeneratedBreak(profile)
+        val initialCommands = database.timerDao().pendingCommands()
+        val focusFinish = initialCommands.first { it.type == CommandType.Finish }
+        val generatedStart = initialCommands.first { it.generatedByFinishCommandId != null }
+        val sourceSeen = CompletableDeferred<Unit>()
+        val releaseSource = CompletableDeferred<Unit>()
+        val dependentSeen = CompletableDeferred<List<TimerCommand>>()
+        val releaseDependent = CompletableDeferred<Unit>()
+        var calls = 0
+        val service = TestRepositoryService(profile).apply {
+            bootstrapResponse = response(timer = focus, autoStart = true)
+            syncHandler = { request ->
+                calls += 1
+                if (calls == 1) {
+                    sourceSeen.complete(Unit)
+                    releaseSource.await()
+                    acceptedFinishResponse(
+                        revision = 1,
+                        focus = focus,
+                        finish = focusFinish.toModel(),
+                        completedCount = 4,
+                    )
+                } else {
+                    dependentSeen.complete(request.commands)
+                    releaseDependent.await()
+                    acceptedCommandsResponse(
+                        revision = 2,
+                        commands = request.commands,
+                        history = listOf(completedHistory(focus, focusFinish.id)) +
+                            (1..3).map { testHistory("global-$it") },
+                    )
+                }
+            }
+        }
+        val repository = testRepository(
+            context,
+            database.timerDao(),
+            service,
+            TestAuthSession(tokensAvailable = true),
+        )
+
+        repository.initialize()
+        sourceSeen.await()
+        repository.finishTimer()
+        val localBreakHistory = repository.state.value.history.first {
+            it.timerId == generatedStart.timerId
+        }
+        assertEquals(TimerStatus.Completed, localBreakHistory.status)
+        assertEquals(TimerPhase.ShortBreak, localBreakHistory.phase)
+
+        releaseSource.complete(Unit)
+        val releasedCommands = dependentSeen.await()
+        assertEquals(listOf(CommandType.Start, CommandType.Finish), releasedCommands.map { it.type })
+        assertTrue(releasedCommands.all { it.phase == TimerPhase.ShortBreak })
+        assertTrue(releasedCommands.all { it.plannedDurationMs == 5 * 60_000L })
+        assertEquals(
+            TimerPhase.ShortBreak,
+            repository.state.value.history.first { it.timerId == generatedStart.timerId }.phase,
+        )
+
+        releaseDependent.complete(Unit)
+        awaitState { service.syncCalls == 2 && repository.state.value.pendingCount == 0 }
+        assertEquals(
+            TimerPhase.ShortBreak,
+            repository.state.value.history.first { it.timerId == generatedStart.timerId }.phase,
+        )
+        assertEquals(TimerPhase.Focus, repository.state.value.settings.selectedPhase)
+    }
+
+    @Test
+    fun canonicalBreakCompletionReconcilesSelectedPhaseToFocus() = runBlocking {
+        val profile = testUser("break-completion-owner")
+        val breakTimer = testTimer(
+            id = "break-source",
+            phase = TimerPhase.ShortBreak,
+            status = TimerStatus.Running,
+        )
+        val finish = testCommand(
+            id = "break-finish",
+            sequence = 1,
+            timerId = breakTimer.id,
+            type = CommandType.Finish,
+        ).copy(
+            phase = TimerPhase.ShortBreak,
+            plannedDurationMs = breakTimer.plannedDurationMs,
+            occurredAt = java.time.Instant.ofEpochMilli(System.currentTimeMillis()).toString(),
+            hlcWallMs = System.currentTimeMillis(),
+        )
+        database.timerDao().insertState(
+            testState(
+                user = profile,
+                timer = breakTimer,
+                settings = TimerSettings(selectedPhase = TimerPhase.Focus),
+                deviceSequence = 1,
+            ),
+        )
+        database.timerDao().insertCommand(PendingCommandEntity.from(finish))
+        val completed = breakTimer.copy(
+            status = TimerStatus.Completed,
+            elapsedAtAnchorMs = breakTimer.plannedDurationMs,
+        )
+        val service = TestRepositoryService(profile).apply {
+            bootstrapResponse = response(timer = breakTimer)
+            syncResponse = response(
+                revision = 1,
+                timer = completed,
+                acknowledgements = listOf(Acknowledgement(finish.id, "applied", "")),
+            )
+        }
+        val repository = testRepository(
+            context,
+            database.timerDao(),
+            service,
+            TestAuthSession(tokensAvailable = true),
+        )
+
+        repository.initialize()
+        awaitState { service.syncCalls == 1 && repository.state.value.pendingCount == 0 }
+
+        assertEquals(TimerPhase.Focus, repository.state.value.settings.selectedPhase)
     }
 
     @Test
@@ -370,7 +772,7 @@ class GeneratedAutoBreakDependencyTest {
     }
 
     @Test
-    fun bootstrapResolutionAlsoWithholdsGeneratedStartUntilFinishAcceptance() = runBlocking {
+    fun bootstrapResolutionAlsoWithholdsGeneratedStartUntilFinishAcceptanceAfterChoice() = runBlocking {
         val profile = testUser("bootstrap-dependency-owner")
         val focus = queueOfflineGeneratedBreak(profile)
         val detached = requireNotNull(database.timerDao().localState()).copy(
@@ -415,6 +817,8 @@ class GeneratedAutoBreakDependencyTest {
         )
 
         repository.initialize()
+        requireNotNull(repository.state.value.historyResolution)
+        repository.resolveHistory(BootstrapStrategy.ReplaceRemote)
         awaitState {
             service.resolveCalls == 1 &&
                 service.syncRequests.any { it.commands.isNotEmpty() } &&
@@ -450,7 +854,7 @@ class GeneratedAutoBreakDependencyTest {
             phase = TimerPhase.Focus,
             plannedDurationMs = 1_500_000,
             occurredAt = "2026-01-01T00:25:00.100Z",
-            hlcWallMs = 1_767_225_600_100,
+            hlcWallMs = 1_767_227_100_100,
             hlcCounter = 4,
             observedElapsedMs = 1_500_000,
         )
@@ -462,7 +866,7 @@ class GeneratedAutoBreakDependencyTest {
             phase = TimerPhase.ShortBreak,
             plannedDurationMs = 300_000,
             occurredAt = "2026-01-01T00:25:00.137Z",
-            hlcWallMs = 1_767_225_600_137,
+            hlcWallMs = 1_767_227_100_137,
             hlcCounter = 0,
             observedElapsedMs = 0,
         )
@@ -487,7 +891,7 @@ class GeneratedAutoBreakDependencyTest {
                     id, deviceId, deviceSequence, hlcWallMs, hlcCounter, revision,
                     canonicalTimerJson, historyJson, settingsJson, userJson, ownerUserId,
                     tasksJson, knownTasksJson, selectedTaskId
-                ) VALUES (0, 'legacy-device', 2, 1767225600137, 0, 5, NULL, '[]', ?, ?, ?,
+                ) VALUES (0, 'legacy-device', 2, 1767227100137, 0, 5, NULL, '[]', ?, ?, ?,
                     '[]', '[]', NULL)""",
                 arrayOf(
                     repositoryJson.encodeToString(TimerSettings(autoStartBreaks = true)),
@@ -550,6 +954,9 @@ class GeneratedAutoBreakDependencyTest {
         ).addMigrations(
             PomodoroughDatabase.Migration5To6,
             PomodoroughDatabase.Migration6To7,
+            PomodoroughDatabase.Migration7To8,
+            PomodoroughDatabase.Migration8To9,
+            PomodoroughDatabase.Migration9To10,
         ).build()
         val service = TestRepositoryService(profile).apply {
             bootstrapResponse = response(revision = 5)
