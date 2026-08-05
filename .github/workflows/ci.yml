@@ -113,7 +113,7 @@ jobs:
   instrumented-tests:
     name: Instrumented tests (API 35, font ${{ matrix.font-scale }}x)
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -137,14 +137,6 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Enable KVM
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
-            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-          test -r /dev/kvm -a -w /dev/kvm
-
       - name: Run connected instrumented tests
         uses: ReactiveCircus/android-emulator-runner@v2
         env:
@@ -156,6 +148,7 @@ jobs:
           profile: pixel_2
           cores: 2
           force-avd-creation: true
+          disable-linux-hw-accel: true
           disable-animations: true
           disable-spellchecker: true
           emulator-boot-timeout: 1200
@@ -182,7 +175,7 @@ jobs:
     if: inputs.upload-release-bundle
     needs: verify
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
@@ -202,6 +195,7 @@ jobs:
           profile: pixel_2
           cores: 2
           force-avd-creation: true
+          disable-linux-hw-accel: true
           disable-animations: true
           disable-spellchecker: true
           emulator-boot-timeout: 1200
