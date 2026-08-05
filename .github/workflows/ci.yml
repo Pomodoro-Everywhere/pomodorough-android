@@ -169,7 +169,7 @@ jobs:
         with:
           name: instrumentation-diagnostics-font-${{ matrix.font-scale }}-${{ github.run_attempt }}
           path: |
-            app/build/outputs/androidTest-results/connected/
+            app/build/outputs/androidTest-results/direct/
             app/build/reports/androidTests/
           if-no-files-found: warn
           overwrite: true
