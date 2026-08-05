@@ -10,6 +10,25 @@ val apiBaseUrl = providers.gradleProperty("POMODOROUGH_API_BASE_URL")
     .orElse("https://pomodorough.egigoka.me/api/v1")
 val googleServerClientId = providers.gradleProperty("POMODOROUGH_GOOGLE_SERVER_CLIENT_ID")
     .orElse("614768274539-5jrk37jie6415babe51ae4qiupif0m7v.apps.googleusercontent.com")
+val releaseStoreFile = providers.gradleProperty("POMODOROUGH_RELEASE_STORE_FILE")
+    .orElse(providers.environmentVariable("POMODOROUGH_RELEASE_STORE_FILE"))
+val releaseStorePassword = providers.gradleProperty("POMODOROUGH_RELEASE_STORE_PASSWORD")
+    .orElse(providers.environmentVariable("POMODOROUGH_RELEASE_STORE_PASSWORD"))
+val releaseKeyAlias = providers.gradleProperty("POMODOROUGH_RELEASE_KEY_ALIAS")
+    .orElse(providers.environmentVariable("POMODOROUGH_RELEASE_KEY_ALIAS"))
+val releaseKeyPassword = providers.gradleProperty("POMODOROUGH_RELEASE_KEY_PASSWORD")
+    .orElse(providers.environmentVariable("POMODOROUGH_RELEASE_KEY_PASSWORD"))
+val releaseSigningValues = listOf(
+    releaseStoreFile,
+    releaseStorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword,
+)
+val releaseSigningConfigured = releaseSigningValues.all { it.isPresent }
+
+check(releaseSigningValues.none { it.isPresent } || releaseSigningConfigured) {
+    "Set all POMODOROUGH_RELEASE_* signing values or none of them."
+}
 
 android {
     namespace = "me.egigoka.pomodorough"
@@ -20,16 +39,30 @@ android {
         applicationId = "me.egigoka.pomodorough"
         minSdk = 26
         targetSdk = 34
-        versionCode = 10
-        versionName = "0.1.10"
+        versionCode = 11
+        versionName = "0.1.11"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "API_BASE_URL", "\"${apiBaseUrl.get().trimEnd('/')}\"")
         buildConfigField("String", "GOOGLE_SERVER_CLIENT_ID", "\"${googleServerClientId.get()}\"")
     }
 
+    signingConfigs {
+        if (releaseSigningConfigured) {
+            create("release") {
+                storeFile = file(releaseStoreFile.get())
+                storePassword = releaseStorePassword.get()
+                keyAlias = releaseKeyAlias.get()
+                keyPassword = releaseKeyPassword.get()
+            }
+        }
+    }
+
     buildTypes {
         release {
+            if (releaseSigningConfigured) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
@@ -98,6 +131,7 @@ dependencies {
     androidTestImplementation("androidx.room:room-testing:2.7.2")
     androidTestImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.1")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4-accessibility")
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }

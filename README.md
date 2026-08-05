@@ -144,9 +144,41 @@ an emulator or connected device:
 ## Release builds
 
 Release builds enable code shrinking and resource optimization but are unsigned
-by default. Configure standard Android signing before distribution. Keep Room
-schema JSON files under `app/schemas/` with every release so migration tests can
-validate upgrade paths.
+by default. Set all four values below through environment variables or private
+Gradle properties in `~/.gradle/gradle.properties` to produce a signed bundle:
+
+```text
+POMODOROUGH_RELEASE_STORE_FILE=/absolute/path/to/release.jks
+POMODOROUGH_RELEASE_STORE_PASSWORD=...
+POMODOROUGH_RELEASE_KEY_ALIAS=...
+POMODOROUGH_RELEASE_KEY_PASSWORD=...
+```
+
+Never store signing credentials or keystores in this repository. A partial
+configuration fails during Gradle setup rather than silently producing an
+unsigned release. Tag releases require matching GitHub repository secrets:
+
+```text
+POMODOROUGH_RELEASE_KEYSTORE_BASE64
+POMODOROUGH_RELEASE_STORE_PASSWORD
+POMODOROUGH_RELEASE_KEY_ALIAS
+POMODOROUGH_RELEASE_KEY_PASSWORD
+```
+
+The tag workflow rejects missing or unsigned artifacts, verifies both
+signatures, and clean-installs and cold-launches the signed APK on API 35 before
+publishing the GitHub release.
+
+Verify credentialed artifacts before upload:
+
+```sh
+./gradlew :app:bundleRelease :app:assembleRelease
+jarsigner -verify -verbose -certs app/build/outputs/bundle/release/app-release.aab
+apksigner verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk
+```
+
+Keep Room schema JSON files under `app/schemas/` with every release so migration
+tests can validate upgrade paths.
 
 ## Pomodorough projects
 

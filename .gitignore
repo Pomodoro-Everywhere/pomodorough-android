@@ -7,3 +7,5 @@ app/build/
 captures/
 .DS_Store
 .claude/
+*.jks
+*.keystore

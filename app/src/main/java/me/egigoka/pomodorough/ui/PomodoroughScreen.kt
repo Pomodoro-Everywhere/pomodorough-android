@@ -78,12 +78,14 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalAccessibilityManager
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
@@ -207,12 +209,7 @@ private fun SignInScreen(
     onSignIn: () -> Unit,
     onDismissNotice: () -> Unit,
 ) {
-    LaunchedEffect(notice) {
-        if (notice != null) {
-            delay(7_000)
-            onDismissNotice()
-        }
-    }
+    AutoDismissNotice(notice, onDismissNotice)
 
     Box(
         modifier = Modifier
@@ -337,12 +334,7 @@ private fun TimerScreen(
     val recentHistory = remember(state.history) {
         state.history.sortedByDescending(::historyEpoch)
     }
-    LaunchedEffect(state.notice) {
-        if (state.notice != null) {
-            delay(7_000)
-            onDismissNotice()
-        }
-    }
+    AutoDismissNotice(state.notice, onDismissNotice)
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val landscape = maxWidth > maxHeight
@@ -930,6 +922,7 @@ private fun MainNavigationBar(
     active: MainTab,
     onSelect: (MainTab) -> Unit,
 ) {
+    val showLabels = LocalConfiguration.current.fontScale < 1.3f
     NavigationBar {
         MainTab.entries.forEach { tab ->
             NavigationBarItem(
@@ -946,7 +939,11 @@ private fun MainNavigationBar(
                         contentDescription = tab.label,
                     )
                 },
-                label = { Text(tab.label) },
+                label = if (showLabels) {
+                    { Text(tab.label, maxLines = 1) }
+                } else {
+                    null
+                },
             )
         }
     }
@@ -977,7 +974,7 @@ private fun TaskSelector(
             enabled = enabled,
             modifier = Modifier
                 .fillMaxWidth()
-                .height(42.dp),
+                .height(48.dp),
             border = BorderStroke(1.dp, Ink.copy(alpha = 0.35f)),
         ) {
             Text("FOCUS TASK", style = MaterialTheme.typography.labelMedium)
@@ -1066,26 +1063,28 @@ private fun TaskBoardHeader(
 
 @Composable
 private fun TaskColumnLabels(modifier: Modifier = Modifier) {
-    Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
-        Text("Task", Modifier.weight(2f), style = MaterialTheme.typography.labelMedium)
-        Text(
-            "Finished pomodoros today",
-            Modifier.weight(1.2f),
-            style = MaterialTheme.typography.labelMedium,
-            textAlign = TextAlign.Center,
-        )
-        Text(
-            "Time today spent",
-            Modifier.weight(1.35f),
-            style = MaterialTheme.typography.labelMedium,
-            textAlign = TextAlign.Center,
-        )
-        Text(
-            "Action",
-            Modifier.weight(0.9f),
-            style = MaterialTheme.typography.labelMedium,
-            textAlign = TextAlign.End,
-        )
+    if (LocalConfiguration.current.fontScale < 1.3f) {
+        Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
+            Text("Task", Modifier.weight(2f), style = MaterialTheme.typography.labelMedium)
+            Text(
+                "Finished pomodoros today",
+                Modifier.weight(1.2f),
+                style = MaterialTheme.typography.labelMedium,
+                textAlign = TextAlign.Center,
+            )
+            Text(
+                "Time today spent",
+                Modifier.weight(1.35f),
+                style = MaterialTheme.typography.labelMedium,
+                textAlign = TextAlign.Center,
+            )
+            Text(
+                "Action",
+                Modifier.weight(0.9f),
+                style = MaterialTheme.typography.labelMedium,
+                textAlign = TextAlign.End,
+            )
+        }
     }
 }
 
@@ -1096,53 +1095,83 @@ private fun TaskSummaryRow(
     onDelete: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val useStackedLayout = LocalConfiguration.current.fontScale >= 1.3f
     Surface(
         modifier = modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surfaceVariant,
         contentColor = Ink,
         shape = MaterialTheme.shapes.large,
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Row(
-                modifier = Modifier
-                    .weight(4.55f)
-                    .clearAndSetSemantics {
+        if (useStackedLayout) {
+            Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+                Column(
+                    modifier = Modifier.clearAndSetSemantics {
                         contentDescription = taskSummaryDescription(summary)
                     },
+                ) {
+                    Text(
+                        summary.task.title,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.titleLarge,
+                    )
+                    Text(
+                        "${summary.finishedPomodoros} finished · ${formatTaskDuration(summary.timeSpentMs)} today",
+                        color = Violet,
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                }
+                TextButton(
+                    onClick = onDelete,
+                    enabled = mutationsEnabled,
+                    modifier = Modifier.align(Alignment.End),
+                ) {
+                    Text("Delete", color = DangerText)
+                }
+            }
+        } else {
+            Row(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    summary.task.title,
-                    Modifier.weight(2f),
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
-                    style = MaterialTheme.typography.titleLarge,
-                )
-                Text(
-                    summary.finishedPomodoros.toString(),
-                    Modifier.weight(1.2f),
-                    color = Violet,
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Black,
-                    textAlign = TextAlign.Center,
-                )
-                Text(
-                    formatTaskDuration(summary.timeSpentMs),
-                    Modifier.weight(1.35f),
-                    color = Violet,
-                    style = MaterialTheme.typography.labelLarge,
-                    textAlign = TextAlign.Center,
-                )
-            }
-            TextButton(
-                onClick = onDelete,
-                enabled = mutationsEnabled,
-                modifier = Modifier.weight(0.9f),
-            ) {
-                Text("Delete", color = DangerText)
+                Row(
+                    modifier = Modifier
+                        .weight(4.55f)
+                        .clearAndSetSemantics {
+                            contentDescription = taskSummaryDescription(summary)
+                        },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        summary.task.title,
+                        Modifier.weight(2f),
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.titleLarge,
+                    )
+                    Text(
+                        summary.finishedPomodoros.toString(),
+                        Modifier.weight(1.2f),
+                        color = Violet,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Black,
+                        textAlign = TextAlign.Center,
+                    )
+                    Text(
+                        formatTaskDuration(summary.timeSpentMs),
+                        Modifier.weight(1.35f),
+                        color = Violet,
+                        style = MaterialTheme.typography.labelLarge,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+                TextButton(
+                    onClick = onDelete,
+                    enabled = mutationsEnabled,
+                    modifier = Modifier.weight(0.9f),
+                ) {
+                    Text("Delete", color = DangerText)
+                }
             }
         }
     }
@@ -1266,7 +1295,7 @@ private fun TimerHero(
                     enabled = ready && active,
                     modifier = Modifier
                         .weight(1f)
-                        .height(46.dp),
+                        .height(48.dp),
                 ) { Text("Finish") }
                 OutlinedButton(
                     onClick = {
@@ -1275,7 +1304,7 @@ private fun TimerHero(
                     enabled = ready && (active || clearable),
                     modifier = Modifier
                         .weight(1f)
-                        .height(46.dp),
+                        .height(48.dp),
                     border = BorderStroke(1.5.dp, palette.onContainer.copy(alpha = 0.55f)),
                 ) { Text(if (active) "Cancel" else "Clear") }
             }
@@ -1471,7 +1500,7 @@ private fun LandscapeTaskSelector(
             enabled = enabled,
             modifier = Modifier
                 .fillMaxWidth()
-                .height(42.dp),
+                .height(48.dp),
             border = BorderStroke(1.dp, Cloud.copy(alpha = 0.5f)),
         ) {
             Text("FOCUS TASK", color = Cloud, style = MaterialTheme.typography.labelMedium)
@@ -1764,7 +1793,7 @@ private fun StepButton(
         onClick = onClick,
         enabled = enabled,
         modifier = Modifier
-            .size(44.dp)
+            .size(48.dp)
             .semantics { contentDescription = description },
         contentPadding = PaddingValues(0.dp),
     ) {
@@ -1875,8 +1904,32 @@ private fun NoticeCard(message: String, onDismiss: () -> Unit, modifier: Modifie
         message = message,
         containerColor = Butter,
         onDismiss = onDismiss,
-        modifier = modifier.semantics { liveRegion = LiveRegionMode.Polite },
+        modifier = modifier.clearAndSetSemantics {
+            contentDescription = "Heads up. $message"
+            liveRegion = LiveRegionMode.Polite
+            onClick(label = "Dismiss") {
+                onDismiss()
+                true
+            }
+        },
     )
+}
+
+@Composable
+private fun AutoDismissNotice(notice: String?, onDismiss: () -> Unit) {
+    val accessibilityManager = LocalAccessibilityManager.current
+    val timeoutMillis = accessibilityManager?.calculateRecommendedTimeoutMillis(
+        originalTimeoutMillis = 7_000,
+        containsIcons = false,
+        containsText = true,
+        containsControls = true,
+    ) ?: 7_000
+    LaunchedEffect(notice, timeoutMillis) {
+        if (notice != null) {
+            delay(timeoutMillis)
+            onDismiss()
+        }
+    }
 }
 
 @Composable

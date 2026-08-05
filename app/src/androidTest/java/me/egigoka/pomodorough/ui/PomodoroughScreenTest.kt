@@ -1,15 +1,25 @@
 package me.egigoka.pomodorough.ui
 
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertHeightIsAtLeast
+import androidx.compose.ui.test.assertWidthIsAtLeast
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.junit4.accessibility.disableAccessibilityChecks
+import androidx.compose.ui.test.junit4.accessibility.enableAccessibilityChecks
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeDown
+import androidx.compose.ui.test.tryPerformAccessibilityChecks
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.unit.dp
 import me.egigoka.pomodorough.data.AppState
 import me.egigoka.pomodorough.data.AccountSwitchState
 import me.egigoka.pomodorough.data.AuthStatus
@@ -79,10 +89,13 @@ class PomodoroughScreenTest {
         composeRule.onNodeWithText("Sign in").assertExists()
         composeRule.onNodeWithText("Local only").assertExists()
         composeRule.onNodeWithText("Local clock · sign in to sync").assertDoesNotExist()
-        composeRule.onNodeWithText("Arrivals").performClick()
+        composeRule.onNode(hasText("Arrivals") or hasContentDescription("Arrivals")).performClick()
         composeRule.onNodeWithText("Recent focus").assertExists()
         composeRule.onNodeWithText("Focus · queued").assertDoesNotExist()
-        composeRule.onNodeWithText("Focus").assertExists()
+        composeRule.onNodeWithContentDescription(
+            "Focus, completed",
+            substring = true,
+        ).assertExists()
     }
 
     @Test
@@ -114,7 +127,7 @@ class PomodoroughScreenTest {
         setScreen(AppState(ready = true, authStatus = AuthStatus.Loading))
 
         composeRule.onNodeWithText("Start focus").assertIsNotEnabled()
-        composeRule.onNodeWithText("Pattern").performClick()
+        composeRule.onNode(hasText("Pattern") or hasContentDescription("Pattern")).performClick()
         composeRule.onNodeWithContentDescription("Increase Focus duration").assertIsNotEnabled()
     }
 
@@ -162,12 +175,97 @@ class PomodoroughScreenTest {
             ),
         )
 
-        composeRule.onNodeWithText("Tasks").performClick()
+        composeRule.onNode(hasText("Tasks") or hasContentDescription("Tasks")).performClick()
 
         composeRule.onNodeWithContentDescription(
             "Accessibility audit, 2 finished pomodoros today, 25 min spent",
         ).assertExists()
         composeRule.onNodeWithText("Delete").assertExists()
+    }
+
+    @Test
+    fun noticeIsOnePoliteDismissibleElement() {
+        var dismissCalls = 0
+        setScreen(
+            AppState(
+                ready = true,
+                authStatus = AuthStatus.SignedOut,
+                notice = "Network unavailable",
+            ),
+            onDismissNotice = { dismissCalls += 1 },
+        )
+
+        composeRule.onNodeWithContentDescription("Heads up. Network unavailable")
+            .performSemanticsAction(SemanticsActions.OnClick)
+
+        assertEquals(1, dismissCalls)
+        composeRule.onNodeWithText("Heads up").assertDoesNotExist()
+        composeRule.onNodeWithText("Dismiss").assertDoesNotExist()
+    }
+
+    @Test
+    fun readyScreenPassesPlatformAccessibilityChecks() {
+        val task = FocusTask(id = "task-1", title = "Accessibility audit")
+        setScreen(
+            AppState(
+                ready = true,
+                authStatus = AuthStatus.SignedIn,
+                tasks = listOf(task),
+                knownTasks = listOf(task),
+                taskSummaries = listOf(TaskDailySummary(task, 2, 25 * 60_000L)),
+            ),
+        )
+
+        composeRule.enableAccessibilityChecks()
+        try {
+            composeRule.onRoot().tryPerformAccessibilityChecks()
+        } finally {
+            composeRule.disableAccessibilityChecks()
+        }
+    }
+
+    @Test
+    fun primaryControlsMeetMinimumTouchTargetSize() {
+        val task = FocusTask(id = "task-1", title = "Accessibility audit")
+        setScreen(
+            AppState(
+                ready = true,
+                authStatus = AuthStatus.SignedIn,
+                tasks = listOf(task),
+                knownTasks = listOf(task),
+                taskSummaries = listOf(TaskDailySummary(task, 0, 0)),
+            ),
+        )
+
+        composeRule.onNode(hasText("Start focus") and hasClickAction())
+            .assertHeightIsAtLeast(48.dp)
+            .assertWidthIsAtLeast(48.dp)
+        composeRule.onNode(hasText("FOCUS TASK") and hasClickAction())
+            .assertHeightIsAtLeast(48.dp)
+            .assertWidthIsAtLeast(48.dp)
+
+        composeRule.onNode(hasText("Pattern") or hasContentDescription("Pattern")).performClick()
+        composeRule.onNodeWithContentDescription("Decrease Focus duration")
+            .assertHeightIsAtLeast(48.dp)
+            .assertWidthIsAtLeast(48.dp)
+        composeRule.onNodeWithContentDescription("Increase Focus duration")
+            .assertHeightIsAtLeast(48.dp)
+            .assertWidthIsAtLeast(48.dp)
+
+        composeRule.onNode(hasText("Tasks") or hasContentDescription("Tasks")).performClick()
+        composeRule.onNodeWithText("Delete")
+            .assertHeightIsAtLeast(48.dp)
+            .assertWidthIsAtLeast(48.dp)
+    }
+
+    @Test
+    fun navigationDestinationsHaveOneSemanticTargetEach() {
+        setScreen(AppState(ready = true, authStatus = AuthStatus.SignedIn))
+
+        listOf("Timer", "Tasks", "Pattern", "Arrivals").forEach { label ->
+            composeRule.onAllNodes(hasText(label) or hasContentDescription(label))
+                .assertCountEquals(1)
+        }
     }
 
     @Test
@@ -296,6 +394,7 @@ class PomodoroughScreenTest {
         onRecover: () -> Unit = {},
         onConfirmAccountSwitch: () -> Unit = {},
         onCancelAccountSwitch: () -> Unit = {},
+        onDismissNotice: () -> Unit = {},
     ) {
         composeRule.setContent {
             PomodoroughTheme {
@@ -319,7 +418,7 @@ class PomodoroughScreenTest {
                     onConfirmAccountSwitch = onConfirmAccountSwitch,
                     onCancelAccountSwitch = onCancelAccountSwitch,
                     onDismissConflict = {},
-                    onDismissNotice = {},
+                    onDismissNotice = onDismissNotice,
                 )
             }
         }
