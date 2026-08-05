@@ -4,10 +4,11 @@ set -euo pipefail
 
 app_apk="app/build/outputs/apk/debug/app-debug.apk"
 test_apk="app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk"
-results_dir="app/build/outputs/androidTest-results/direct"
-diagnostics_dir="app/build/reports/androidTests/diagnostics"
-runner_output="$results_dir/instrumentation-output.txt"
 font_scale="${FONT_SCALE:-1.0}"
+scale_slug="${font_scale//./_}"
+results_dir="app/build/outputs/androidTest-results/direct-font-$scale_slug"
+diagnostics_dir="app/build/reports/androidTests/diagnostics-font-$scale_slug"
+runner_output="$results_dir/instrumentation-output.txt"
 original_font_scale="$(adb shell settings get system font_scale | tr -d '\r')"
 
 wait_for_android_idle() {

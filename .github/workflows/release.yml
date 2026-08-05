@@ -183,7 +183,7 @@ jobs:
               'Artifacts are production-signed. Verify SHA256SUMS.txt before distribution.' \
               '' \
               "- pomodorough-${GITHUB_REF_NAME}-release.aab is the Play distribution bundle." \
-              "- pomodorough-${GITHUB_REF_NAME}-release.apk is the clean-install smoke artifact." \
+              "- pomodorough-${GITHUB_REF_NAME}-release.apk is the direct-install artifact." \
               ''
             gh api --method POST \
               "repos/$GITHUB_REPOSITORY/releases/generate-notes" \

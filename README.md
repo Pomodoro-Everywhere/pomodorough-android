@@ -141,6 +141,18 @@ an emulator or connected device:
 ./gradlew :app:connectedDebugAndroidTest
 ```
 
+Before tagging a release, boot exactly one API 35 emulator or connect one API
+35 device, then run the complete local release gate:
+
+```sh
+bash .github/scripts/run-local-release-gate.sh
+```
+
+The gate runs unit tests, lint, debug and release builds, then all instrumented
+tests independently at 1.0x and 2.0x font scale. Standard GitHub-hosted runners
+cannot sustain a stable API 35 emulator, so device tests are a required local
+pre-tag step rather than a hosted CI job.
+
 ## Release builds
 
 Release builds enable code shrinking and resource optimization but are unsigned
@@ -165,9 +177,10 @@ POMODOROUGH_RELEASE_KEY_ALIAS
 POMODOROUGH_RELEASE_KEY_PASSWORD
 ```
 
-The tag workflow rejects missing or unsigned artifacts, verifies both
-signatures, and clean-installs and cold-launches the signed APK on API 35 before
-publishing the GitHub release.
+The tag workflow rejects missing or unsigned artifacts and verifies both
+signatures before publishing the GitHub release. Run the local API 35 gate above
+before creating the tag, then clean-install the published APK or a Play-generated
+APK on a clean device.
 
 Verify credentialed artifacts before upload:
 

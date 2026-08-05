@@ -59,12 +59,13 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Run unit tests, lint, and assemble debug APK
+      - name: Run unit tests, lint, and assemble test APKs
         run: >-
           ./gradlew --no-daemon --stacktrace
           :app:testDebugUnitTest
           :app:lintDebug
           :app:assembleDebug
+          :app:assembleDebugAndroidTest
 
       - name: Assemble unsigned release APK
         if: ${{ !inputs.upload-release-bundle }}
@@ -109,112 +110,3 @@ jobs:
           if-no-files-found: error
           overwrite: true
           retention-days: 7
-
-  instrumented-tests:
-    name: Instrumented tests (API 35, font ${{ matrix.font-scale }}x)
-    runs-on: macos-15-intel
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        font-scale: ["1.0"]
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up JDK
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: ${{ env.JAVA_VERSION }}
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android platform and build tools
-        run: sdkmanager "platforms;android-${ANDROID_API_LEVEL}" "build-tools;${ANDROID_BUILD_TOOLS_VERSION}"
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-
-      - name: Assemble instrumented test APKs
-        run: >-
-          ./gradlew --no-daemon --stacktrace
-          :app:assembleDebug
-          :app:assembleDebugAndroidTest
-
-      - name: Run connected instrumented tests
-        uses: ReactiveCircus/android-emulator-runner@v2
-        env:
-          FONT_SCALE: ${{ matrix.font-scale }}
-        with:
-          api-level: 35
-          target: google_apis
-          arch: x86_64
-          profile: pixel_2
-          cores: 2
-          force-avd-creation: true
-          disable-animations: true
-          disable-spellchecker: true
-          emulator-boot-timeout: 1200
-          emulator-options: >-
-            -no-snapshot -no-window -gpu swiftshader_indirect -noaudio
-            -no-boot-anim -no-metrics -camera-back none -camera-front none
-            -timezone Etc/UTC
-          script: bash .github/scripts/run-instrumented-tests.sh
-
-      - name: Upload instrumentation diagnostics
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: instrumentation-diagnostics-font-${{ matrix.font-scale }}-${{ github.run_attempt }}
-          path: |
-            app/build/outputs/androidTest-results/direct/
-            app/build/reports/androidTests/
-          if-no-files-found: warn
-          overwrite: true
-          retention-days: 7
-
-  release-install-smoke:
-    name: Signed release install smoke (API 35)
-    if: inputs.upload-release-bundle
-    needs: verify
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    steps:
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Download signed release artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: pomodorough-android-${{ github.ref_name }}
-          path: dist
-
-      - name: Clean-install and cold-launch signed release
-        uses: ReactiveCircus/android-emulator-runner@v2
-        with:
-          api-level: 35
-          target: google_apis
-          arch: x86_64
-          profile: pixel_2
-          cores: 2
-          force-avd-creation: true
-          disable-linux-hw-accel: true
-          disable-animations: true
-          disable-spellchecker: true
-          emulator-boot-timeout: 1200
-          emulator-options: >-
-            -no-snapshot -no-window -gpu swiftshader_indirect -noaudio
-            -no-boot-anim -no-metrics -camera-back none -camera-front none
-            -timezone Etc/UTC
-          script: |
-            set -euo pipefail
-            apk="dist/pomodorough-${GITHUB_REF_NAME}-release.apk"
-            adb uninstall me.egigoka.pomodorough || true
-            adb install "$apk"
-            launch_output="$(adb shell am start -W \
-              -n me.egigoka.pomodorough/.MainActivity)"
-            printf '%s\n' "$launch_output"
-            grep -Fq "Status: ok" <<< "$launch_output"
-            test -n "$(adb shell pidof me.egigoka.pomodorough)"
