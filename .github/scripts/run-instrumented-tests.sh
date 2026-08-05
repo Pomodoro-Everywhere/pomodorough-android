@@ -10,6 +10,43 @@ runner_output="$results_dir/instrumentation-output.txt"
 font_scale="${FONT_SCALE:-1.0}"
 original_font_scale="$(adb shell settings get system font_scale | tr -d '\r')"
 
+wait_for_android_idle() {
+  local deadline=$((SECONDS + 600))
+  local previous_anr_count=-1
+  local stable_checks=0
+
+  adb wait-for-device
+  adb shell settings put global device_provisioned 1
+  adb shell settings put secure user_setup_complete 1
+  adb logcat -b events -c
+
+  while ((SECONDS < deadline)); do
+    if [[ "$(adb shell getprop sys.boot_completed | tr -d '\r')" == "1" ]] \
+      && adb shell pm path android >/dev/null \
+      && adb shell 'mkdir -p /sdcard/Android && touch /sdcard/Android/.pomodorough-ci-ready && rm /sdcard/Android/.pomodorough-ci-ready'; then
+      anr_count="$(adb logcat -b events -d -v brief | grep -c 'am_anr' || true)"
+      if [[ "$anr_count" == "$previous_anr_count" ]]; then
+        stable_checks=$((stable_checks + 1))
+      else
+        stable_checks=0
+      fi
+      previous_anr_count="$anr_count"
+
+      if [[ $stable_checks -ge 4 ]]; then
+        echo "Android remained ready without new ANRs for 80 seconds"
+        return 0
+      fi
+    else
+      previous_anr_count=-1
+      stable_checks=0
+    fi
+    sleep 20
+  done
+
+  echo "Android did not reach a stable ready state within 10 minutes" >&2
+  return 1
+}
+
 restore_font_scale() {
   if [[ -z "$original_font_scale" || "$original_font_scale" == "null" ]]; then
     adb shell settings delete system font_scale >/dev/null
@@ -41,6 +78,7 @@ cleanup() {
 }
 
 trap cleanup EXIT
+wait_for_android_idle
 adb shell settings put system font_scale "$font_scale"
 test "$(adb shell settings get system font_scale | tr -d '\r')" = "$font_scale"
 rm -rf "$results_dir"
