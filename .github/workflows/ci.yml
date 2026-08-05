@@ -149,8 +149,9 @@ jobs:
           FONT_SCALE: ${{ matrix.font-scale }}
         with:
           api-level: 35
-          target: google_atd
+          target: google_apis
           arch: x86_64
+          profile: pixel_2
           cores: 2
           force-avd-creation: true
           disable-animations: true
