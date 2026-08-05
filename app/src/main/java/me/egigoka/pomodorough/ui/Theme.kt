@@ -21,6 +21,8 @@ val Butter = Color(0xFFF5D05B)
 val Lavender = Color(0xFF8FA8B8)
 val Cloud = Color(0xFFE8F0F1)
 val Danger = Color(0xFFFF604F)
+val DangerAccent = Color(0xFF8F2424)
+val DangerText = Color(0xFF681515)
 
 private val colors = lightColorScheme(
     primary = Violet,
@@ -43,8 +45,8 @@ private val colors = lightColorScheme(
     onSurfaceVariant = Ink,
     outline = Violet,
     outlineVariant = Lavender,
-    error = Danger,
-    onError = Ink,
+    error = DangerText,
+    onError = Cloud,
     errorContainer = Danger,
     onErrorContainer = Ink,
 )

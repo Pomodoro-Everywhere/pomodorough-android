@@ -14,10 +14,14 @@ import me.egigoka.pomodorough.data.AppState
 import me.egigoka.pomodorough.data.AccountSwitchState
 import me.egigoka.pomodorough.data.AuthStatus
 import me.egigoka.pomodorough.data.BootstrapStrategy
+import me.egigoka.pomodorough.data.CanonicalTimer
+import me.egigoka.pomodorough.data.FocusTask
 import me.egigoka.pomodorough.data.HistoryResolutionState
 import me.egigoka.pomodorough.data.ResolutionRecovery
 import me.egigoka.pomodorough.data.SyncStatus
+import me.egigoka.pomodorough.data.TaskDailySummary
 import me.egigoka.pomodorough.data.TimerPhase
+import me.egigoka.pomodorough.data.TimerStatus
 import me.egigoka.pomodorough.integration.testHistory
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -112,6 +116,58 @@ class PomodoroughScreenTest {
         composeRule.onNodeWithText("Start focus").assertIsNotEnabled()
         composeRule.onNodeWithText("Pattern").performClick()
         composeRule.onNodeWithContentDescription("Increase Focus duration").assertIsNotEnabled()
+    }
+
+    @Test
+    fun completedTimerUsesClearLabelAndAction() {
+        var clearCalls = 0
+        setScreen(
+            AppState(
+                ready = true,
+                authStatus = AuthStatus.SignedIn,
+                timer = CanonicalTimer(
+                    id = "timer-1",
+                    phase = TimerPhase.Focus,
+                    status = TimerStatus.Completed,
+                    plannedDurationMs = 25 * 60_000L,
+                    elapsedAtAnchorMs = 25 * 60_000L,
+                    anchorAt = "2026-08-04T09:00:00Z",
+                ),
+            ),
+            onClearTimer = { clearCalls += 1 },
+        )
+
+        composeRule.onNodeWithText("Clear").performClick()
+
+        assertEquals(1, clearCalls)
+        composeRule.onNodeWithText("Cancel").assertDoesNotExist()
+    }
+
+    @Test
+    fun taskRowHasOneSpokenSummaryAndSeparateDeleteAction() {
+        val task = FocusTask(id = "task-1", title = "Accessibility audit")
+        setScreen(
+            AppState(
+                ready = true,
+                authStatus = AuthStatus.SignedIn,
+                tasks = listOf(task),
+                knownTasks = listOf(task),
+                taskSummaries = listOf(
+                    TaskDailySummary(
+                        task = task,
+                        finishedPomodoros = 2,
+                        timeSpentMs = 25 * 60_000L,
+                    ),
+                ),
+            ),
+        )
+
+        composeRule.onNodeWithText("Tasks").performClick()
+
+        composeRule.onNodeWithContentDescription(
+            "Accessibility audit, 2 finished pomodoros today, 25 min spent",
+        ).assertExists()
+        composeRule.onNodeWithText("Delete").assertExists()
     }
 
     @Test
@@ -235,6 +291,7 @@ class PomodoroughScreenTest {
         state: AppState,
         onSignIn: () -> Unit = {},
         onRefresh: () -> Unit = {},
+        onClearTimer: () -> Unit = {},
         onResolve: (BootstrapStrategy) -> Unit = {},
         onRecover: () -> Unit = {},
         onConfirmAccountSwitch: () -> Unit = {},
@@ -250,7 +307,7 @@ class PomodoroughScreenTest {
                     onToggleTimer = {},
                     onFinishTimer = {},
                     onCancelTimer = {},
-                    onClearTimer = {},
+                    onClearTimer = onClearTimer,
                     onSelectPhase = {},
                     onChangeDuration = { _, _ -> },
                     onSetAutoStart = {},

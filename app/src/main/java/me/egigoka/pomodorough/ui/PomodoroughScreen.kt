@@ -78,10 +78,16 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -561,7 +567,7 @@ private fun TimerScreen(
                         showLogoutDialog = false
                         onLogout()
                     },
-                ) { Text("Log out", color = Danger, fontWeight = FontWeight.Bold) }
+                ) { Text("Log out", color = DangerText, fontWeight = FontWeight.Bold) }
             },
             dismissButton = {
                 TextButton(onClick = { showLogoutDialog = false }) { Text("Stay signed in") }
@@ -580,14 +586,14 @@ private fun TimerScreen(
                     Text(
                         "Local data belongs to ${accountSwitch.localAccount}, but ${accountSwitch.incomingAccount} is signed in. Switching accounts permanently removes this device's timer, history, tasks, and unsynced operations.",
                     )
-                    accountSwitch.error?.let { Text(it, color = Danger, fontWeight = FontWeight.Bold) }
+                    accountSwitch.error?.let { Text(it, color = DangerText, fontWeight = FontWeight.Bold) }
                 }
             },
             confirmButton = {
                 TextButton(
                     onClick = onConfirmAccountSwitch,
                     enabled = !accountSwitch.submitting,
-                ) { Text("Switch and remove local data", color = Danger, fontWeight = FontWeight.Bold) }
+                ) { Text("Switch and remove local data", color = DangerText, fontWeight = FontWeight.Bold) }
             },
             dismissButton = {
                 TextButton(
@@ -639,7 +645,7 @@ private fun TimerScreen(
                             resolutionWarning(selected)
                         },
                     )
-                    resolution.error?.let { Text(it, color = Danger, fontWeight = FontWeight.Bold) }
+                    resolution.error?.let { Text(it, color = DangerText, fontWeight = FontWeight.Bold) }
                     if (resolution.pendingStrategy != null) {
                         Text("Retry sends the exact saved request ID and operation payload.")
                     }
@@ -1100,34 +1106,43 @@ private fun TaskSummaryRow(
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                summary.task.title,
-                Modifier.weight(2f),
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis,
-                style = MaterialTheme.typography.titleLarge,
-            )
-            Text(
-                summary.finishedPomodoros.toString(),
-                Modifier.weight(1.2f),
-                color = Violet,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Black,
-                textAlign = TextAlign.Center,
-            )
-            Text(
-                formatTaskDuration(summary.timeSpentMs),
-                Modifier.weight(1.35f),
-                color = Violet,
-                style = MaterialTheme.typography.labelLarge,
-                textAlign = TextAlign.Center,
-            )
+            Row(
+                modifier = Modifier
+                    .weight(4.55f)
+                    .clearAndSetSemantics {
+                        contentDescription = taskSummaryDescription(summary)
+                    },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    summary.task.title,
+                    Modifier.weight(2f),
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.titleLarge,
+                )
+                Text(
+                    summary.finishedPomodoros.toString(),
+                    Modifier.weight(1.2f),
+                    color = Violet,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Black,
+                    textAlign = TextAlign.Center,
+                )
+                Text(
+                    formatTaskDuration(summary.timeSpentMs),
+                    Modifier.weight(1.35f),
+                    color = Violet,
+                    style = MaterialTheme.typography.labelLarge,
+                    textAlign = TextAlign.Center,
+                )
+            }
             TextButton(
                 onClick = onDelete,
                 enabled = mutationsEnabled,
                 modifier = Modifier.weight(0.9f),
             ) {
-                Text("Delete", color = Danger)
+                Text("Delete", color = DangerText)
             }
         }
     }
@@ -1153,6 +1168,7 @@ private fun TimerHero(
 ) {
     val status = timer?.status ?: "idle"
     val phase = timer?.phase ?: settings.selectedPhase
+    val showContextLabel = LocalConfiguration.current.fontScale < 1.3f
     val active = status == TimerStatus.Running || status == TimerStatus.Paused
     val clearable = timer != null && !active
     val palette = phasePalette(phase)
@@ -1195,25 +1211,15 @@ private fun TimerHero(
                 onCancelTimer = onCancelTimer,
                 onClearTimer = onClearTimer,
                 onSelectTask = onSelectTask,
+                showContextLabel = showContextLabel,
             )
             return@Surface
         }
         Column(Modifier.padding(14.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
+            if (showContextLabel) {
                 SectionLabel("CURRENT TIMER")
-                Surface(color = palette.accent, contentColor = Ink, shape = CircleShape) {
-                    Text(
-                        phaseLabel(phase),
-                        modifier = Modifier.padding(horizontal = 15.dp, vertical = 8.dp),
-                        style = MaterialTheme.typography.labelLarge,
-                    )
-                }
+                Spacer(Modifier.height(6.dp))
             }
-            Spacer(Modifier.height(6.dp))
             TimerOrbit(timer = timer, settings = settings, palette = palette, maxSize = orbitMaxSize)
             Spacer(Modifier.height(6.dp))
             TaskSelector(
@@ -1271,7 +1277,7 @@ private fun TimerHero(
                         .weight(1f)
                         .height(46.dp),
                     border = BorderStroke(1.5.dp, palette.onContainer.copy(alpha = 0.55f)),
-                ) { Text("Cancel") }
+                ) { Text(if (active) "Cancel" else "Clear") }
             }
         }
     }
@@ -1291,6 +1297,7 @@ private fun LandscapeTimerHero(
     onCancelTimer: () -> Unit,
     onClearTimer: () -> Unit,
     onSelectTask: (String?) -> Unit,
+    showContextLabel: Boolean,
 ) {
     val status = timer?.status ?: "idle"
     val phase = timer?.phase ?: settings.selectedPhase
@@ -1301,11 +1308,7 @@ private fun LandscapeTimerHero(
         modifier = Modifier.padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+        if (showContextLabel) {
             Text("CURRENT SERVICE", color = Cloud, style = MaterialTheme.typography.labelMedium)
         }
         LandscapeTimerReadout(
@@ -1364,7 +1367,7 @@ private fun LandscapeTimerHero(
                         .weight(1f)
                         .height(54.dp),
                     border = BorderStroke(1.5.dp, Cloud.copy(alpha = 0.65f)),
-                ) { Text("Cancel", color = Cloud) }
+                ) { Text("Clear", color = Cloud) }
             }
         }
     }
@@ -1403,7 +1406,7 @@ private fun LandscapeTimerReadout(
         modifier = modifier
             .fillMaxWidth()
             .background(Cloud.copy(alpha = 0.07f), RoundedCornerShape(20.dp))
-            .semantics {
+            .clearAndSetSemantics {
                 progressBarRangeInfo = ProgressBarRangeInfo(progress.coerceIn(0f, 1f), 0f..1f)
                 contentDescription = "$minutes minutes $seconds seconds remaining, ${phaseLabel(phase)}, $status"
             }
@@ -1538,7 +1541,7 @@ private fun TimerOrbit(
         Box(
             modifier = Modifier
                 .size(orbitSize)
-                .semantics {
+                .clearAndSetSemantics {
                     progressBarRangeInfo = ProgressBarRangeInfo(progress.coerceIn(0f, 1f), 0f..1f)
                     contentDescription = "$minutes minutes $seconds seconds remaining, ${phaseLabel(phase)}, $status"
                 },
@@ -1694,6 +1697,7 @@ private fun PhaseCard(
     onChangeDuration: (String, Int) -> Unit,
 ) {
     val selected = settings.selectedPhase == phase
+    val minutes = settings.minutesFor(phase)
     val palette = phasePalette(phase)
     val shape = if (selected) {
         RoundedCornerShape(topStart = 36.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 36.dp)
@@ -1703,7 +1707,12 @@ private fun PhaseCard(
     Surface(
         onClick = { onSelect(phase) },
         enabled = enabled,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .semantics {
+                this.selected = selected
+                stateDescription = "$minutes minutes"
+            },
         color = if (selected) palette.container else MaterialTheme.colorScheme.surfaceVariant,
         contentColor = Ink,
         shape = shape,
@@ -1727,8 +1736,10 @@ private fun PhaseCard(
                 onChangeDuration(phase, -1)
             }
             Text(
-                "${settings.minutesFor(phase)}",
-                modifier = Modifier.width(45.dp),
+                "$minutes",
+                modifier = Modifier
+                    .width(45.dp)
+                    .clearAndSetSemantics { },
                 color = Ink,
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Black,
@@ -1792,7 +1803,11 @@ private fun HistoryRow(
 ) {
     val palette = phasePalette(item.phase)
     Surface(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .clearAndSetSemantics {
+                contentDescription = historyDescription(item, taskTitle, showPending)
+            },
         color = MaterialTheme.colorScheme.surfaceVariant,
         contentColor = Ink,
         shape = MaterialTheme.shapes.large,
@@ -1860,7 +1875,7 @@ private fun NoticeCard(message: String, onDismiss: () -> Unit, modifier: Modifie
         message = message,
         containerColor = Butter,
         onDismiss = onDismiss,
-        modifier = modifier,
+        modifier = modifier.semantics { liveRegion = LiveRegionMode.Polite },
     )
 }
 
@@ -1885,7 +1900,7 @@ private fun BrandOrb(size: androidx.compose.ui.unit.Dp) {
             .background(Butter, RoundedCornerShape(topStart = 50.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 50.dp)),
         contentAlignment = Alignment.Center,
     ) {
-        Box(Modifier.size(size * 0.4f).background(Danger, CircleShape))
+        Box(Modifier.size(size * 0.4f).background(DangerAccent, CircleShape))
     }
 }
 
@@ -1901,8 +1916,8 @@ private data class PhasePalette(
 )
 
 private fun phasePalette(phase: String): PhasePalette = when (phase) {
-    TimerPhase.ShortBreak, TimerPhase.LongBreak -> PhasePalette(container = Lavender, accent = Danger)
-    else -> PhasePalette(container = Butter, accent = Danger)
+    TimerPhase.ShortBreak, TimerPhase.LongBreak -> PhasePalette(container = Lavender, accent = DangerAccent)
+    else -> PhasePalette(container = Butter, accent = DangerAccent)
 }
 
 private fun syncLabel(state: AppState): String {
@@ -2014,6 +2029,19 @@ private fun formatTaskDuration(milliseconds: Long): String {
         remainingMinutes == 0L -> "$hours hr"
         else -> "$hours hr $remainingMinutes min"
     }
+}
+
+private fun taskSummaryDescription(summary: TaskDailySummary): String {
+    val pomodoros = if (summary.finishedPomodoros == 1) "pomodoro" else "pomodoros"
+    return "${summary.task.title}, ${summary.finishedPomodoros} finished $pomodoros today, " +
+        "${formatTaskDuration(summary.timeSpentMs)} spent"
+}
+
+private fun historyDescription(item: HistoryItem, taskTitle: String?, showPending: Boolean): String {
+    val pending = if (item.pending && showPending) ", queued" else ""
+    val task = taskTitle?.let { ", task $it" }.orEmpty()
+    return "${phaseLabel(item.phase)}, ${item.status}$pending, ${formatHistoryDate(item)}$task, " +
+        formatTaskDuration(item.plannedDurationMs)
 }
 
 private fun formatHistoryDate(item: HistoryItem): String {
