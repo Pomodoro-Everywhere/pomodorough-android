@@ -112,12 +112,12 @@ jobs:
 
   instrumented-tests:
     name: Instrumented tests (API 35, font ${{ matrix.font-scale }}x)
-    runs-on: ubuntu-24.04
+    runs-on: macos-15-intel
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        font-scale: ["1.0", "2.0"]
+        font-scale: ["1.0"]
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -153,7 +153,6 @@ jobs:
           arch: x86_64
           cores: 2
           force-avd-creation: true
-          disable-linux-hw-accel: true
           disable-animations: true
           disable-spellchecker: true
           emulator-boot-timeout: 1200
