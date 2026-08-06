@@ -91,7 +91,8 @@ jobs:
           ./gradlew --no-daemon --stacktrace :app:assembleRelease :app:bundleRelease
           release_apk="app/build/outputs/apk/release/app-release.apk"
           release_aab="app/build/outputs/bundle/release/app-release.aab"
-          apksigner verify --verbose --print-certs "$release_apk"
+          "$ANDROID_HOME/build-tools/$ANDROID_BUILD_TOOLS_VERSION/apksigner" \
+            verify --verbose --print-certs "$release_apk"
           jarsigner -verify -verbose -certs "$release_aab" \
             > "$RUNNER_TEMP/aab-verification.txt" 2>&1
           grep -Fq "jar verified." "$RUNNER_TEMP/aab-verification.txt"
