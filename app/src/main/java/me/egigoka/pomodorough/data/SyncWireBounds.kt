@@ -29,17 +29,42 @@ internal object SyncWireBounds {
         require(isClockTuple(wallMs, counter, allowLegacySentinel)) {
             "Operation hybrid clock is invalid"
         }
-        val occurrenceMs = runCatching { Instant.parse(occurredAt).toEpochMilli() }
+        val occurrence = runCatching { Instant.parse(occurredAt) }
             .getOrElse { throw IllegalArgumentException("Operation occurrence time is invalid") }
         if (wallMs == 0L) {
-            require(allowLegacySentinel && counter == 0L && occurrenceMs == 0L) {
+            require(allowLegacySentinel && counter == 0L && occurrence == Instant.EPOCH) {
                 "Operation legacy clock sentinel is invalid"
             }
             return
         }
+        val occurrenceMs = occurrence.toEpochMilli()
         require(occurrenceMs in (wallMs - MaxClockSkewMs)..(wallMs + MaxClockSkewMs)) {
             "Operation occurrence time and hybrid clock disagree"
         }
+    }
+
+    fun isIdentifier(value: String): Boolean {
+        val bytes = value.encodeToByteArray()
+        if (bytes.size !in 8..128) return false
+        fun isAlphaNumeric(byte: Byte): Boolean {
+            val unsigned = byte.toInt() and 0xff
+            return unsigned in '0'.code..'9'.code || unsigned in 'A'.code..'Z'.code ||
+                unsigned in 'a'.code..'z'.code
+        }
+        return isAlphaNumeric(bytes.first()) && bytes.drop(1).all { byte ->
+            isAlphaNumeric(byte) || byte.toInt().toChar() in setOf('.', ':', '_', '-')
+        }
+    }
+
+    fun compareUtf8(left: String, right: String): Int {
+        val leftBytes = left.encodeToByteArray()
+        val rightBytes = right.encodeToByteArray()
+        for (index in 0 until minOf(leftBytes.size, rightBytes.size)) {
+            val compared = (leftBytes[index].toInt() and 0xff)
+                .compareTo(rightBytes[index].toInt() and 0xff)
+            if (compared != 0) return compared
+        }
+        return leftBytes.size.compareTo(rightBytes.size)
     }
 
     fun reserve(

@@ -83,6 +83,23 @@ class SyncWireBoundsTest {
     }
 
     @Test
+    fun legacySentinelRequiresExactUnixEpoch() {
+        listOf(
+            "1970-01-01T00:00:00.000000001Z",
+            "1970-01-01T00:00:00.000999999Z",
+        ).forEach { occurredAt ->
+            assertThrows(IllegalArgumentException::class.java) {
+                SyncWireBounds.requireOperationClock(
+                    occurredAt = occurredAt,
+                    wallMs = 0,
+                    counter = 0,
+                    allowLegacySentinel = true,
+                )
+            }
+        }
+    }
+
+    @Test
     fun mergeRebasesPoisonedLocalWallToTrustedServerTime() {
         assertEquals(
             100L to 7L,

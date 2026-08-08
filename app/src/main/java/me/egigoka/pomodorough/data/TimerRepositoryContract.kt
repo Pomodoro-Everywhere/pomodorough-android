@@ -2,6 +2,7 @@ package me.egigoka.pomodorough.data
 
 import kotlinx.coroutines.flow.StateFlow
 import me.egigoka.pomodorough.data.auth.GoogleCredentialProvider
+import me.egigoka.pomodorough.data.iroh.ReplicationMode
 
 interface TimerRepositoryContract {
     val state: StateFlow<AppState>
@@ -27,6 +28,12 @@ interface TimerRepositoryContract {
     suspend fun cancelAccountSwitch()
     fun dismissConflict()
     fun dismissNotice()
+    suspend fun setReplicationMode(mode: ReplicationMode)
+    suspend fun createIrohRoom(name: String)
+    suspend fun joinIrohRoom(invite: String)
+    suspend fun leaveIrohRoom()
+    suspend fun refreshIrohInvite()
+    suspend fun syncIrohNow()
     fun onForeground()
     fun onBackground()
 }

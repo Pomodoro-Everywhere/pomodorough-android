@@ -58,13 +58,28 @@ class SettingsReducerTest {
     @Test
     fun invalidOperationsNeverAffectProjection() {
         val invalidDuration = duration("invalid", "unknown", 30, wall = 1, counter = 0)
-        val invalidAutoStart = autoStart("not-a-uuid", "device-z", false, wall = 1, counter = 0)
+        val invalidAutoStart = autoStart("short", "device-z", false, wall = 1, counter = 0)
 
         assertEquals(
             TimerSettings(),
             SettingsReducer.replayDurations(TimerSettings(), listOf(invalidDuration)),
         )
         assertTrue(SettingsReducer.replayAutoStart(true, listOf(invalidAutoStart)))
+    }
+
+    @Test
+    fun autoStartAcceptsProtocolIdentifiersWithoutRequiringUuid() {
+        val operation = autoStart(
+            "auto-start-operation-peer0001",
+            "device-peer0001",
+            false,
+            wall = 1,
+            counter = 0,
+        )
+
+        assertTrue(SettingsReducer.isValid(operation))
+        assertFalse(SettingsReducer.replayAutoStart(true, listOf(operation)))
+        assertFalse(SettingsReducer.isValid(operation.copy(id = "bad/id")))
     }
 
     private fun duration(

@@ -23,6 +23,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -41,12 +42,16 @@ import me.egigoka.pomodorough.data.auth.AuthSession
 import me.egigoka.pomodorough.data.auth.AuthenticationRequired
 import me.egigoka.pomodorough.data.auth.GoogleCredentialProvider
 import me.egigoka.pomodorough.data.local.LocalStateEntity
+import me.egigoka.pomodorough.data.local.LocalWorkspaceCoordinator
 import me.egigoka.pomodorough.data.local.PendingAutoStartOperationEntity
 import me.egigoka.pomodorough.data.local.PendingBootstrapResolutionEntity
 import me.egigoka.pomodorough.data.local.PendingCommandEntity
 import me.egigoka.pomodorough.data.local.PendingDurationOperationEntity
 import me.egigoka.pomodorough.data.local.PendingTaskOperationEntity
 import me.egigoka.pomodorough.data.local.TimerDao
+import me.egigoka.pomodorough.data.iroh.IrohNetworkState
+import me.egigoka.pomodorough.data.iroh.IrohReplicationController
+import me.egigoka.pomodorough.data.iroh.ReplicationMode
 import me.egigoka.pomodorough.domain.SettingsReducer
 import me.egigoka.pomodorough.domain.TaskReducer
 import me.egigoka.pomodorough.domain.TimerReducer
@@ -77,6 +82,7 @@ data class AppState(
     val conflict: String? = null,
     val notice: String? = null,
     val deviceId: String = "",
+    val network: IrohNetworkState = IrohNetworkState(),
 )
 
 private data class SyncAttempt(
@@ -171,12 +177,16 @@ class TimerRepository(
     private val bootId: () -> String? = ::readBootId,
     private val uuidEntropy: () -> ByteArray = UuidV7::secureEntropy,
     private val initialSyncRetryDelayMs: Long = 1_000L,
+    private val replication: IrohReplicationController? = null,
+    workspaceCoordinator: LocalWorkspaceCoordinator =
+        (replication as? me.egigoka.pomodorough.data.iroh.IrohReplicationRepository)
+            ?.workspaceCoordinator ?: LocalWorkspaceCoordinator(),
 ) : TimerRepositoryContract {
     private val appContext = context.applicationContext
     private val strictJson = Json(from = json) { ignoreUnknownKeys = false }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val initializeMutex = Mutex()
-    private val actionMutex = Mutex()
+    private val actionMutex = workspaceCoordinator
     private val streamMutex = Mutex()
     private val initialized = CompletableDeferred<Unit>()
     private val networkInitializationStarted = AtomicBoolean(false)
@@ -224,12 +234,21 @@ class TimerRepository(
     private var trustedAnchorServerMs: Long? = null
     private var trustedAnchorElapsedRealtimeMs: Long? = null
     private var selectedPhaseGeneration = 0L
+    private var networkState = IrohNetworkState()
 
     private val _state = MutableStateFlow(AppState())
     override val state: StateFlow<AppState> = _state.asStateFlow()
 
     init {
         scope.launch { syncLoop() }
+        replication?.let { controller ->
+            scope.launch {
+                controller.state.collectLatest { next ->
+                    networkState = next
+                    publish()
+                }
+            }
+        }
         scope.launch {
             for (shouldOpen in streamLifecycleSignals) {
                 try {
@@ -262,6 +281,15 @@ class TimerRepository(
     override suspend fun initialize() {
         ensureLocalInitialized()
         if (localMutationCorrupted) return
+        replication?.initialize()
+        if (replicationMode() != ReplicationMode.CENTRALIZED) {
+            reloadWorkspace(replicationMode())
+            if (authStatus == AuthStatus.Loading) {
+                authStatus = if (user != null && auth.hasTokens()) AuthStatus.SignedIn else AuthStatus.SignedOut
+                publish()
+            }
+            return
+        }
         if (!networkInitializationStarted.compareAndSet(false, true)) return
         if (auth.hasTokens()) {
             restoreProfile()
@@ -410,6 +438,16 @@ class TimerRepository(
 
     override suspend fun signIn(credentialProvider: GoogleCredentialProvider) {
         initialize()
+        if (replicationMode() != ReplicationMode.CENTRALIZED) {
+            replication?.setMode(ReplicationMode.CENTRALIZED)
+            if (replicationMode() != ReplicationMode.CENTRALIZED) {
+                notice = replication?.state?.value?.message
+                    ?: "Could not restore centralized workspace for sign-in."
+                publish()
+                return
+            }
+            reloadWorkspace(ReplicationMode.CENTRALIZED)
+        }
         if (localMutationCorrupted) return
         if (!signInInFlight.compareAndSet(false, true)) return
         var identity: RepositoryAttemptIdentity? = null
@@ -491,6 +529,23 @@ class TimerRepository(
 
     override suspend fun logout() {
         initialize()
+        if (replicationMode() == ReplicationMode.IROH) {
+            runCatching { auth.logout() }
+            auth.clear()
+            val clearFailure = runCatching {
+                replication?.clearAccountData()
+                reloadWorkspace(ReplicationMode.IROH)
+            }.exceptionOrNull()
+            actionMutex.withLock {
+                accountGeneration += 1
+                authStatus = AuthStatus.SignedOut
+                user = null
+                notice = clearFailure?.message
+                    ?: clearFailure?.let { "Account signed out, but saved account data could not be cleared." }
+                publish()
+            }
+            return
+        }
         if (localMutationCorrupted) return
         actionMutex.withLock {
             accountGeneration += 1
@@ -761,7 +816,7 @@ class TimerRepository(
             scheduleAlarm()
             saved = true
         }
-        if (saved) requestSync()
+        if (saved) afterLocalMutation()
     }
 
     override suspend fun clearTimer() {
@@ -771,8 +826,20 @@ class TimerRepository(
 
     override suspend fun selectPhase(phase: String) {
         initialize()
-        if (mutationsBlocked() || phase !in TimerPhase.all || projection.timer?.status in activeStatuses) return
-        persistSettings(settings.copy(selectedPhase = phase))
+        var saved = false
+        actionMutex.withLock {
+            if (mutationsBlocked() || phase !in TimerPhase.all ||
+                projection.timer?.status in activeStatuses
+            ) return@withLock
+            if (phase == settings.selectedPhase) return@withLock
+            selectedPhaseGeneration += 1L
+            settings = settings.copy(selectedPhase = phase)
+            local = local.copy(settingsJson = json.encodeToString(settings))
+            dao.updateState(local)
+            publish()
+            saved = true
+        }
+        if (saved) afterLocalMutation()
     }
 
     override suspend fun changeDuration(phase: String, delta: Int) {
@@ -814,7 +881,7 @@ class TimerRepository(
             publish()
             saved = true
         }
-        if (saved) requestSync()
+        if (saved) afterLocalMutation()
     }
 
     override suspend fun setAutoStart(enabled: Boolean) {
@@ -850,18 +917,22 @@ class TimerRepository(
             publish()
             saved = true
         }
-        if (saved) requestSync()
+        if (saved) afterLocalMutation()
     }
 
     override suspend fun selectTask(taskId: String?) {
         initialize()
+        var saved = false
         actionMutex.withLock {
             if (mutationsBlocked() || projection.timer?.status in activeStatuses) return@withLock
             if (taskId != null && tasks.none { it.id == taskId }) return@withLock
+            if (taskId == local.selectedTaskId) return@withLock
             local = local.copy(selectedTaskId = taskId)
             dao.updateState(local)
             publish()
+            saved = true
         }
+        if (saved) afterLocalMutation()
     }
 
     override suspend fun addTask(title: String) {
@@ -889,9 +960,35 @@ class TimerRepository(
     override suspend fun finishExpiredTimer(): Boolean {
         ensureLocalInitialized()
         val timer = projection.timer ?: return false
+        replication?.initialize()
+        if (replicationMode() != ReplicationMode.CENTRALIZED) {
+            reloadWorkspace(replicationMode())
+        }
         if (timer.status == TimerStatus.Running &&
             TimerReducer.elapsedAt(timer) >= timer.plannedDurationMs
         ) {
+            if (replicationMode() == ReplicationMode.IROH) {
+                return try {
+                    replication?.afterLocalMutation()
+                    reloadWorkspace(ReplicationMode.IROH)
+                    val completed = projection.timer?.status == TimerStatus.Completed
+                    if (completed && timer.phase == TimerPhase.Focus && settings.autoStartBreaks &&
+                        timer.id == local.ownedTimerId
+                    ) {
+                        val nextPhase = nextBreakPhase(
+                            projection.history.count {
+                                it.status == TimerStatus.Completed && it.phase == TimerPhase.Focus
+                            },
+                        )
+                        issueCommand(CommandType.Start, nextPhase)
+                    }
+                    completed
+                } catch (error: Exception) {
+                    conflict = error.message ?: "Iroh room projection could not be refreshed"
+                    publish()
+                    false
+                }
+            }
             return finishLocalTimer(onlyIfExpired = true, allowWhileLoading = true)
         }
         return false
@@ -914,6 +1011,51 @@ class TimerRepository(
     override fun dismissNotice() {
         notice = null
         publish()
+    }
+
+    override suspend fun setReplicationMode(mode: ReplicationMode) {
+        initialize()
+        val controller = replication ?: return
+        accountGeneration += 1
+        controller.setMode(mode)
+        reloadWorkspace(mode)
+        if (mode == ReplicationMode.CENTRALIZED && authStatus == AuthStatus.SignedIn) {
+            requestSync(force = true)
+            if (foreground) streamLifecycleSignals.trySend(true)
+        } else {
+            streamLifecycleSignals.trySend(false)
+        }
+    }
+
+    override suspend fun createIrohRoom(name: String) {
+        initialize()
+        val controller = replication ?: return
+        controller.createRoom(name)
+        reloadWorkspace(ReplicationMode.IROH)
+        streamLifecycleSignals.trySend(false)
+    }
+
+    override suspend fun joinIrohRoom(invite: String) {
+        initialize()
+        val controller = replication ?: return
+        controller.joinRoom(invite)
+        reloadWorkspace(controller.mode)
+        if (controller.mode != ReplicationMode.CENTRALIZED) streamLifecycleSignals.trySend(false)
+    }
+
+    override suspend fun leaveIrohRoom() {
+        initialize()
+        val controller = replication ?: return
+        controller.leaveRoom()
+        reloadWorkspace(ReplicationMode.OFFLINE)
+    }
+
+    override suspend fun refreshIrohInvite() {
+        replication?.refreshInvite()
+    }
+
+    override suspend fun syncIrohNow() {
+        replication?.syncNow()
     }
 
     override suspend fun resolveHistory(strategy: BootstrapStrategy) {
@@ -1334,13 +1476,17 @@ class TimerRepository(
 
     override fun onForeground() {
         foreground = true
+        replication?.onForeground()
         streamLifecycleGeneration += 1L
-        requestSync(force = true)
-        streamLifecycleSignals.trySend(true)
+        if (replicationMode() == ReplicationMode.CENTRALIZED) {
+            requestSync(force = true)
+            streamLifecycleSignals.trySend(true)
+        }
     }
 
     override fun onBackground() {
         foreground = false
+        replication?.onBackground()
         streamLifecycleGeneration += 1L
         streamLifecycleSignals.trySend(false)
     }
@@ -1410,8 +1556,12 @@ class TimerRepository(
     ): Boolean {
         var automaticAttempt: BootstrapResolutionAttempt? = null
         var accountMismatch = false
+        var staleAttempt = false
         actionMutex.withLock {
-            if (!isCurrent(identity)) return false
+            if (!isCurrent(identity)) {
+                staleAttempt = true
+                return@withLock
+            }
             validateUser(profile)
             validateCanonicalResponse(bootstrap, "Bootstrap", requireEmptyAcknowledgements = true)
             val storedResolution = pendingBootstrapResolution
@@ -1492,6 +1642,7 @@ class TimerRepository(
             publish()
             scheduleAlarm()
         }
+        if (staleAttempt) return false
         if (accountMismatch) return true
         automaticAttempt?.let { performBootstrapResolution(it) }
         return true
@@ -1627,15 +1778,6 @@ class TimerRepository(
         rebuildProjections()
     }
 
-    private suspend fun persistSettings(next: TimerSettings) = actionMutex.withLock {
-        if (mutationsBlocked()) return@withLock
-        if (next.selectedPhase != settings.selectedPhase) selectedPhaseGeneration += 1L
-        settings = next
-        local = local.copy(settingsJson = json.encodeToString(settings))
-        dao.updateState(local)
-        publish()
-    }
-
     private suspend fun finishLocalTimer(
         onlyIfExpired: Boolean,
         allowWhileLoading: Boolean,
@@ -1735,7 +1877,7 @@ class TimerRepository(
             scheduleAlarm()
             saved = true
         }
-        if (saved) requestSync()
+        if (saved) afterLocalMutation()
         return saved
     }
 
@@ -1798,7 +1940,7 @@ class TimerRepository(
             scheduleAlarm()
             saved = true
         }
-        if (saved) requestSync()
+        if (saved) afterLocalMutation()
         return saved
     }
 
@@ -1842,7 +1984,7 @@ class TimerRepository(
             publish()
             saved = true
         }
-        if (saved) requestSync()
+        if (saved) afterLocalMutation()
     }
 
     private fun validTransition(type: String, timer: CanonicalTimer?): Boolean = when (type) {
@@ -1850,7 +1992,7 @@ class TimerRepository(
         CommandType.Pause -> timer?.status == TimerStatus.Running
         CommandType.Resume -> timer?.status == TimerStatus.Paused || timer?.status == TimerStatus.Superseded
         CommandType.Finish, CommandType.Cancel -> timer?.status in activeStatuses
-        CommandType.Clear -> timer != null && timer.status !in activeStatuses
+        CommandType.Clear -> timer?.status in setOf(TimerStatus.Completed, TimerStatus.Cancelled)
         else -> false
     }
 
@@ -2012,12 +2154,71 @@ class TimerRepository(
             }
 
     private fun requestSync(force: Boolean = false) {
+        if (replicationMode() != ReplicationMode.CENTRALIZED) return
         if (force) forceSync.set(true)
         syncSignals.trySend(Unit)
     }
 
+    private suspend fun afterLocalMutation() {
+        if (replicationMode() == ReplicationMode.IROH) {
+            try {
+                replication?.afterLocalMutation()
+                reloadWorkspace(ReplicationMode.IROH)
+            } catch (error: Exception) {
+                conflict = error.message ?: "Iroh room operation could not be recorded"
+                publish()
+            }
+        } else if (replicationMode() == ReplicationMode.CENTRALIZED) {
+            requestSync()
+        }
+    }
+
+    private fun replicationMode(): ReplicationMode = replication?.mode ?: ReplicationMode.CENTRALIZED
+
+    suspend fun reloadWorkspace(mode: ReplicationMode = replicationMode()) {
+        actionMutex.withLock {
+            if (!initialized.isCompleted) return@withLock
+            val stored = checkNotNull(dao.localState()) { "Local workspace is missing" }
+            local = stored
+            val commandEntities = dao.pendingCommands()
+            pending = commandEntities.map(PendingCommandEntity::toModel)
+            commandDependencies = commandEntities.mapNotNull { entity ->
+                entity.generatedByFinishCommandId?.let { entity.id to it }
+            }.toMap()
+            pendingTaskOperations = dao.pendingTaskOperations().map(PendingTaskOperationEntity::toModel)
+            pendingDurationOperations = dao.pendingDurationOperations()
+                .map(PendingDurationOperationEntity::toModel)
+            pendingAutoStartOperations = dao.pendingAutoStartOperations()
+                .map(PendingAutoStartOperationEntity::toModel)
+            pendingBootstrapResolution = dao.pendingBootstrapResolution()
+            settings = strictJson.decodeFromString(stored.settingsJson)
+            canonicalTimer = stored.canonicalTimerJson?.let(strictJson::decodeFromString)
+            canonicalHistory = strictJson.decodeFromString(stored.historyJson)
+            canonicalTasks = strictJson.decodeFromString(stored.tasksJson)
+            canonicalAutoStartBreaks = stored.canonicalAutoStartBreaks
+            knownTasks = strictJson.decodeFromString<List<FocusTask>>(stored.knownTasksJson)
+                .plus(canonicalTasks)
+                .associateBy(FocusTask::id)
+            user = stored.userJson?.let(strictJson::decodeFromString)
+            authStatus = if (user != null && auth.hasTokens()) AuthStatus.SignedIn else AuthStatus.SignedOut
+            conflict = networkState.conflict?.let { "Iroh room has an immutable operation conflict." }
+            rebuildProjections()
+            publish()
+            scheduleAlarm()
+        }
+        if (mode == ReplicationMode.CENTRALIZED && foreground) streamLifecycleSignals.trySend(true)
+    }
+
+    fun scheduleWorkspaceReload() {
+        scope.launch { reloadWorkspace(ReplicationMode.IROH) }
+    }
+
     override fun refresh() {
-        if (authStatus == AuthStatus.SignedIn) requestSync(force = true)
+        if (replicationMode() == ReplicationMode.IROH) {
+            scope.launch { replication?.syncNow() }
+        } else if (replicationMode() == ReplicationMode.CENTRALIZED && authStatus == AuthStatus.SignedIn) {
+            requestSync(force = true)
+        }
     }
 
     private suspend fun syncLoop() {
@@ -2025,7 +2226,9 @@ class TimerRepository(
             initialized.await()
             var forced = forceSync.getAndSet(false)
             var retryDelay = initialSyncRetryDelayMs
-            while (scope.isActive && authStatus == AuthStatus.SignedIn) {
+            while (scope.isActive && authStatus == AuthStatus.SignedIn &&
+                replicationMode() == ReplicationMode.CENTRALIZED
+            ) {
                 if (historyResolution != null || accountSwitch != null) {
                     syncing = false
                     retrying = false
@@ -2108,7 +2311,7 @@ class TimerRepository(
 
     private suspend fun syncOnce() {
         val attempt = actionMutex.withLock {
-            if (historyResolution != null || accountSwitch != null) return
+            if (historyResolution != null || accountSwitch != null) return@withLock null
             validatePendingSyncQueues(
                 pending,
                 pendingTaskOperations,
@@ -2143,15 +2346,17 @@ class TimerRepository(
                 selectedPhaseAtSend = settings.selectedPhase,
                 selectedPhaseGenerationAtSend = selectedPhaseGeneration,
             )
-        }
+        } ?: return
         val response = auth.authorized { api.sync(it, attempt.request) }
         val receivedPhysicalMs = currentTimeMillis()
         val receivedElapsedRealtimeMs = elapsedRealtimeMillis()
         actionMutex.withLock {
-            if (attempt.accountGeneration != accountGeneration || authStatus != AuthStatus.SignedIn) {
+            if (attempt.accountGeneration != accountGeneration || authStatus != AuthStatus.SignedIn ||
+                replicationMode() != ReplicationMode.CENTRALIZED
+            ) {
                 syncing = false
                 publish()
-                return
+                return@withLock
             }
             val sentCommandIds = validateAcknowledgements(
                 attempt.request.commands.map(TimerCommand::id),
@@ -2389,6 +2594,7 @@ class TimerRepository(
         initialized.await()
         streamMutex.withLock {
             if (!foreground || !online || authStatus != AuthStatus.SignedIn ||
+                replicationMode() != ReplicationMode.CENTRALIZED ||
                 historyResolution != null || accountSwitch != null || eventSource != null
             ) return
             try {
@@ -2440,13 +2646,16 @@ class TimerRepository(
                 if (eventSource !== source) return@withLock null
                 eventSource = null
                 streamLifecycleGeneration.takeIf {
-                    foreground && online && authStatus == AuthStatus.SignedIn
+                    foreground && online && authStatus == AuthStatus.SignedIn &&
+                        replicationMode() == ReplicationMode.CENTRALIZED
                 }
             }
             if (responseCode == 401) requestSync(force = true)
             if (reconnectGeneration != null) {
                 delay(5_000)
-                if (foreground && streamLifecycleGeneration == reconnectGeneration) {
+                if (foreground && replicationMode() == ReplicationMode.CENTRALIZED &&
+                    streamLifecycleGeneration == reconnectGeneration
+                ) {
                     streamLifecycleSignals.trySend(true)
                 }
             }
@@ -3858,6 +4067,8 @@ class TimerRepository(
 
     private fun mutationsBlocked(allowWhileLoading: Boolean = false): Boolean =
         localMutationCorrupted ||
+            replication?.state?.value?.transitioning == true ||
+            (replicationMode() == ReplicationMode.IROH && networkState.conflict != null) ||
             historyResolution != null ||
             accountSwitch != null ||
             (!allowWhileLoading && authStatus == AuthStatus.Loading) ||
@@ -4031,6 +4242,7 @@ class TimerRepository(
             conflict = conflict,
             notice = notice,
             deviceId = if (::local.isInitialized) local.deviceId else "",
+            network = networkState,
         )
     }
 

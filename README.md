@@ -203,4 +203,5 @@ tests can validate upgrade paths.
 ## License
 
 Pomodorough for Android is licensed under the GNU General Public License v3.0
-or later. See [LICENSE](LICENSE).
+or later. See [LICENSE](LICENSE). Iroh and JNA native dependency notices ship
+with the app and are recorded in [IROH_THIRD_PARTY_LICENSES.md](IROH_THIRD_PARTY_LICENSES.md).

@@ -16,12 +16,35 @@ object TimerReducer {
         canonicalHistory: List<HistoryItem>,
         commands: List<TimerCommand>,
     ): TimerProjection {
+        return replayOrdered(
+            canonicalTimer,
+            canonicalHistory,
+            commands.sortedWith(compareBy(TimerCommand::deviceSequence, TimerCommand::id)),
+        )
+    }
+
+    fun replayOrdered(
+        canonicalTimer: CanonicalTimer?,
+        canonicalHistory: List<HistoryItem>,
+        commands: List<TimerCommand>,
+    ): TimerProjection {
         var timer = canonicalTimer
         val history = canonicalHistory.toMutableList()
-        commands.sortedWith(compareBy(TimerCommand::deviceSequence, TimerCommand::id)).forEach { command ->
+        commands.forEach { command ->
             timer = reduce(timer, history, command)
         }
         return TimerProjection(timer, history)
+    }
+
+    fun projectAt(
+        timer: CanonicalTimer?,
+        history: List<HistoryItem>,
+        nowMs: Long,
+    ): TimerProjection {
+        val projectedHistory = history.toMutableList()
+        val occurredAt = runCatching { Instant.ofEpochMilli(nowMs).toString() }.getOrNull()
+            ?: return TimerProjection(timer, history)
+        return TimerProjection(autoComplete(timer, projectedHistory, occurredAt), projectedHistory)
     }
 
     fun elapsedAt(timer: CanonicalTimer?, nowMs: Long = System.currentTimeMillis()): Long {
@@ -171,7 +194,6 @@ object TimerReducer {
                 current.status in setOf(
                     TimerStatus.Completed,
                     TimerStatus.Cancelled,
-                    TimerStatus.Superseded,
                 )
             ) null else current
 

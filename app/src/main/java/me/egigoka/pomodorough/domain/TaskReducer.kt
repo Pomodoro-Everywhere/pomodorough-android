@@ -9,6 +9,7 @@ import java.time.ZoneId
 import java.util.UUID
 import me.egigoka.pomodorough.data.FocusTask
 import me.egigoka.pomodorough.data.HistoryItem
+import me.egigoka.pomodorough.data.SyncWireBounds
 import me.egigoka.pomodorough.data.TaskDailySummary
 import me.egigoka.pomodorough.data.TaskOperation
 import me.egigoka.pomodorough.data.TaskOperationType
@@ -67,7 +68,10 @@ object TaskReducer {
                 TaskOperationType.Delete -> tasks.remove(operation.taskId)
             }
         }
-        return tasks.values.sortedWith(compareBy<FocusTask> { it.title }.thenBy { it.id })
+        return tasks.values.sortedWith { left, right ->
+            SyncWireBounds.compareUtf8(left.title, right.title).takeIf { it != 0 }
+                ?: SyncWireBounds.compareUtf8(left.id, right.id)
+        }
     }
 
     fun summariesToday(

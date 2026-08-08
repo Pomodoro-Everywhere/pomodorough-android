@@ -258,7 +258,7 @@ class SyncContractTest {
                 AckKind.AutoStart -> database.timerDao().insertAutoStartOperation(
                     PendingAutoStartOperationEntity.from(
                         testAutoStartOperation(
-                            "not-a-uuid",
+                            "bad/id",
                             enabled = true,
                             wallMs = now,
                         ).copy(occurredAt = java.time.Instant.ofEpochMilli(now).toString()),

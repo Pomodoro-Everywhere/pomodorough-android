@@ -2,8 +2,13 @@ package me.egigoka.pomodorough
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.content.ClipData
+import android.content.ClipDescription
+import android.content.ClipboardManager
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.os.PersistableBundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -16,6 +21,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import me.egigoka.pomodorough.ui.PomodoroughScreen
 import me.egigoka.pomodorough.ui.PomodoroughTheme
 import me.egigoka.pomodorough.ui.PomodoroughViewModel
@@ -65,6 +71,14 @@ class MainActivity : ComponentActivity() {
                     onCancelAccountSwitch = viewModel::cancelAccountSwitch,
                     onDismissConflict = viewModel::dismissConflict,
                     onDismissNotice = viewModel::dismissNotice,
+                    onSetReplicationMode = viewModel::setReplicationMode,
+                    onCreateIrohRoom = viewModel::createIrohRoom,
+                    onJoinIrohRoom = viewModel::joinIrohRoom,
+                    onLeaveIrohRoom = viewModel::leaveIrohRoom,
+                    onRefreshIrohInvite = viewModel::refreshIrohInvite,
+                    onSyncIrohNow = viewModel::syncIrohNow,
+                    onCopyIrohInvite = ::copyIrohInvite,
+                    onShareIrohInvite = ::shareIrohInvite,
                 )
             }
         }
@@ -90,5 +104,40 @@ class MainActivity : ComponentActivity() {
                 notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
             TimerNotificationPermissionAction.ToggleTimer -> viewModel.toggleTimer()
         }
+    }
+
+    private fun copyIrohInvite(invite: String) {
+        val clipboard = getSystemService(ClipboardManager::class.java)
+        val clip = ClipData.newPlainText("Pomodorough Iroh room invite", invite)
+        if (Build.VERSION.SDK_INT >= 33) {
+            clip.description.extras = PersistableBundle().apply {
+                putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
+            }
+        }
+        clipboard.setPrimaryClip(clip)
+        lifecycleScope.launch {
+            delay(60_000L)
+            val current = clipboard.primaryClip?.getItemAt(0)?.coerceToText(this@MainActivity)?.toString()
+            if (current == invite) {
+                if (Build.VERSION.SDK_INT >= 28) {
+                    clipboard.clearPrimaryClip()
+                } else {
+                    clipboard.setPrimaryClip(ClipData.newPlainText("", ""))
+                }
+            }
+        }
+    }
+
+    private fun shareIrohInvite(invite: String) {
+        startActivity(
+            Intent.createChooser(
+                Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_SUBJECT, "Pomodorough Iroh room")
+                    putExtra(Intent.EXTRA_TEXT, invite)
+                },
+                "Share room invite",
+            ),
+        )
     }
 }

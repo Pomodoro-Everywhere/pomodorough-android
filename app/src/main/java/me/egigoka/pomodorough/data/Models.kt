@@ -75,6 +75,7 @@ data class TimerIntent(
     val type: String,
     val commandId: String,
     val occurredAt: String,
+    val deviceId: String? = null,
 )
 
 @Serializable
@@ -86,6 +87,7 @@ data class CanonicalTimer(
     val elapsedAtAnchorMs: Long,
     val anchorAt: String,
     val taskId: String? = null,
+    val startedByDeviceId: String? = null,
     val lastIntent: TimerIntent? = null,
 )
 

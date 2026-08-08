@@ -17,6 +17,7 @@ import me.egigoka.pomodorough.data.BootstrapStrategy
 import me.egigoka.pomodorough.data.CanonicalTimer
 import me.egigoka.pomodorough.data.TimerRepositoryContract
 import me.egigoka.pomodorough.data.TimerStatus
+import me.egigoka.pomodorough.data.iroh.ReplicationMode
 import me.egigoka.pomodorough.data.auth.GoogleCredentialProvider
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
@@ -59,6 +60,12 @@ class PomodoroughViewModelTest {
         viewModel.cancelAccountSwitch()
         viewModel.dismissConflict()
         viewModel.dismissNotice()
+        viewModel.setReplicationMode(ReplicationMode.OFFLINE)
+        viewModel.createIrohRoom("Design desk")
+        viewModel.joinIrohRoom("invite")
+        viewModel.leaveIrohRoom()
+        viewModel.refreshIrohInvite()
+        viewModel.syncIrohNow()
         runCurrent()
         signInJob.join()
 
@@ -87,10 +94,16 @@ class PomodoroughViewModelTest {
                 "recoverCorruptedResolution",
                 "confirmAccountSwitch",
                 "cancelAccountSwitch",
+                "setReplicationMode:OFFLINE",
+                "createIrohRoom:Design desk",
+                "joinIrohRoom:invite",
+                "leaveIrohRoom",
+                "refreshIrohInvite",
+                "syncIrohNow",
             ),
             repository.events.toSet(),
         )
-        assertEquals(20, repository.events.size)
+        assertEquals(26, repository.events.size)
     }
 
     @Test
@@ -216,6 +229,13 @@ private class RecordingTimerRepository : TimerRepositoryContract {
     override suspend fun cancelAccountSwitch() = record("cancelAccountSwitch")
     override fun dismissConflict() = record("dismissConflict")
     override fun dismissNotice() = record("dismissNotice")
+    override suspend fun setReplicationMode(mode: ReplicationMode) =
+        record("setReplicationMode:${mode.name}")
+    override suspend fun createIrohRoom(name: String) = record("createIrohRoom:$name")
+    override suspend fun joinIrohRoom(invite: String) = record("joinIrohRoom:$invite")
+    override suspend fun leaveIrohRoom() = record("leaveIrohRoom")
+    override suspend fun refreshIrohInvite() = record("refreshIrohInvite")
+    override suspend fun syncIrohNow() = record("syncIrohNow")
     override fun onForeground() = record("onForeground")
     override fun onBackground() = record("onBackground")
 

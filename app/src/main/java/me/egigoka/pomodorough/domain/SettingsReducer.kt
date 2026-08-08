@@ -1,7 +1,6 @@
 package me.egigoka.pomodorough.domain
 
 import java.time.Instant
-import java.util.UUID
 import me.egigoka.pomodorough.data.AutoStartOperation
 import me.egigoka.pomodorough.data.DurationLimits
 import me.egigoka.pomodorough.data.DurationOperation
@@ -9,7 +8,7 @@ import me.egigoka.pomodorough.data.SyncWireBounds
 import me.egigoka.pomodorough.data.TimerPhase
 import me.egigoka.pomodorough.data.TimerSettings
 
-internal object SettingsReducer {
+object SettingsReducer {
     fun replayDurations(
         base: TimerSettings,
         operations: List<DurationOperation>,
@@ -31,6 +30,12 @@ internal object SettingsReducer {
         ?.enabled
         ?: base
 
+    fun applyDuration(base: TimerSettings, operation: DurationOperation): TimerSettings =
+        if (isValid(operation)) base.withDuration(operation.phase, operation.durationMs) else base
+
+    fun applyAutoStart(base: Boolean, operation: AutoStartOperation): Boolean =
+        if (isValid(operation)) operation.enabled else base
+
     fun isValid(operation: DurationOperation): Boolean =
         operation.phase in TimerPhase.all &&
             DurationLimits.isValid(operation.durationMs) &&
@@ -41,8 +46,8 @@ internal object SettingsReducer {
             )
 
     fun isValid(operation: AutoStartOperation): Boolean =
-        runCatching { UUID.fromString(operation.id) }.isSuccess &&
-            operation.deviceId.isNotBlank() &&
+        SyncWireBounds.isIdentifier(operation.id) &&
+            SyncWireBounds.isIdentifier(operation.deviceId) &&
             SyncWireBounds.isClockTuple(
                 operation.hlcWallMs,
                 operation.hlcCounter,

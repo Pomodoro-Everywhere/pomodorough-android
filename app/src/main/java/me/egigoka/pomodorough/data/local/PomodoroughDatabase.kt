@@ -37,6 +37,72 @@ interface TimerDao {
     @Query("SELECT * FROM pending_bootstrap_resolution WHERE id = 0")
     suspend fun pendingBootstrapResolution(): PendingBootstrapResolutionEntity?
 
+    @Transaction
+    suspend fun localWorkspaceSnapshot(): LocalWorkspaceSnapshot {
+        val local = checkNotNull(localState()) { "Local workspace is not initialized" }
+        return LocalWorkspaceSnapshot(
+            local = local,
+            commands = pendingCommands(),
+            taskOperations = pendingTaskOperations(),
+            durationOperations = pendingDurationOperations(),
+            autoStartOperations = pendingAutoStartOperations(),
+            bootstrapResolution = pendingBootstrapResolution(),
+        )
+    }
+
+    @Query("SELECT * FROM replication_settings WHERE id = 0")
+    suspend fun replicationSettings(): ReplicationSettingsEntity?
+
+    @Query("SELECT * FROM iroh_rooms WHERE roomId = :roomId")
+    suspend fun irohRoom(roomId: String): IrohRoomEntity?
+
+    @Query("SELECT * FROM iroh_rooms WHERE activated = 1 ORDER BY createdAtMs DESC LIMIT 1")
+    suspend fun preferredIrohRoom(): IrohRoomEntity?
+
+    @Query("SELECT * FROM iroh_peers WHERE roomId = :roomId ORDER BY endpointId")
+    suspend fun irohPeers(roomId: String): List<IrohPeerEntity>
+
+    @Query("SELECT COUNT(*) FROM iroh_peers WHERE roomId = :roomId")
+    suspend fun irohPeerCount(roomId: String): Int
+
+    @Query(
+        "SELECT * FROM iroh_operations WHERE roomId = :roomId " +
+            "ORDER BY domain COLLATE BINARY, operationId COLLATE BINARY",
+    )
+    suspend fun irohOperations(roomId: String): List<IrohOperationEntity>
+
+    @Query(
+        "SELECT * FROM iroh_operations WHERE roomId = :roomId AND domain = :domain " +
+            "AND operationId = :operationId",
+    )
+    suspend fun irohOperation(
+        roomId: String,
+        domain: String,
+        operationId: String,
+    ): IrohOperationEntity?
+
+    @Query(
+        "SELECT * FROM iroh_operations WHERE roomId = :roomId AND " +
+            "(:afterDomain IS NULL OR domain > :afterDomain COLLATE BINARY OR " +
+            "(domain = :afterDomain AND operationId > :afterId COLLATE BINARY)) " +
+            "ORDER BY domain COLLATE BINARY, operationId COLLATE BINARY LIMIT :limit",
+    )
+    suspend fun irohOperationPage(
+        roomId: String,
+        afterDomain: String?,
+        afterId: String?,
+        limit: Int,
+    ): List<IrohOperationEntity>
+
+    @Query(
+        "SELECT COUNT(*) FROM iroh_operations " +
+            "WHERE roomId = :roomId AND domain = 'genesis' AND operationId = 'genesis'",
+    )
+    suspend fun hasIrohGenesis(roomId: String): Int
+
+    @Query("SELECT * FROM iroh_conflicts WHERE roomId = :roomId")
+    suspend fun irohConflict(roomId: String): IrohConflictEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertState(state: LocalStateEntity)
 
@@ -48,6 +114,15 @@ interface TimerDao {
 
     @Insert
     suspend fun insertCommands(commands: List<PendingCommandEntity>)
+
+    @Insert
+    suspend fun insertTaskOperations(operations: List<PendingTaskOperationEntity>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertDurationOperations(operations: List<PendingDurationOperationEntity>)
+
+    @Insert
+    suspend fun insertAutoStartOperations(operations: List<PendingAutoStartOperationEntity>)
 
     @Update
     suspend fun updateCommands(commands: List<PendingCommandEntity>)
@@ -72,6 +147,37 @@ interface TimerDao {
 
     @Insert
     suspend fun insertAutoStartOperation(operation: PendingAutoStartOperationEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertReplicationSettings(settings: ReplicationSettingsEntity)
+
+    @Insert
+    suspend fun insertIrohRoom(room: IrohRoomEntity)
+
+    @Update
+    suspend fun updateIrohRoom(room: IrohRoomEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertIrohPeer(peer: IrohPeerEntity)
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertIrohOperations(operations: List<IrohOperationEntity>): List<Long>
+
+    @Insert
+    suspend fun insertNewIrohOperations(operations: List<IrohOperationEntity>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertIrohConflict(conflict: IrohConflictEntity)
+
+    @Query("DELETE FROM iroh_rooms WHERE roomId = :roomId")
+    suspend fun deleteIrohRoom(roomId: String)
+
+    @Query(
+        "DELETE FROM iroh_rooms WHERE NOT EXISTS (" +
+            "SELECT 1 FROM iroh_operations WHERE iroh_operations.roomId = iroh_rooms.roomId " +
+            "AND domain = 'genesis' AND operationId = 'genesis')",
+    )
+    suspend fun deleteIncompleteIrohRooms()
 
     @Delete
     suspend fun deleteCommands(commands: List<PendingCommandEntity>)
@@ -242,6 +348,135 @@ interface TimerDao {
         deleteBootstrapResolution()
         updateState(state)
     }
+
+    @Transaction
+    suspend fun createIrohRoom(
+        room: IrohRoomEntity,
+        genesis: IrohOperationEntity,
+        settings: ReplicationSettingsEntity,
+        snapshot: LocalWorkspaceSnapshot,
+    ) {
+        insertIrohRoom(room)
+        check(insertIrohOperations(listOf(genesis)).single() != -1L)
+        upsertReplicationSettings(settings)
+        replaceWorkspace(snapshot)
+    }
+
+    @Transaction
+    suspend fun prepareJoinedIrohRoom(
+        room: IrohRoomEntity,
+        peer: IrohPeerEntity,
+    ) {
+        insertIrohRoom(room)
+        upsertIrohPeer(peer)
+    }
+
+    @Transaction
+    suspend fun prepareExistingJoinedIrohRoom(
+        room: IrohRoomEntity,
+        peer: IrohPeerEntity,
+    ) {
+        updateIrohRoom(room)
+        upsertIrohPeerBounded(peer, 64)
+    }
+
+    @Transaction
+    suspend fun insertIrohRecordsAtomically(
+        room: IrohRoomEntity,
+        operations: List<IrohOperationEntity>,
+    ): List<Long> {
+        val inserted = insertIrohOperations(operations)
+        updateIrohRoom(room)
+        return inserted
+    }
+
+    @Transaction
+    suspend fun insertIrohRecordsAtomically(
+        operations: List<IrohOperationEntity>,
+    ) = insertNewIrohOperations(operations)
+
+    @Transaction
+    suspend fun insertIrohRecordsAndActivate(
+        room: IrohRoomEntity,
+        operations: List<IrohOperationEntity>,
+        snapshot: LocalWorkspaceSnapshot,
+    ): List<Long> {
+        val inserted = insertIrohOperations(operations)
+        updateIrohRoom(room)
+        replaceWorkspace(snapshot)
+        return inserted
+    }
+
+    @Transaction
+    suspend fun insertRemoteIrohRecordsAndActivate(
+        room: IrohRoomEntity,
+        operations: List<IrohOperationEntity>,
+        snapshot: LocalWorkspaceSnapshot,
+    ): List<Long> {
+        check(pendingCommands().isEmpty() && pendingTaskOperations().isEmpty() &&
+            pendingDurationOperations().isEmpty() && pendingAutoStartOperations().isEmpty()
+        ) { "Local Iroh operations must be captured before applying remote records" }
+        return insertIrohRecordsAndActivate(room, operations, snapshot)
+    }
+
+    @Transaction
+    suspend fun upsertIrohPeerBounded(peer: IrohPeerEntity, maximum: Int) {
+        val exists = irohPeers(peer.roomId).any { it.endpointId == peer.endpointId }
+        check(exists || irohPeerCount(peer.roomId) < maximum) {
+            "Iroh room address book contains $maximum peers"
+        }
+        upsertIrohPeer(peer)
+    }
+
+    @Transaction
+    suspend fun replaceWorkspace(snapshot: LocalWorkspaceSnapshot) {
+        insertState(snapshot.local)
+        deleteAllCommands()
+        if (snapshot.commands.isNotEmpty()) insertCommands(snapshot.commands)
+        deleteAllTaskOperations()
+        if (snapshot.taskOperations.isNotEmpty()) insertTaskOperations(snapshot.taskOperations)
+        deleteAllDurationOperations()
+        if (snapshot.durationOperations.isNotEmpty()) {
+            upsertDurationOperations(snapshot.durationOperations)
+        }
+        deleteAllAutoStartOperations()
+        if (snapshot.autoStartOperations.isNotEmpty()) {
+            insertAutoStartOperations(snapshot.autoStartOperations)
+        }
+        deleteBootstrapResolution()
+        snapshot.bootstrapResolution?.let { upsertBootstrapResolution(it) }
+    }
+
+    @Transaction
+    suspend fun activateIrohWorkspace(
+        room: IrohRoomEntity,
+        settings: ReplicationSettingsEntity,
+        snapshot: LocalWorkspaceSnapshot,
+    ) {
+        updateIrohRoom(room)
+        upsertReplicationSettings(settings)
+        replaceWorkspace(snapshot)
+    }
+
+    @Transaction
+    suspend fun restoreFromIrohWorkspace(
+        room: IrohRoomEntity,
+        settings: ReplicationSettingsEntity,
+        snapshot: LocalWorkspaceSnapshot,
+    ) {
+        activateIrohWorkspace(room, settings, snapshot)
+    }
+
+    @Transaction
+    suspend fun captureIrohOperations(
+        room: IrohRoomEntity,
+        operations: List<IrohOperationEntity>,
+        snapshot: LocalWorkspaceSnapshot,
+    ) {
+        insertNewIrohOperations(operations)
+        updateIrohRoom(room)
+        replaceWorkspace(snapshot)
+    }
 }
 
 @Database(
@@ -252,8 +487,13 @@ interface TimerDao {
         PendingDurationOperationEntity::class,
         PendingBootstrapResolutionEntity::class,
         PendingAutoStartOperationEntity::class,
+        ReplicationSettingsEntity::class,
+        IrohRoomEntity::class,
+        IrohPeerEntity::class,
+        IrohOperationEntity::class,
+        IrohConflictEntity::class,
     ],
-    version = 10,
+    version = 11,
     exportSchema = true,
 )
 abstract class PomodoroughDatabase : RoomDatabase() {
@@ -275,6 +515,7 @@ abstract class PomodoroughDatabase : RoomDatabase() {
                 Migration7To8,
                 Migration8To9,
                 Migration9To10,
+                Migration10To11,
             ).build()
 
         val Migration1To2 = object : Migration(1, 2) {
@@ -475,6 +716,81 @@ abstract class PomodoroughDatabase : RoomDatabase() {
                     """CREATE UNIQUE INDEX IF NOT EXISTS
                         index_pending_commands_deviceSequence
                         ON pending_commands(deviceSequence)""".trimIndent(),
+                )
+            }
+        }
+
+
+        val Migration10To11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """CREATE TABLE IF NOT EXISTS replication_settings (
+                        id INTEGER NOT NULL PRIMARY KEY,
+                        mode TEXT NOT NULL,
+                        activeRoomId TEXT
+                    )""".trimIndent(),
+                )
+                db.execSQL(
+                    "INSERT INTO replication_settings (id, mode, activeRoomId) " +
+                        "VALUES (0, 'CENTRALIZED', NULL)",
+                )
+                db.execSQL(
+                    """CREATE TABLE IF NOT EXISTS iroh_rooms (
+                        roomId TEXT NOT NULL PRIMARY KEY,
+                        roomName TEXT,
+                        encryptedRoomSecret BLOB NOT NULL,
+                        returnStateJson TEXT NOT NULL,
+                        roomStateJson TEXT NOT NULL,
+                        createdAtMs INTEGER NOT NULL,
+                        activated INTEGER NOT NULL
+                    )""".trimIndent(),
+                )
+                db.execSQL(
+                    """CREATE TABLE IF NOT EXISTS iroh_peers (
+                        roomId TEXT NOT NULL,
+                        endpointId TEXT NOT NULL,
+                        endpointTicket TEXT NOT NULL,
+                        deviceId TEXT,
+                        displayName TEXT,
+                        lastSeenAtMs INTEGER,
+                        PRIMARY KEY(roomId, endpointId),
+                        FOREIGN KEY(roomId) REFERENCES iroh_rooms(roomId)
+                            ON UPDATE NO ACTION ON DELETE CASCADE
+                    )""".trimIndent(),
+                )
+                db.execSQL("CREATE INDEX index_iroh_peers_roomId ON iroh_peers(roomId)")
+                db.execSQL(
+                    """CREATE TABLE IF NOT EXISTS iroh_operations (
+                        roomId TEXT NOT NULL,
+                        domain TEXT NOT NULL,
+                        operationId TEXT NOT NULL,
+                        originDeviceId TEXT NOT NULL,
+                        operationJson TEXT NOT NULL,
+                        digest TEXT NOT NULL,
+                        hlcWallMs INTEGER NOT NULL,
+                        hlcCounter INTEGER NOT NULL,
+                        deviceSequence INTEGER,
+                        PRIMARY KEY(roomId, domain, operationId),
+                        FOREIGN KEY(roomId) REFERENCES iroh_rooms(roomId)
+                            ON UPDATE NO ACTION ON DELETE CASCADE
+                    )""".trimIndent(),
+                )
+                db.execSQL("CREATE INDEX index_iroh_operations_roomId ON iroh_operations(roomId)")
+                db.execSQL(
+                    """CREATE UNIQUE INDEX index_iroh_operations_roomId_originDeviceId_deviceSequence
+                        ON iroh_operations(roomId, originDeviceId, deviceSequence)""".trimIndent(),
+                )
+                db.execSQL(
+                    """CREATE TABLE IF NOT EXISTS iroh_conflicts (
+                        roomId TEXT NOT NULL PRIMARY KEY,
+                        domain TEXT NOT NULL,
+                        operationId TEXT NOT NULL,
+                        localDigest TEXT NOT NULL,
+                        receivedDigest TEXT NOT NULL,
+                        detectedAtMs INTEGER NOT NULL,
+                        FOREIGN KEY(roomId) REFERENCES iroh_rooms(roomId)
+                            ON UPDATE NO ACTION ON DELETE CASCADE
+                    )""".trimIndent(),
                 )
             }
         }

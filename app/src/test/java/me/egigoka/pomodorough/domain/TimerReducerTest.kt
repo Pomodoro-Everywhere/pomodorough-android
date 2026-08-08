@@ -301,6 +301,23 @@ class TimerReducerTest {
     }
 
     @Test
+    fun projectAtCompletesExpiredTimerWithoutCreatingSharedCommand() {
+        val running = timer(
+            status = TimerStatus.Running,
+            durationMs = 60_000,
+            elapsedMs = 30_000,
+            anchorAt = "2026-01-01T00:00:00Z",
+        )
+
+        val projection = TimerReducer.projectAt(running, emptyList(), 1_767_225_631_000)
+
+        assertEquals(TimerStatus.Completed, projection.timer?.status)
+        assertNull(projection.timer?.lastIntent)
+        assertNull(projection.history.single().commandId)
+        assertEquals("2026-01-01T00:00:30Z", projection.history.single().endedAt)
+    }
+
+    @Test
     fun lateFinishClaimsDeadlineCompletionWithoutMovingCompletionTime() {
         val running = timer(
             status = TimerStatus.Running,
@@ -393,7 +410,11 @@ class TimerReducerTest {
         val clear = command(sequence = 1, type = CommandType.Clear)
 
         assertNull(TimerReducer.replay(timer(TimerStatus.Completed), emptyList(), listOf(clear)).timer)
-        assertNull(TimerReducer.replay(timer(TimerStatus.Superseded), emptyList(), listOf(clear)).timer)
+        assertNull(TimerReducer.replay(timer(TimerStatus.Cancelled), emptyList(), listOf(clear)).timer)
+        assertEquals(
+            TimerStatus.Superseded,
+            TimerReducer.replay(timer(TimerStatus.Superseded), emptyList(), listOf(clear)).timer?.status,
+        )
         assertEquals(
             TimerStatus.Running,
             TimerReducer.replay(timer(TimerStatus.Running), emptyList(), listOf(clear)).timer?.status,

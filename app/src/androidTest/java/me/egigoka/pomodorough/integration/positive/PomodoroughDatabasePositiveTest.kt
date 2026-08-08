@@ -101,6 +101,7 @@ class PomodoroughDatabasePositiveTest {
         PomodoroughDatabase.Migration7To8,
         PomodoroughDatabase.Migration8To9,
         PomodoroughDatabase.Migration9To10,
+        PomodoroughDatabase.Migration10To11,
     ).build()
 
     private fun command(sequence: Long) = TimerCommand(

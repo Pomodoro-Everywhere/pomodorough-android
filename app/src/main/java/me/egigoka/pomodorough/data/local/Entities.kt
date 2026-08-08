@@ -1,6 +1,7 @@
 package me.egigoka.pomodorough.data.local
 
 import androidx.room.Entity
+import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
 import me.egigoka.pomodorough.data.AutoStartOperation
@@ -200,3 +201,94 @@ data class PendingAutoStartOperationEntity(
         )
     }
 }
+
+@Entity(tableName = "replication_settings")
+data class ReplicationSettingsEntity(
+    @PrimaryKey val id: Int = 0,
+    val mode: String,
+    val activeRoomId: String? = null,
+)
+
+@Entity(tableName = "iroh_rooms")
+data class IrohRoomEntity(
+    @PrimaryKey val roomId: String,
+    val roomName: String?,
+    val encryptedRoomSecret: ByteArray,
+    val returnStateJson: String,
+    val roomStateJson: String,
+    val createdAtMs: Long,
+    val activated: Boolean = false,
+)
+
+@Entity(
+    tableName = "iroh_peers",
+    primaryKeys = ["roomId", "endpointId"],
+    indices = [Index(value = ["roomId"])],
+    foreignKeys = [
+        ForeignKey(
+            entity = IrohRoomEntity::class,
+            parentColumns = ["roomId"],
+            childColumns = ["roomId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+)
+data class IrohPeerEntity(
+    val roomId: String,
+    val endpointId: String,
+    val endpointTicket: String,
+    val deviceId: String?,
+    val displayName: String?,
+    val lastSeenAtMs: Long?,
+)
+
+@Entity(
+    tableName = "iroh_operations",
+    primaryKeys = ["roomId", "domain", "operationId"],
+    indices = [
+        Index(value = ["roomId"]),
+        Index(
+            value = ["roomId", "originDeviceId", "deviceSequence"],
+            unique = true,
+        ),
+    ],
+    foreignKeys = [
+        ForeignKey(
+            entity = IrohRoomEntity::class,
+            parentColumns = ["roomId"],
+            childColumns = ["roomId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+)
+data class IrohOperationEntity(
+    val roomId: String,
+    val domain: String,
+    val operationId: String,
+    val originDeviceId: String,
+    val operationJson: String,
+    val digest: String,
+    val hlcWallMs: Long,
+    val hlcCounter: Long,
+    val deviceSequence: Long?,
+)
+
+@Entity(
+    tableName = "iroh_conflicts",
+    foreignKeys = [
+        ForeignKey(
+            entity = IrohRoomEntity::class,
+            parentColumns = ["roomId"],
+            childColumns = ["roomId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+)
+data class IrohConflictEntity(
+    @PrimaryKey val roomId: String,
+    val domain: String,
+    val operationId: String,
+    val localDigest: String,
+    val receivedDigest: String,
+    val detectedAtMs: Long,
+)

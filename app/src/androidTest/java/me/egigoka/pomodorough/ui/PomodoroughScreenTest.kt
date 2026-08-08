@@ -32,6 +32,8 @@ import me.egigoka.pomodorough.data.SyncStatus
 import me.egigoka.pomodorough.data.TaskDailySummary
 import me.egigoka.pomodorough.data.TimerPhase
 import me.egigoka.pomodorough.data.TimerStatus
+import me.egigoka.pomodorough.data.iroh.IrohNetworkState
+import me.egigoka.pomodorough.data.iroh.ReplicationMode
 import me.egigoka.pomodorough.integration.testHistory
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -262,10 +264,63 @@ class PomodoroughScreenTest {
     fun navigationDestinationsHaveOneSemanticTargetEach() {
         setScreen(AppState(ready = true, authStatus = AuthStatus.SignedIn))
 
-        listOf("Timer", "Tasks", "Pattern", "Arrivals").forEach { label ->
+        listOf("Timer", "Tasks", "Pattern", "Arrivals", "Network").forEach { label ->
             composeRule.onAllNodes(hasText(label) or hasContentDescription(label))
                 .assertCountEquals(1)
         }
+    }
+
+    @Test
+    fun networkNavigationShowsModesPrivacyAndJoinAction() {
+        var selectedMode: ReplicationMode? = null
+        var joined: String? = null
+        composeRule.setContent {
+            PomodoroughTheme {
+                PomodoroughScreen(
+                    state = AppState(
+                        ready = true,
+                        authStatus = AuthStatus.SignedOut,
+                        network = IrohNetworkState(mode = ReplicationMode.OFFLINE),
+                    ),
+                    onSignIn = {},
+                    onLogout = {},
+                    onRefresh = {},
+                    onToggleTimer = {},
+                    onFinishTimer = {},
+                    onCancelTimer = {},
+                    onClearTimer = {},
+                    onSelectPhase = {},
+                    onChangeDuration = { _, _ -> },
+                    onSetAutoStart = {},
+                    onSelectTask = {},
+                    onAddTask = {},
+                    onDeleteTask = {},
+                    onResolveHistory = {},
+                    onRecoverHistoryResolution = {},
+                    onConfirmAccountSwitch = {},
+                    onCancelAccountSwitch = {},
+                    onDismissConflict = {},
+                    onDismissNotice = {},
+                    onSetReplicationMode = { selectedMode = it },
+                    onCreateIrohRoom = {},
+                    onJoinIrohRoom = { joined = it },
+                    onLeaveIrohRoom = {},
+                    onRefreshIrohInvite = {},
+                    onSyncIrohNow = {},
+                    onCopyIrohInvite = {},
+                    onShareIrohInvite = {},
+                )
+            }
+        }
+
+        composeRule.onNode(hasText("Network") or hasContentDescription("Network")).performClick()
+        composeRule.onNodeWithText("Iroh room").performClick()
+        assertEquals(ReplicationMode.IROH, selectedMode)
+        composeRule.onNodeWithText("Room invites grant full read and write access.", substring = true)
+            .assertExists()
+        composeRule.onNodeWithText("Room invite").performClick()
+        composeRule.onNodeWithText("JOIN ROOM").assertIsNotEnabled()
+        assertNull(joined)
     }
 
     @Test
@@ -419,6 +474,14 @@ class PomodoroughScreenTest {
                     onCancelAccountSwitch = onCancelAccountSwitch,
                     onDismissConflict = {},
                     onDismissNotice = onDismissNotice,
+                    onSetReplicationMode = {},
+                    onCreateIrohRoom = {},
+                    onJoinIrohRoom = {},
+                    onLeaveIrohRoom = {},
+                    onRefreshIrohInvite = {},
+                    onSyncIrohNow = {},
+                    onCopyIrohInvite = {},
+                    onShareIrohInvite = {},
                 )
             }
         }

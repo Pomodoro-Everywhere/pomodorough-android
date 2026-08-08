@@ -970,6 +970,82 @@ class PomodoroughDatabaseTest {
         migrated.close()
     }
 
+    @Test
+    fun migrationTenToElevenAddsSeparateCentralizedReplicationStateAndDurableRoomLog() {
+        context.deleteDatabase(MigrationDatabaseName)
+        migrationHelper.createDatabase(MigrationDatabaseName, 10).close()
+
+        val migrated = migrationHelper.runMigrationsAndValidate(
+            MigrationDatabaseName,
+            11,
+            true,
+            PomodoroughDatabase.Migration10To11,
+        )
+
+        migrated.query("SELECT mode, activeRoomId FROM replication_settings WHERE id = 0").use {
+            assertTrue(it.moveToFirst())
+            assertEquals("CENTRALIZED", it.getString(0))
+            assertNull(it.getString(1))
+        }
+        migrated.query(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN " +
+                "('iroh_rooms', 'iroh_peers', 'iroh_operations', 'iroh_conflicts')",
+        ).use {
+            var count = 0
+            while (it.moveToNext()) count += 1
+            assertEquals(4, count)
+        }
+        migrated.close()
+    }
+
+    @Test
+    fun irohLogInsertIsIdempotentAndModeSwitchWorkspaceSwapIsNonDestructive() = runBlocking {
+        val central = state().copy(revision = 8, historyJson = "[{\"id\":\"central\"}]")
+        dao.insertState(central)
+        val room = IrohRoomEntity(
+            roomId = "room-id-1",
+            roomName = "Design desk",
+            encryptedRoomSecret = byteArrayOf(1, 2, 3),
+            returnStateJson = "return",
+            roomStateJson = "room",
+            createdAtMs = 1,
+        )
+        dao.insertIrohRoom(room)
+        val operation = IrohOperationEntity(
+            roomId = room.roomId,
+            domain = "genesis",
+            operationId = "genesis",
+            originDeviceId = "device-1",
+            operationJson = "{}",
+            digest = "digest",
+            hlcWallMs = 0,
+            hlcCounter = 0,
+            deviceSequence = null,
+        )
+
+        assertTrue(dao.insertIrohOperations(listOf(operation)).single() != -1L)
+        assertEquals(-1L, dao.insertIrohOperations(listOf(operation)).single())
+
+        val roomWorkspace = LocalWorkspaceSnapshot(
+            local = central.copy(revision = 0, historyJson = "[{\"id\":\"room\"}]"),
+        )
+        dao.activateIrohWorkspace(
+            room,
+            ReplicationSettingsEntity(mode = "IROH", activeRoomId = room.roomId),
+            roomWorkspace,
+        )
+        assertEquals(0L, dao.localState()?.revision)
+        assertEquals(1, dao.irohOperations(room.roomId).size)
+
+        dao.activateIrohWorkspace(
+            room,
+            ReplicationSettingsEntity(mode = "CENTRALIZED"),
+            LocalWorkspaceSnapshot(central),
+        )
+        assertEquals(central, dao.localState())
+        assertEquals(1, dao.irohOperations(room.roomId).size)
+    }
+
     private fun state() = LocalStateEntity(
         deviceId = "device-1",
         settingsJson = "{}",

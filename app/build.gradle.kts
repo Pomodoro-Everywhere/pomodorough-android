@@ -120,6 +120,7 @@ dependencies {
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.1")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.0")
+    implementation("computer.iroh:iroh-android:1.1.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.squareup.okhttp3:okhttp-sse:4.12.0")
 

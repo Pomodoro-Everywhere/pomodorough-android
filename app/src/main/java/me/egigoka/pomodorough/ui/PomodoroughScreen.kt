@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
@@ -41,6 +42,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.Hub
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.AlertDialog
@@ -124,6 +126,8 @@ import me.egigoka.pomodorough.data.SyncStatus
 import me.egigoka.pomodorough.data.TimerPhase
 import me.egigoka.pomodorough.data.TimerSettings
 import me.egigoka.pomodorough.data.TimerStatus
+import me.egigoka.pomodorough.data.iroh.IrohConnectionStatus
+import me.egigoka.pomodorough.data.iroh.ReplicationMode
 import me.egigoka.pomodorough.domain.TimerReducer
 
 @Composable
@@ -148,6 +152,14 @@ fun PomodoroughScreen(
     onCancelAccountSwitch: () -> Unit,
     onDismissConflict: () -> Unit,
     onDismissNotice: () -> Unit,
+    onSetReplicationMode: (ReplicationMode) -> Unit,
+    onCreateIrohRoom: (String) -> Unit,
+    onJoinIrohRoom: (String) -> Unit,
+    onLeaveIrohRoom: () -> Unit,
+    onRefreshIrohInvite: () -> Unit,
+    onSyncIrohNow: () -> Unit,
+    onCopyIrohInvite: (String) -> Unit,
+    onShareIrohInvite: (String) -> Unit,
 ) {
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         if (!state.ready) {
@@ -174,6 +186,14 @@ fun PomodoroughScreen(
                 onCancelAccountSwitch = onCancelAccountSwitch,
                 onDismissConflict = onDismissConflict,
                 onDismissNotice = onDismissNotice,
+                onSetReplicationMode = onSetReplicationMode,
+                onCreateIrohRoom = onCreateIrohRoom,
+                onJoinIrohRoom = onJoinIrohRoom,
+                onLeaveIrohRoom = onLeaveIrohRoom,
+                onRefreshIrohInvite = onRefreshIrohInvite,
+                onSyncIrohNow = onSyncIrohNow,
+                onCopyIrohInvite = onCopyIrohInvite,
+                onShareIrohInvite = onShareIrohInvite,
             )
         }
     }
@@ -316,6 +336,14 @@ private fun TimerScreen(
     onCancelAccountSwitch: () -> Unit,
     onDismissConflict: () -> Unit,
     onDismissNotice: () -> Unit,
+    onSetReplicationMode: (ReplicationMode) -> Unit,
+    onCreateIrohRoom: (String) -> Unit,
+    onJoinIrohRoom: (String) -> Unit,
+    onLeaveIrohRoom: () -> Unit,
+    onRefreshIrohInvite: () -> Unit,
+    onSyncIrohNow: () -> Unit,
+    onCopyIrohInvite: (String) -> Unit,
+    onShareIrohInvite: (String) -> Unit,
 ) {
     var showLogoutDialog by remember { mutableStateOf(false) }
     var confirmationStrategy by remember(
@@ -327,6 +355,7 @@ private fun TimerScreen(
     val tasksListState = rememberLazyListState()
     val patternListState = rememberLazyListState()
     val arrivalsListState = rememberLazyListState()
+    val networkListState = rememberLazyListState()
     val mutationsEnabled = state.authStatus != AuthStatus.Loading &&
         state.authStatus != AuthStatus.SigningIn &&
         state.historyResolution == null &&
@@ -408,6 +437,7 @@ private fun TimerScreen(
                         MainTab.Tasks -> tasksListState
                         MainTab.Pattern -> patternListState
                         MainTab.Arrivals -> arrivalsListState
+                        MainTab.Network -> networkListState
                     },
                     modifier = Modifier
                         .fillMaxSize()
@@ -530,6 +560,20 @@ private fun TimerScreen(
                         )
                     }
                 }
+            }
+            MainTab.Network -> item {
+                NetworkSection(
+                    state = state,
+                    onSetMode = onSetReplicationMode,
+                    onCreateRoom = onCreateIrohRoom,
+                    onJoinRoom = onJoinIrohRoom,
+                    onLeaveRoom = onLeaveIrohRoom,
+                    onRefreshInvite = onRefreshIrohInvite,
+                    onSyncNow = onSyncIrohNow,
+                    onCopyInvite = onCopyIrohInvite,
+                    onShareInvite = onShareIrohInvite,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 18.dp),
+                )
             }
         }
             }
@@ -915,6 +959,7 @@ private enum class MainTab(val label: String) {
     Tasks("Tasks"),
     Pattern("Pattern"),
     Arrivals("Arrivals"),
+    Network("Network"),
 }
 
 @Composable
@@ -935,6 +980,7 @@ private fun MainNavigationBar(
                             MainTab.Tasks -> Icons.Outlined.Checklist
                             MainTab.Pattern -> Icons.Outlined.Tune
                             MainTab.Arrivals -> Icons.Outlined.History
+                            MainTab.Network -> Icons.Outlined.Hub
                         },
                         contentDescription = tab.label,
                     )
@@ -947,6 +993,249 @@ private fun MainNavigationBar(
             )
         }
     }
+}
+
+@Composable
+private fun NetworkSection(
+    state: AppState,
+    onSetMode: (ReplicationMode) -> Unit,
+    onCreateRoom: (String) -> Unit,
+    onJoinRoom: (String) -> Unit,
+    onLeaveRoom: () -> Unit,
+    onRefreshInvite: () -> Unit,
+    onSyncNow: () -> Unit,
+    onCopyInvite: (String) -> Unit,
+    onShareInvite: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var roomName by remember { mutableStateOf("") }
+    var joinCode by remember { mutableStateOf("") }
+    var confirmLeave by remember { mutableStateOf(false) }
+    val network = state.network
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        SectionLabel("NETWORK ROUTE")
+        Text("Choose where time travels", style = MaterialTheme.typography.headlineMedium)
+        Text(
+            "Your clock always works on this device. Routes change replication only; saved local and room workspaces stay intact.",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodyLarge,
+        )
+        RouteSwitch(network.mode, onSetMode)
+
+        Surface(color = Ink, contentColor = Cloud, shape = MaterialTheme.shapes.large) {
+            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(networkStatusTitle(network.status), style = MaterialTheme.typography.titleLarge)
+                Text(
+                    network.message ?: networkStatusDescription(network.status),
+                    color = Lavender,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                )
+                network.roomId?.let { roomId ->
+                    Text(
+                        network.roomName ?: "Unnamed room",
+                        color = Butter,
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                    Text(
+                        "ROOM ${roomId.take(8)}…${roomId.takeLast(6)}",
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                    Text(
+                        "${network.peerCount} saved peer${if (network.peerCount == 1) "" else "s"} · " +
+                            "${network.operationCount} durable record${if (network.operationCount == 1) "" else "s"}",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                if (network.mode == ReplicationMode.IROH && network.roomId != null) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilledTonalButton(onClick = onSyncNow, modifier = Modifier.height(48.dp)) {
+                            Text("Sync now")
+                        }
+                        TextButton(onClick = { confirmLeave = true }, modifier = Modifier.height(48.dp)) {
+                            Text("Leave room", color = Danger)
+                        }
+                    }
+                }
+            }
+        }
+
+        if (network.roomId == null) {
+            Surface(color = Butter, contentColor = Ink, shape = MaterialTheme.shapes.large) {
+                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Open a peer route", style = MaterialTheme.typography.titleLarge)
+                    OutlinedTextField(
+                        value = roomName,
+                        onValueChange = { roomName = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Room name, optional") },
+                        supportingText = { Text("1–64 characters when set") },
+                        singleLine = true,
+                    )
+                    Button(
+                        onClick = { onCreateRoom(roomName) },
+                        enabled = roomName.codePointCount(0, roomName.length) <= 64,
+                        modifier = Modifier.fillMaxWidth().height(54.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Violet),
+                    ) { Text("CREATE IROH ROOM") }
+                }
+            }
+
+            Surface(color = Lavender, contentColor = Ink, shape = MaterialTheme.shapes.large) {
+                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Join an existing route", style = MaterialTheme.typography.titleLarge)
+                    OutlinedTextField(
+                        value = joinCode,
+                        onValueChange = { joinCode = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Room invite") },
+                        placeholder = { Text("pomodorough1.…") },
+                        minLines = 3,
+                        maxLines = 6,
+                    )
+                    Button(
+                        onClick = { onJoinRoom(joinCode) },
+                        enabled = joinCode.isNotBlank(),
+                        modifier = Modifier.fillMaxWidth().height(54.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Ink),
+                    ) { Text("JOIN ROOM") }
+                }
+            }
+        }
+
+        network.invite?.let { invite ->
+            Surface(color = Butter, contentColor = Ink, shape = MaterialTheme.shapes.large) {
+                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Room pass", style = MaterialTheme.typography.titleLarge)
+                    Text(
+                        invite,
+                        maxLines = 4,
+                        overflow = TextOverflow.Ellipsis,
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.semantics {
+                            contentDescription = "Iroh room invite. Treat as full read and write access."
+                        },
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = { onCopyInvite(invite) }, modifier = Modifier.height(48.dp)) {
+                            Text("Copy")
+                        }
+                        OutlinedButton(onClick = { onShareInvite(invite) }, modifier = Modifier.height(48.dp)) {
+                            Text("Share")
+                        }
+                        TextButton(onClick = onRefreshInvite, modifier = Modifier.height(48.dp)) {
+                            Text("Refresh")
+                        }
+                    }
+                }
+            }
+        }
+
+        Surface(color = Cloud, contentColor = Ink, shape = MaterialTheme.shapes.large) {
+            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SectionLabel("PRIVACY & ACCESS")
+                Text("Room invites grant full read and write access. Version 1 has no member revocation.")
+                Text(
+                    "Direct connections reveal peer IP addresses. Relay traffic is end-to-end encrypted, but relay operators can observe endpoint IDs, IP addresses, timing, and transfer volume.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    "Peer networking runs only while Pomodorough is in the foreground. No online peer is normal; changes remain durable until peers return.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+
+    if (confirmLeave) {
+        AlertDialog(
+            onDismissRequest = { confirmLeave = false },
+            title = { Text("Leave Iroh room?") },
+            text = {
+                Text("Your previous on-device or cloud workspace will be restored. Room operations remain saved for a later return.")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmLeave = false
+                    onLeaveRoom()
+                }) { Text("Leave and restore", color = DangerText, fontWeight = FontWeight.Bold) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmLeave = false }) { Text("Stay in room") }
+            },
+        )
+    }
+}
+
+@Composable
+private fun RouteSwitch(active: ReplicationMode, onSetMode: (ReplicationMode) -> Unit) {
+    val choices = listOf(
+        ReplicationMode.OFFLINE to ("On device" to "No remote endpoint"),
+        ReplicationMode.IROH to ("Iroh room" to "Equal peers"),
+        ReplicationMode.CENTRALIZED to ("Cloud" to "Signed-in server"),
+    )
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        choices.forEach { (mode, copy) ->
+            val selected = active == mode
+            Surface(
+                onClick = { onSetMode(mode) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 62.dp)
+                    .semantics {
+                        stateDescription = if (selected) "Selected" else "Not selected"
+                    },
+                color = if (selected) Violet else Cloud,
+                contentColor = if (selected) Cloud else Ink,
+                shape = RoundedCornerShape(
+                    topStart = if (mode == ReplicationMode.OFFLINE) 28.dp else 14.dp,
+                    topEnd = 14.dp,
+                    bottomStart = 14.dp,
+                    bottomEnd = if (mode == ReplicationMode.CENTRALIZED) 28.dp else 14.dp,
+                ),
+                border = BorderStroke(1.dp, Violet),
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        Modifier
+                            .size(14.dp)
+                            .background(if (selected) Butter else Lavender, CircleShape),
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(copy.first, style = MaterialTheme.typography.labelLarge)
+                        Text(copy.second, style = MaterialTheme.typography.bodyMedium)
+                    }
+                    Text(if (selected) "ACTIVE" else "SELECT", style = MaterialTheme.typography.labelMedium)
+                }
+            }
+        }
+    }
+}
+
+private fun networkStatusTitle(status: IrohConnectionStatus): String = when (status) {
+    IrohConnectionStatus.STOPPED -> "Route stopped"
+    IrohConnectionStatus.STARTING -> "Opening route"
+    IrohConnectionStatus.LISTENING -> "Ready for peers"
+    IrohConnectionStatus.SYNCING -> "Exchanging changes"
+    IrohConnectionStatus.WAITING_FOR_PEERS -> "Waiting for peers"
+    IrohConnectionStatus.CONFLICT -> "Repair required"
+    IrohConnectionStatus.UNAVAILABLE -> "Route unavailable"
+}
+
+private fun networkStatusDescription(status: IrohConnectionStatus): String = when (status) {
+    IrohConnectionStatus.STOPPED -> "No peer endpoint is running."
+    IrohConnectionStatus.STARTING -> "Binding encrypted Iroh transport."
+    IrohConnectionStatus.LISTENING -> "Foreground endpoint is listening on Pomodorough Sync v1."
+    IrohConnectionStatus.SYNCING -> "Pulling bounded inventory and immutable operations."
+    IrohConnectionStatus.WAITING_FOR_PEERS -> "No peer is online. Local changes remain durable."
+    IrohConnectionStatus.CONFLICT -> "Two payloads claim one immutable operation ID. Replication is stopped."
+    IrohConnectionStatus.UNAVAILABLE -> "Use on-device or cloud mode while this route is unavailable."
 }
 
 @Composable
@@ -1974,6 +2263,16 @@ private fun phasePalette(phase: String): PhasePalette = when (phase) {
 }
 
 private fun syncLabel(state: AppState): String {
+    if (state.network.mode == ReplicationMode.OFFLINE) return "On device"
+    if (state.network.mode == ReplicationMode.IROH) return when (state.network.status) {
+        IrohConnectionStatus.STARTING -> "Opening peer route"
+        IrohConnectionStatus.LISTENING -> "Ready for peers"
+        IrohConnectionStatus.SYNCING -> "Syncing with peers"
+        IrohConnectionStatus.WAITING_FOR_PEERS -> "Waiting for peers"
+        IrohConnectionStatus.CONFLICT -> "Peer conflict"
+        IrohConnectionStatus.UNAVAILABLE -> "Peer route unavailable"
+        IrohConnectionStatus.STOPPED -> "Peer route stopped"
+    }
     if (state.historyResolution != null) return "History choice needed"
     if (state.authStatus != AuthStatus.SignedIn) {
         return when (state.authStatus) {

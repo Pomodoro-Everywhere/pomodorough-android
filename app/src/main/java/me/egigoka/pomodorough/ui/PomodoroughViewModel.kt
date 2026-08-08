@@ -13,6 +13,7 @@ import kotlinx.coroutines.launch
 import me.egigoka.pomodorough.data.BootstrapStrategy
 import me.egigoka.pomodorough.data.TimerRepositoryContract
 import me.egigoka.pomodorough.data.TimerStatus
+import me.egigoka.pomodorough.data.iroh.ReplicationMode
 import me.egigoka.pomodorough.data.auth.GoogleCredentialProvider
 
 class PomodoroughViewModel(
@@ -48,6 +49,12 @@ class PomodoroughViewModel(
     fun cancelAccountSwitch() = launch { repository.cancelAccountSwitch() }
     fun dismissConflict() = repository.dismissConflict()
     fun dismissNotice() = repository.dismissNotice()
+    fun setReplicationMode(mode: ReplicationMode) = launch { repository.setReplicationMode(mode) }
+    fun createIrohRoom(name: String) = launch { repository.createIrohRoom(name) }
+    fun joinIrohRoom(invite: String) = launch { repository.joinIrohRoom(invite) }
+    fun leaveIrohRoom() = launch { repository.leaveIrohRoom() }
+    fun refreshIrohInvite() = launch { repository.refreshIrohInvite() }
+    fun syncIrohNow() = launch { repository.syncIrohNow() }
     fun onForeground() {
         repository.onForeground()
         timerTickJob?.cancel()

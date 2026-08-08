@@ -2,6 +2,7 @@ package me.egigoka.pomodorough.domain
 
 import java.time.Instant
 import java.time.ZoneId
+import me.egigoka.pomodorough.data.FocusTask
 import me.egigoka.pomodorough.data.HistoryItem
 import me.egigoka.pomodorough.data.TaskOperation
 import me.egigoka.pomodorough.data.TaskOperationType
@@ -112,6 +113,17 @@ class TaskReducerTest {
         assertEquals(
             listOf(task),
             TaskReducer.replay(listOf(task), listOf(upsert, upsert)),
+        )
+    }
+
+    @Test
+    fun finalTaskOrderUsesUnsignedUtf8Bytes() {
+        val supplementary = FocusTask("task-supplementary", "\uD800\uDC00")
+        val privateUse = FocusTask("task-private-use", "\uE000")
+
+        assertEquals(
+            listOf(privateUse, supplementary),
+            TaskReducer.replay(listOf(supplementary, privateUse), emptyList()),
         )
     }
 
