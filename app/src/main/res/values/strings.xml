@@ -3,4 +3,6 @@
     <string name="app_name">Pomodorough</string>
     <string name="timer_complete_channel">Timer arrivals</string>
     <string name="timer_complete_title">Service complete</string>
+    <string name="timer_complete_body">Timer arrived. Open Pomodorough for the next service.</string>
+    <string name="stop_sound">Stop sound</string>
 </resources>

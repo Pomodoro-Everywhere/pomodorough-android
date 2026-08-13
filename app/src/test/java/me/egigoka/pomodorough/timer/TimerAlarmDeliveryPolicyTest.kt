@@ -10,6 +10,8 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.test.runTest
+import me.egigoka.pomodorough.data.CanonicalTimer
+import me.egigoka.pomodorough.data.TimerStatus
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
@@ -95,6 +97,30 @@ class TimerAlarmDeliveryPolicyTest {
     }
 
     @Test
+    fun autoStartedTimerSuppressesCompletionNotification() = runTest {
+        var notificationCalls = 0
+        val policy = TimerAlarmDeliveryPolicy(
+            completion = ExpiredTimerCompleting { true },
+            notification = TimerCompletionNotifying {
+                notificationCalls += 1
+                true
+            },
+            shouldNotify = { shouldPostCompletionAlert(timer(TimerStatus.Running, "next-break")) },
+        )
+
+        assertEquals(TimerAlarmDeliveryResult.CompletedWithActiveReplacement, policy.deliver())
+        assertEquals(0, notificationCalls)
+    }
+
+    @Test
+    fun differentActiveTimerStopsExistingCompletionAlert() {
+        assertTrue(shouldStopCompletionAlert("completed-focus", timer(TimerStatus.Running, "next-break")))
+        assertTrue(shouldStopCompletionAlert("completed-focus", timer(TimerStatus.Paused, "next-break")))
+        assertFalse(shouldStopCompletionAlert("same-timer", timer(TimerStatus.Running, "same-timer")))
+        assertFalse(shouldStopCompletionAlert("completed-focus", timer(TimerStatus.Completed, "next-break")))
+    }
+
+    @Test
     fun concurrentDuplicateDeliveriesCompleteAndNotifyOnce() = runTest {
         val completionMutex = Mutex()
         val completed = AtomicBoolean(false)
@@ -134,4 +160,20 @@ class TimerAlarmDeliveryPolicyTest {
         assertFalse(SystemTimerCompletionNotifier.canPostNotification(33, permissionGranted = false))
         assertTrue(SystemTimerCompletionNotifier.canPostNotification(33, permissionGranted = true))
     }
+
+    @Test
+    fun stopSoundBroadcastIsRecognizedExactly() {
+        assertTrue(TimerAlarmReceiver.isStopSoundAction(TimerAlarmReceiver.StopSoundAction))
+        assertFalse(TimerAlarmReceiver.isStopSoundAction(null))
+        assertFalse(TimerAlarmReceiver.isStopSoundAction("me.egigoka.pomodorough.TIMER_ALARM"))
+    }
+
+    private fun timer(status: String, id: String) = CanonicalTimer(
+        id = id,
+        phase = "focus",
+        status = status,
+        plannedDurationMs = 60_000,
+        elapsedAtAnchorMs = 0,
+        anchorAt = "2026-01-01T00:00:00Z",
+    )
 }

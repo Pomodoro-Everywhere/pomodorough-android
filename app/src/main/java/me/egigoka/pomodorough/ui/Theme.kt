@@ -2,12 +2,16 @@
 
 package me.egigoka.pomodorough.ui
 
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialExpressiveTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -24,7 +28,9 @@ val Danger = Color(0xFFFF604F)
 val DangerAccent = Color(0xFF8F2424)
 val DangerText = Color(0xFF681515)
 
-private val colors = lightColorScheme(
+internal val LocalPomodoroughDarkTheme = staticCompositionLocalOf { false }
+
+private val lightColors = lightColorScheme(
     primary = Violet,
     onPrimary = Cloud,
     primaryContainer = Lavender,
@@ -49,6 +55,33 @@ private val colors = lightColorScheme(
     onError = Cloud,
     errorContainer = Danger,
     onErrorContainer = Ink,
+)
+
+private val darkColors = darkColorScheme(
+    primary = Color(0xFF9CB8FF),
+    onPrimary = Color.White,
+    primaryContainer = Color(0xFF243F73),
+    onPrimaryContainer = Color.White,
+    secondary = Color(0xFFFFB4AA),
+    onSecondary = Color.White,
+    secondaryContainer = DangerAccent,
+    onSecondaryContainer = Color.White,
+    tertiary = Butter,
+    onTertiary = Color.White,
+    tertiaryContainer = Color(0xFF5A4700),
+    onTertiaryContainer = Color.White,
+    background = Color(0xFF0D1722),
+    onBackground = Color.White,
+    surface = Color(0xFF0D1722),
+    onSurface = Color.White,
+    surfaceVariant = Color(0xFF23313D),
+    onSurfaceVariant = Color.White,
+    outline = Color(0xFF91A7B5),
+    outlineVariant = Color(0xFF41515E),
+    error = Color(0xFFFFB4AB),
+    onError = Color.White,
+    errorContainer = Color(0xFF93000A),
+    onErrorContainer = Color.White,
 )
 
 private val typography = Typography(
@@ -103,6 +136,24 @@ private val typography = Typography(
     ),
 )
 
+private val darkTypography = Typography(
+    displayLarge = typography.displayLarge.copy(color = Color.White),
+    displayMedium = typography.displayMedium.copy(color = Color.White),
+    displaySmall = typography.displaySmall.copy(color = Color.White),
+    headlineLarge = typography.headlineLarge.copy(color = Color.White),
+    headlineMedium = typography.headlineMedium.copy(color = Color.White),
+    headlineSmall = typography.headlineSmall.copy(color = Color.White),
+    titleLarge = typography.titleLarge.copy(color = Color.White),
+    titleMedium = typography.titleMedium.copy(color = Color.White),
+    titleSmall = typography.titleSmall.copy(color = Color.White),
+    bodyLarge = typography.bodyLarge.copy(color = Color.White),
+    bodyMedium = typography.bodyMedium.copy(color = Color.White),
+    bodySmall = typography.bodySmall.copy(color = Color.White),
+    labelLarge = typography.labelLarge.copy(color = Color.White),
+    labelMedium = typography.labelMedium.copy(color = Color.White),
+    labelSmall = typography.labelSmall.copy(color = Color.White),
+)
+
 private val shapes = Shapes(
     extraSmall = RoundedCornerShape(8.dp),
     small = RoundedCornerShape(14.dp),
@@ -115,11 +166,16 @@ private val shapes = Shapes(
 )
 
 @Composable
-fun PomodoroughTheme(content: @Composable () -> Unit) {
-    MaterialExpressiveTheme(
-        colorScheme = colors,
-        typography = typography,
-        shapes = shapes,
-        content = content,
-    )
+fun PomodoroughTheme(
+    darkTheme: Boolean = isSystemInDarkTheme(),
+    content: @Composable () -> Unit,
+) {
+    CompositionLocalProvider(LocalPomodoroughDarkTheme provides darkTheme) {
+        MaterialExpressiveTheme(
+            colorScheme = if (darkTheme) darkColors else lightColors,
+            typography = if (darkTheme) darkTypography else typography,
+            shapes = shapes,
+            content = content,
+        )
+    }
 }

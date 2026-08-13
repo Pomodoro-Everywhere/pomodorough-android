@@ -134,7 +134,7 @@ class PomodoroughScreenTest {
     }
 
     @Test
-    fun completedTimerUsesClearLabelAndAction() {
+    fun completedTimerUsesStopSoundLabelAndClearAction() {
         var clearCalls = 0
         setScreen(
             AppState(
@@ -152,7 +152,7 @@ class PomodoroughScreenTest {
             onClearTimer = { clearCalls += 1 },
         )
 
-        composeRule.onNodeWithText("Clear").performClick()
+        composeRule.onNodeWithText("Stop sound").performClick()
 
         assertEquals(1, clearCalls)
         composeRule.onNodeWithText("Cancel").assertDoesNotExist()

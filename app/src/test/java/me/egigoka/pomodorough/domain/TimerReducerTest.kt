@@ -1,7 +1,10 @@
 package me.egigoka.pomodorough.domain
 
+import java.time.Instant
+import java.time.ZoneId
 import me.egigoka.pomodorough.data.CanonicalTimer
 import me.egigoka.pomodorough.data.CommandType
+import me.egigoka.pomodorough.data.HistoryItem
 import me.egigoka.pomodorough.data.TimerCommand
 import me.egigoka.pomodorough.data.TimerPhase
 import me.egigoka.pomodorough.data.TimerStatus
@@ -12,6 +15,34 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TimerReducerTest {
+    @Test
+    fun dailyFocusCountIgnoresPreviousDaysAndResetsCycleProgress() {
+        val zone = ZoneId.of("UTC")
+        val reference = Instant.parse("2026-07-22T12:00:00Z")
+        val history = listOf(
+            completedFocus("yesterday", "2026-07-21T23:59:00Z"),
+            completedFocus("today-1", "2026-07-22T08:00:00Z"),
+            completedFocus("today-2", "2026-07-22T09:00:00Z"),
+            completedFocus("today-3", "2026-07-22T10:00:00Z"),
+            completedFocus("today-4", "2026-07-22T11:00:00Z"),
+            completedFocus("break", "2026-07-22T11:30:00Z").copy(phase = TimerPhase.ShortBreak),
+        )
+
+        val count = TimerReducer.completedFocusCountForDay(history, reference, zone)
+
+        assertEquals(4, count)
+        assertEquals(4, TimerReducer.longBreakProgress(count))
+        assertEquals(1, TimerReducer.longBreakProgress(count + 1))
+        assertEquals(
+            0,
+            TimerReducer.completedFocusCountForDay(
+                history,
+                Instant.parse("2026-07-23T12:00:00Z"),
+                zone,
+            ),
+        )
+    }
+
     @Test
     fun everyStateCommandAndTimerIdentityCombinationMatchesServerTransitionTable() {
         val states = listOf<String?>(
@@ -568,6 +599,16 @@ class TimerReducerTest {
         hlcWallMs = 1_767_225_600_000 + sequence,
         hlcCounter = 0,
         observedElapsedMs = observedElapsedMs,
+    )
+
+    private fun completedFocus(id: String, completedAt: String) = HistoryItem(
+        id = id,
+        timerId = id,
+        phase = TimerPhase.Focus,
+        status = TimerStatus.Completed,
+        plannedDurationMs = 1_500_000,
+        completedAt = completedAt,
+        endedAt = completedAt,
     )
 
     private fun <T> permutations(values: List<T>): List<List<T>> = when (values.size) {

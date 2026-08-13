@@ -26,6 +26,7 @@ import me.egigoka.pomodorough.ui.PomodoroughScreen
 import me.egigoka.pomodorough.ui.PomodoroughTheme
 import me.egigoka.pomodorough.ui.PomodoroughViewModel
 import me.egigoka.pomodorough.data.auth.SystemGoogleCredentialProvider
+import me.egigoka.pomodorough.timer.SystemTimerCompletionNotifier
 
 class MainActivity : ComponentActivity() {
     private val viewModel by viewModels<PomodoroughViewModel> {
@@ -58,7 +59,7 @@ class MainActivity : ComponentActivity() {
                     onToggleTimer = ::startOrToggleTimer,
                     onFinishTimer = viewModel::finishTimer,
                     onCancelTimer = viewModel::cancelTimer,
-                    onClearTimer = viewModel::clearTimer,
+                    onClearTimer = ::stopSoundAndClearTimer,
                     onSelectPhase = viewModel::selectPhase,
                     onChangeDuration = viewModel::changeDuration,
                     onSetAutoStart = viewModel::setAutoStart,
@@ -104,6 +105,11 @@ class MainActivity : ComponentActivity() {
                 notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
             TimerNotificationPermissionAction.ToggleTimer -> viewModel.toggleTimer()
         }
+    }
+
+    private fun stopSoundAndClearTimer() {
+        SystemTimerCompletionNotifier.cancel(this)
+        viewModel.clearTimer()
     }
 
     private fun copyIrohInvite(invite: String) {

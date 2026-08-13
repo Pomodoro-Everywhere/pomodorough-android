@@ -1,6 +1,7 @@
 package me.egigoka.pomodorough.timer
 
 import android.Manifest
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -19,6 +20,8 @@ import kotlinx.coroutines.launch
 import me.egigoka.pomodorough.MainActivity
 import me.egigoka.pomodorough.PomodoroughApplication
 import me.egigoka.pomodorough.R
+import me.egigoka.pomodorough.data.CanonicalTimer
+import me.egigoka.pomodorough.data.TimerStatus
 
 internal fun interface ExpiredTimerCompleting {
     suspend fun finishExpiredTimer(): Boolean
@@ -31,17 +34,21 @@ internal fun interface TimerCompletionNotifying {
 internal enum class TimerAlarmDeliveryResult {
     NotExpired,
     CompletedAndNotified,
+    CompletedWithActiveReplacement,
     CompletedWithoutNotification,
 }
 
 internal class TimerAlarmDeliveryPolicy(
     private val completion: ExpiredTimerCompleting,
     private val notification: TimerCompletionNotifying,
+    private val shouldNotify: () -> Boolean = { true },
 ) {
     suspend fun deliver(): TimerAlarmDeliveryResult {
         if (!completion.finishExpiredTimer()) return TimerAlarmDeliveryResult.NotExpired
         return try {
-            if (notification.show()) {
+            if (!shouldNotify()) {
+                TimerAlarmDeliveryResult.CompletedWithActiveReplacement
+            } else if (notification.show()) {
                 TimerAlarmDeliveryResult.CompletedAndNotified
             } else {
                 TimerAlarmDeliveryResult.CompletedWithoutNotification
@@ -51,6 +58,16 @@ internal class TimerAlarmDeliveryPolicy(
         }
     }
 }
+
+internal fun shouldStopCompletionAlert(
+    previousTimerID: String?,
+    nextTimer: CanonicalTimer?,
+): Boolean = nextTimer != null &&
+    (nextTimer.status == TimerStatus.Running || nextTimer.status == TimerStatus.Paused) &&
+    nextTimer.id != previousTimerID
+
+internal fun shouldPostCompletionAlert(timer: CanonicalTimer?): Boolean =
+    timer?.status != TimerStatus.Running && timer?.status != TimerStatus.Paused
 
 internal class SystemTimerCompletionNotifier(
     context: Context,
@@ -81,14 +98,24 @@ internal class SystemTimerCompletionNotifier(
             Intent(appContext, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
+        val stopSoundIntent = PendingIntent.getBroadcast(
+            appContext,
+            1,
+            Intent(appContext, TimerAlarmReceiver::class.java).setAction(
+                TimerAlarmReceiver.StopSoundAction,
+            ),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
         val notification = NotificationCompat.Builder(appContext, ChannelId)
             .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
             .setContentTitle(appContext.getString(R.string.timer_complete_title))
-            .setContentText("Timer arrived. Open Pomodorough for the next service.")
+            .setContentText(appContext.getString(R.string.timer_complete_body))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true)
             .setContentIntent(contentIntent)
+            .addAction(0, appContext.getString(R.string.stop_sound), stopSoundIntent)
             .build()
+            .apply { flags = flags or Notification.FLAG_INSISTENT }
         manager.notify(NotificationId, notification)
         return true
     }
@@ -97,6 +124,12 @@ internal class SystemTimerCompletionNotifier(
         internal const val ChannelId = "timer-arrivals"
         internal const val NotificationId = 25
 
+        internal fun cancel(context: Context) {
+            context.applicationContext
+                .getSystemService(NotificationManager::class.java)
+                .cancel(NotificationId)
+        }
+
         internal fun canPostNotification(sdkInt: Int, permissionGranted: Boolean): Boolean =
             sdkInt < 33 || permissionGranted
     }
@@ -104,6 +137,10 @@ internal class SystemTimerCompletionNotifier(
 
 class TimerAlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        if (isStopSoundAction(intent.action)) {
+            SystemTimerCompletionNotifier.cancel(context)
+            return
+        }
         val pendingResult = goAsync()
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             try {
@@ -113,6 +150,9 @@ class TimerAlarmReceiver : BroadcastReceiver() {
                         application.timerRepository::finishExpiredTimer,
                     ),
                     notification = SystemTimerCompletionNotifier(context),
+                    shouldNotify = {
+                        shouldPostCompletionAlert(application.timerRepository.state.value.timer)
+                    },
                 ).deliver()
                 if (result == TimerAlarmDeliveryResult.CompletedWithoutNotification) {
                     Log.w(Tag, "Timer completed without posting a notification")
@@ -125,7 +165,10 @@ class TimerAlarmReceiver : BroadcastReceiver() {
         }
     }
 
-    private companion object {
-        const val Tag = "PomodoroughAlarm"
+    companion object {
+        internal const val StopSoundAction = "me.egigoka.pomodorough.STOP_TIMER_SOUND"
+        private const val Tag = "PomodoroughAlarm"
+
+        internal fun isStopSoundAction(action: String?): Boolean = action == StopSoundAction
     }
 }

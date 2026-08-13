@@ -39,8 +39,8 @@ android {
         applicationId = "me.egigoka.pomodorough"
         minSdk = 26
         targetSdk = 34
-        versionCode = 14
-        versionName = "0.2.0"
+        versionCode = 15
+        versionName = "0.2.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "API_BASE_URL", "\"${apiBaseUrl.get().trimEnd('/')}\"")

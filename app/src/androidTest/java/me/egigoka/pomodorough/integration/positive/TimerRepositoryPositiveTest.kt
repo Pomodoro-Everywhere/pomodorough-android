@@ -299,6 +299,53 @@ class TimerRepositoryPositiveTest {
     }
 
     @Test
+    fun foregroundPollingReconcilesRemoteCancellationWhenRevisionEventIsMissed() = runBlocking {
+        val profile = testUser()
+        val remoteTimer = testTimer(id = "remote-timer")
+        val cancelledHistory = testHistory("remote-cancel").copy(
+            timerId = remoteTimer.id,
+            status = TimerStatus.Cancelled,
+            completedAt = null,
+        )
+        database.timerDao().insertState(
+            testState(user = profile, timer = remoteTimer, revision = 1),
+        )
+        val service = TestRepositoryService(profile).apply {
+            syncResponse = syncResponse.copy(
+                revision = 1,
+                canonicalTimer = remoteTimer,
+                history = emptyList(),
+            )
+        }
+        val repository = testRepository(
+            context,
+            database.timerDao(),
+            service,
+            TestAuthSession(tokensAvailable = true),
+            remoteSyncIntervalMs = 250L,
+        )
+        repository.initialize()
+        awaitState { service.syncCalls >= 1 }
+        repository.onForeground()
+        awaitState { service.syncCalls >= 2 }
+        val callsBeforeRemoteCancellation = service.syncCalls
+
+        service.syncResponse = service.syncResponse.copy(
+            revision = 2,
+            canonicalTimer = null,
+            history = listOf(cancelledHistory),
+        )
+
+        awaitState {
+            service.syncCalls > callsBeforeRemoteCancellation &&
+                repository.state.value.timer == null &&
+                repository.state.value.history == listOf(cancelledHistory)
+        }
+        assertTrue(service.syncRequests.last().commands.isEmpty())
+        repository.onBackground()
+    }
+
+    @Test
     fun fourthExpiredFocusTimerAutoStartsLongBreak() = runBlocking {
         val completedFocus = (1..3).map { testHistory("history-$it") }
         val expired = testTimer(elapsedMs = 1_500_000, anchorAt = "2000-01-01T00:00:00Z")

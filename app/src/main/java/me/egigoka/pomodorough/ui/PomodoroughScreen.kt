@@ -216,7 +216,11 @@ private fun LoadingScreen() {
                 indicatorColor = Violet,
             )
             Spacer(Modifier.height(28.dp))
-            Text("Syncing your clock", color = Cloud, style = MaterialTheme.typography.titleLarge)
+            Text(
+                "Syncing your clock",
+                color = darkModeTextColor(Cloud),
+                style = MaterialTheme.typography.titleLarge,
+            )
         }
     }
 }
@@ -249,19 +253,19 @@ private fun SignInScreen(
             Spacer(Modifier.height(30.dp))
             Text(
                 text = "Make time\nfeel yours.",
-                color = Cloud,
+                color = darkModeTextColor(Cloud),
                 style = MaterialTheme.typography.headlineLarge,
             )
             Spacer(Modifier.height(10.dp))
             Text(
                 text = "One focused clock, in sync everywhere.",
-                color = Lavender,
+                color = darkModeTextColor(Lavender),
                 style = MaterialTheme.typography.bodyLarge,
             )
             Spacer(Modifier.height(30.dp))
             Surface(
-                color = Butter,
-                contentColor = Ink,
+                color = MaterialTheme.colorScheme.tertiaryContainer,
+                contentColor = darkModeTextColor(Ink),
                 shape = RoundedCornerShape(
                     topStart = 48.dp,
                     topEnd = 20.dp,
@@ -288,7 +292,7 @@ private fun SignInScreen(
                             .height(64.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = Violet,
-                            contentColor = Cloud,
+                            contentColor = darkModeTextColor(Cloud),
                         ),
                     ) {
                         if (signingIn) {
@@ -488,7 +492,7 @@ private fun TimerScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 16.dp, vertical = 8.dp),
-                            color = Lavender,
+                            color = MaterialTheme.colorScheme.surfaceVariant,
                             shape = MaterialTheme.shapes.large,
                         ) {
                             Text(
@@ -537,7 +541,7 @@ private fun TimerScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 16.dp),
-                            color = Lavender,
+                            color = MaterialTheme.colorScheme.surfaceVariant,
                             shape = MaterialTheme.shapes.large,
                         ) {
                             Text(
@@ -585,7 +589,7 @@ private fun TimerScreen(
         AlertDialog(
             onDismissRequest = { showLogoutDialog = false },
             shape = MaterialTheme.shapes.extraLarge,
-            containerColor = Cloud,
+            containerColor = MaterialTheme.colorScheme.surface,
             icon = { BrandOrb(42.dp) },
             title = { Text("Log out on this device?") },
             text = {
@@ -603,7 +607,13 @@ private fun TimerScreen(
                         showLogoutDialog = false
                         onLogout()
                     },
-                ) { Text("Log out", color = DangerText, fontWeight = FontWeight.Bold) }
+                ) {
+                    Text(
+                        "Log out",
+                        color = darkModeTextColor(MaterialTheme.colorScheme.error),
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
             },
             dismissButton = {
                 TextButton(onClick = { showLogoutDialog = false }) { Text("Stay signed in") }
@@ -615,21 +625,33 @@ private fun TimerScreen(
         AlertDialog(
             onDismissRequest = {},
             shape = MaterialTheme.shapes.extraLarge,
-            containerColor = Cloud,
+            containerColor = MaterialTheme.colorScheme.surface,
             title = { Text("Different account detected") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
                         "Local data belongs to ${accountSwitch.localAccount}, but ${accountSwitch.incomingAccount} is signed in. Switching accounts permanently removes this device's timer, history, tasks, and unsynced operations.",
                     )
-                    accountSwitch.error?.let { Text(it, color = DangerText, fontWeight = FontWeight.Bold) }
+                    accountSwitch.error?.let {
+                        Text(
+                            it,
+                            color = darkModeTextColor(MaterialTheme.colorScheme.error),
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
                 }
             },
             confirmButton = {
                 TextButton(
                     onClick = onConfirmAccountSwitch,
                     enabled = !accountSwitch.submitting,
-                ) { Text("Switch and remove local data", color = DangerText, fontWeight = FontWeight.Bold) }
+                ) {
+                    Text(
+                        "Switch and remove local data",
+                        color = darkModeTextColor(MaterialTheme.colorScheme.error),
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
             },
             dismissButton = {
                 TextButton(
@@ -652,7 +674,7 @@ private fun TimerScreen(
                 }
             },
             shape = MaterialTheme.shapes.extraLarge,
-            containerColor = Cloud,
+            containerColor = MaterialTheme.colorScheme.surface,
             title = {
                 Text(
                     when {
@@ -681,7 +703,13 @@ private fun TimerScreen(
                             resolutionWarning(selected)
                         },
                     )
-                    resolution.error?.let { Text(it, color = DangerText, fontWeight = FontWeight.Bold) }
+                    resolution.error?.let {
+                        Text(
+                            it,
+                            color = darkModeTextColor(MaterialTheme.colorScheme.error),
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
                     if (resolution.pendingStrategy != null) {
                         Text("Retry sends the exact saved request ID and operation payload.")
                     }
@@ -819,6 +847,9 @@ private fun PortraitTimerScreen(
             TimerHero(
                 timer = state.timer,
                 settings = state.settings,
+                longBreakProgress = TimerReducer.longBreakProgress(
+                    TimerReducer.completedFocusCountForDay(state.history),
+                ),
                 taskTitle = state.timer?.taskId?.let { taskId ->
                     state.knownTasks.firstOrNull { it.id == taskId }?.title
                 },
@@ -870,6 +901,9 @@ private fun LandscapeTimerScreen(
         TimerHero(
             timer = state.timer,
             settings = state.settings,
+            longBreakProgress = TimerReducer.longBreakProgress(
+                TimerReducer.completedFocusCountForDay(state.history),
+            ),
             taskTitle = state.timer?.taskId?.let { taskId ->
                 state.knownTasks.firstOrNull { it.id == taskId }?.title
             },
@@ -893,7 +927,7 @@ private fun AppHeader(state: AppState, onSignIn: () -> Unit, onLogout: () -> Uni
     Surface(
         modifier = Modifier.fillMaxWidth(),
         color = Ink,
-        contentColor = Cloud,
+        contentColor = darkModeTextColor(Cloud),
         shape = RoundedCornerShape(bottomStart = 28.dp, bottomEnd = 28.dp),
     ) {
         Column(Modifier.padding(start = 16.dp, top = 8.dp, end = 10.dp, bottom = 10.dp)) {
@@ -905,16 +939,16 @@ private fun AppHeader(state: AppState, onSignIn: () -> Unit, onLogout: () -> Uni
                 BrandMark(compact = true)
                 when (state.authStatus) {
                     AuthStatus.SignedIn -> TextButton(onClick = onLogout) {
-                        Text("Log out", color = Lavender)
+                        Text("Log out", color = darkModeTextColor(Lavender))
                     }
                     AuthStatus.SigningIn -> TextButton(onClick = {}, enabled = false) {
-                        Text("Signing in...", color = Lavender)
+                        Text("Signing in...", color = darkModeTextColor(Lavender))
                     }
                     AuthStatus.Loading -> TextButton(onClick = {}, enabled = false) {
-                        Text("Checking...", color = Lavender)
+                        Text("Checking...", color = darkModeTextColor(Lavender))
                     }
                     AuthStatus.SignedOut -> TextButton(onClick = onSignIn) {
-                        Text("Sign in", color = Butter, fontWeight = FontWeight.Bold)
+                        Text("Sign in", color = darkModeTextColor(Butter), fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -922,7 +956,7 @@ private fun AppHeader(state: AppState, onSignIn: () -> Unit, onLogout: () -> Uni
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Surface(
                     color = syncColor(state.syncStatus),
-                    contentColor = Ink,
+                    contentColor = darkModeTextColor(Ink),
                     shape = CircleShape,
                 ) {
                     Row(
@@ -943,7 +977,7 @@ private fun AppHeader(state: AppState, onSignIn: () -> Unit, onLogout: () -> Uni
                         AuthStatus.SignedOut -> ""
                     },
                     modifier = Modifier.weight(1f),
-                    color = Cloud,
+                    color = darkModeTextColor(Cloud),
                     style = MaterialTheme.typography.bodyMedium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -1022,19 +1056,23 @@ private fun NetworkSection(
         )
         RouteSwitch(network.mode, onSetMode)
 
-        Surface(color = Ink, contentColor = Cloud, shape = MaterialTheme.shapes.large) {
+        Surface(
+            color = Ink,
+            contentColor = darkModeTextColor(Cloud),
+            shape = MaterialTheme.shapes.large,
+        ) {
             Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(networkStatusTitle(network.status), style = MaterialTheme.typography.titleLarge)
                 Text(
                     network.message ?: networkStatusDescription(network.status),
-                    color = Lavender,
+                    color = darkModeTextColor(Lavender),
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                 )
                 network.roomId?.let { roomId ->
                     Text(
                         network.roomName ?: "Unnamed room",
-                        color = Butter,
+                        color = darkModeTextColor(Butter),
                         style = MaterialTheme.typography.labelLarge,
                     )
                     Text(
@@ -1054,7 +1092,7 @@ private fun NetworkSection(
                             Text("Sync now")
                         }
                         TextButton(onClick = { confirmLeave = true }, modifier = Modifier.height(48.dp)) {
-                            Text("Leave room", color = Danger)
+                            Text("Leave room", color = darkModeTextColor(Danger))
                         }
                     }
                 }
@@ -1062,7 +1100,11 @@ private fun NetworkSection(
         }
 
         if (network.roomId == null) {
-            Surface(color = Butter, contentColor = Ink, shape = MaterialTheme.shapes.large) {
+            Surface(
+                color = MaterialTheme.colorScheme.tertiaryContainer,
+                contentColor = darkModeTextColor(Ink),
+                shape = MaterialTheme.shapes.large,
+            ) {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("Open a peer route", style = MaterialTheme.typography.titleLarge)
                     OutlinedTextField(
@@ -1082,7 +1124,11 @@ private fun NetworkSection(
                 }
             }
 
-            Surface(color = Lavender, contentColor = Ink, shape = MaterialTheme.shapes.large) {
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                shape = MaterialTheme.shapes.large,
+            ) {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("Join an existing route", style = MaterialTheme.typography.titleLarge)
                     OutlinedTextField(
@@ -1105,7 +1151,11 @@ private fun NetworkSection(
         }
 
         network.invite?.let { invite ->
-            Surface(color = Butter, contentColor = Ink, shape = MaterialTheme.shapes.large) {
+            Surface(
+                color = MaterialTheme.colorScheme.tertiaryContainer,
+                contentColor = darkModeTextColor(Ink),
+                shape = MaterialTheme.shapes.large,
+            ) {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("Room pass", style = MaterialTheme.typography.titleLarge)
                     Text(
@@ -1133,7 +1183,11 @@ private fun NetworkSection(
             }
         }
 
-        Surface(color = Cloud, contentColor = Ink, shape = MaterialTheme.shapes.large) {
+        Surface(
+            color = MaterialTheme.colorScheme.surface,
+            contentColor = MaterialTheme.colorScheme.onSurface,
+            shape = MaterialTheme.shapes.large,
+        ) {
             Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 SectionLabel("PRIVACY & ACCESS")
                 Text("Room invites grant full read and write access. Version 1 has no member revocation.")
@@ -1160,7 +1214,13 @@ private fun NetworkSection(
                 TextButton(onClick = {
                     confirmLeave = false
                     onLeaveRoom()
-                }) { Text("Leave and restore", color = DangerText, fontWeight = FontWeight.Bold) }
+                }) {
+                    Text(
+                        "Leave and restore",
+                        color = darkModeTextColor(MaterialTheme.colorScheme.error),
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
             },
             dismissButton = {
                 TextButton(onClick = { confirmLeave = false }) { Text("Stay in room") }
@@ -1187,15 +1247,17 @@ private fun RouteSwitch(active: ReplicationMode, onSetMode: (ReplicationMode) ->
                     .semantics {
                         stateDescription = if (selected) "Selected" else "Not selected"
                     },
-                color = if (selected) Violet else Cloud,
-                contentColor = if (selected) Cloud else Ink,
+                color = if (selected) Violet else MaterialTheme.colorScheme.surface,
+                contentColor = darkModeTextColor(
+                    if (selected) Cloud else MaterialTheme.colorScheme.onSurface,
+                ),
                 shape = RoundedCornerShape(
                     topStart = if (mode == ReplicationMode.OFFLINE) 28.dp else 14.dp,
                     topEnd = 14.dp,
                     bottomStart = 14.dp,
                     bottomEnd = if (mode == ReplicationMode.CENTRALIZED) 28.dp else 14.dp,
                 ),
-                border = BorderStroke(1.dp, Violet),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
             ) {
                 Row(
                     Modifier.padding(horizontal = 16.dp),
@@ -1204,7 +1266,10 @@ private fun RouteSwitch(active: ReplicationMode, onSetMode: (ReplicationMode) ->
                     Box(
                         Modifier
                             .size(14.dp)
-                            .background(if (selected) Butter else Lavender, CircleShape),
+                            .background(
+                                if (selected) MaterialTheme.colorScheme.tertiaryContainer else Lavender,
+                                CircleShape,
+                            ),
                     )
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
@@ -1316,11 +1381,15 @@ private fun TaskBoardHeader(
         Spacer(Modifier.height(6.dp))
         Text(
             "$totalFinished pomodoros · ${formatTaskDuration(totalTime)} today",
-            color = Violet,
+            color = darkModeTextColor(MaterialTheme.colorScheme.primary),
             style = MaterialTheme.typography.titleLarge,
         )
         Spacer(Modifier.height(16.dp))
-        Surface(color = Butter, contentColor = Ink, shape = MaterialTheme.shapes.large) {
+        Surface(
+            color = MaterialTheme.colorScheme.tertiaryContainer,
+            contentColor = darkModeTextColor(Ink),
+            shape = MaterialTheme.shapes.large,
+        ) {
             Column(Modifier.padding(16.dp)) {
                 OutlinedTextField(
                     value = draft,
@@ -1388,7 +1457,7 @@ private fun TaskSummaryRow(
     Surface(
         modifier = modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surfaceVariant,
-        contentColor = Ink,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
         shape = MaterialTheme.shapes.large,
     ) {
         if (useStackedLayout) {
@@ -1406,7 +1475,7 @@ private fun TaskSummaryRow(
                     )
                     Text(
                         "${summary.finishedPomodoros} finished · ${formatTaskDuration(summary.timeSpentMs)} today",
-                        color = Violet,
+                        color = darkModeTextColor(MaterialTheme.colorScheme.primary),
                         style = MaterialTheme.typography.labelLarge,
                     )
                 }
@@ -1415,7 +1484,7 @@ private fun TaskSummaryRow(
                     enabled = mutationsEnabled,
                     modifier = Modifier.align(Alignment.End),
                 ) {
-                    Text("Delete", color = DangerText)
+                    Text("Delete", color = darkModeTextColor(MaterialTheme.colorScheme.error))
                 }
             }
         } else {
@@ -1441,7 +1510,7 @@ private fun TaskSummaryRow(
                     Text(
                         summary.finishedPomodoros.toString(),
                         Modifier.weight(1.2f),
-                        color = Violet,
+                        color = darkModeTextColor(MaterialTheme.colorScheme.primary),
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Black,
                         textAlign = TextAlign.Center,
@@ -1449,7 +1518,7 @@ private fun TaskSummaryRow(
                     Text(
                         formatTaskDuration(summary.timeSpentMs),
                         Modifier.weight(1.35f),
-                        color = Violet,
+                        color = darkModeTextColor(MaterialTheme.colorScheme.primary),
                         style = MaterialTheme.typography.labelLarge,
                         textAlign = TextAlign.Center,
                     )
@@ -1459,7 +1528,7 @@ private fun TaskSummaryRow(
                     enabled = mutationsEnabled,
                     modifier = Modifier.weight(0.9f),
                 ) {
-                    Text("Delete", color = DangerText)
+                    Text("Delete", color = darkModeTextColor(MaterialTheme.colorScheme.error))
                 }
             }
         }
@@ -1470,6 +1539,7 @@ private fun TaskSummaryRow(
 private fun TimerHero(
     timer: CanonicalTimer?,
     settings: TimerSettings,
+    longBreakProgress: Int,
     taskTitle: String?,
     ready: Boolean,
     onToggleTimer: () -> Unit,
@@ -1490,6 +1560,7 @@ private fun TimerHero(
     val active = status == TimerStatus.Running || status == TimerStatus.Paused
     val clearable = timer != null && !active
     val palette = phasePalette(phase)
+    val textColor = darkModeTextColor(palette.onContainer)
     val containerColor by animateColorAsState(palette.container, label = "timer container")
     val corner by animateDpAsState(
         targetValue = when (status) {
@@ -1503,7 +1574,7 @@ private fun TimerHero(
     Surface(
         modifier = modifier.fillMaxWidth(),
         color = if (landscape) Ink else containerColor,
-        contentColor = if (landscape) Cloud else palette.onContainer,
+        contentColor = if (landscape) darkModeTextColor(Cloud) else textColor,
         shape = if (landscape) {
             RoundedCornerShape(24.dp)
         } else {
@@ -1519,6 +1590,7 @@ private fun TimerHero(
             LandscapeTimerHero(
                 timer = timer,
                 settings = settings,
+                longBreakProgress = longBreakProgress,
                 taskTitle = taskTitle,
                 tasks = tasks,
                 selectedTaskId = selectedTaskId,
@@ -1540,6 +1612,8 @@ private fun TimerHero(
             }
             TimerOrbit(timer = timer, settings = settings, palette = palette, maxSize = orbitMaxSize)
             Spacer(Modifier.height(6.dp))
+            LongBreakProgress(progress = longBreakProgress, color = textColor)
+            Spacer(Modifier.height(6.dp))
             TaskSelector(
                 tasks = tasks,
                 selectedTaskId = selectedTaskId,
@@ -1553,7 +1627,7 @@ private fun TimerHero(
             Text(
                 timerInstruction(status),
                 modifier = Modifier.fillMaxWidth(),
-                color = palette.onContainer.copy(alpha = 0.72f),
+                color = textColor.copy(alpha = 0.72f),
                 style = MaterialTheme.typography.bodyMedium,
                 textAlign = TextAlign.Center,
             )
@@ -1566,7 +1640,7 @@ private fun TimerHero(
                     .height(54.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = Ink,
-                    contentColor = Cloud,
+                    contentColor = darkModeTextColor(Cloud),
                 ),
             ) {
                 Text(
@@ -1595,7 +1669,7 @@ private fun TimerHero(
                         .weight(1f)
                         .height(48.dp),
                     border = BorderStroke(1.5.dp, palette.onContainer.copy(alpha = 0.55f)),
-                ) { Text(if (active) "Cancel" else "Clear") }
+                ) { Text(if (active) "Cancel" else "Stop sound") }
             }
         }
     }
@@ -1605,6 +1679,7 @@ private fun TimerHero(
 private fun LandscapeTimerHero(
     timer: CanonicalTimer?,
     settings: TimerSettings,
+    longBreakProgress: Int,
     taskTitle: String?,
     tasks: List<FocusTask>,
     selectedTaskId: String?,
@@ -1627,13 +1702,18 @@ private fun LandscapeTimerHero(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         if (showContextLabel) {
-            Text("CURRENT SERVICE", color = Cloud, style = MaterialTheme.typography.labelMedium)
+            Text(
+                "CURRENT SERVICE",
+                color = darkModeTextColor(Cloud),
+                style = MaterialTheme.typography.labelMedium,
+            )
         }
         LandscapeTimerReadout(
             timer = timer,
             settings = settings,
             modifier = Modifier.weight(1f),
         )
+        LongBreakProgress(progress = longBreakProgress, color = darkModeTextColor(Butter))
         LandscapeTaskSelector(
             tasks = tasks,
             selectedTaskId = selectedTaskId,
@@ -1650,7 +1730,10 @@ private fun LandscapeTimerHero(
                 modifier = Modifier
                     .weight(1f)
                     .height(54.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Butter, contentColor = Ink),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+                    contentColor = darkModeTextColor(Ink),
+                ),
             ) {
                 Text(
                     when (status) {
@@ -1676,7 +1759,7 @@ private fun LandscapeTimerHero(
                         .weight(1f)
                         .height(54.dp),
                     border = BorderStroke(1.5.dp, Cloud.copy(alpha = 0.65f)),
-                ) { Text("Cancel", color = Cloud) }
+                ) { Text("Cancel", color = darkModeTextColor(Cloud)) }
             } else if (clearable) {
                 OutlinedButton(
                     onClick = onClearTimer,
@@ -1685,10 +1768,27 @@ private fun LandscapeTimerHero(
                         .weight(1f)
                         .height(54.dp),
                     border = BorderStroke(1.5.dp, Cloud.copy(alpha = 0.65f)),
-                ) { Text("Clear", color = Cloud) }
+                ) { Text("Stop sound", color = darkModeTextColor(Cloud)) }
             }
         }
     }
+}
+
+@Composable
+private fun LongBreakProgress(progress: Int, color: Color) {
+    Text(
+        text = "●".repeat(progress) + "○".repeat(4 - progress),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clearAndSetSemantics {
+                contentDescription = "Pomodoro progress: $progress of 4 today"
+            },
+        color = color.copy(alpha = 0.78f),
+        fontFamily = FontFamily.Monospace,
+        fontWeight = FontWeight.Bold,
+        style = MaterialTheme.typography.labelMedium,
+        textAlign = TextAlign.Center,
+    )
 }
 
 @Composable
@@ -1718,7 +1818,8 @@ private fun LandscapeTimerReadout(
         label = "Landscape timer progress",
     )
     val status = timer?.status ?: "idle"
-    val timeText = timerTimeText(minutes, seconds, status == TimerStatus.Paused, Butter)
+    val textColor = darkModeTextColor(Butter)
+    val timeText = timerTimeText(minutes, seconds, status == TimerStatus.Paused, textColor)
 
     Column(
         modifier = modifier
@@ -1731,16 +1832,20 @@ private fun LandscapeTimerReadout(
             .padding(horizontal = 20.dp, vertical = 8.dp),
     ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(phaseRouteLabel(phase).uppercase(), color = Cloud, style = MaterialTheme.typography.labelMedium)
+            Text(
+                phaseRouteLabel(phase).uppercase(),
+                color = darkModeTextColor(Cloud),
+                style = MaterialTheme.typography.labelMedium,
+            )
             Spacer(Modifier.width(8.dp))
-            Text(phaseLabel(phase).uppercase(), color = Butter, style = MaterialTheme.typography.labelMedium)
+            Text(phaseLabel(phase).uppercase(), color = textColor, style = MaterialTheme.typography.labelMedium)
         }
         Text(
             text = timeText,
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth(),
-            color = Butter,
+            color = textColor,
             fontFamily = FontFamily.Monospace,
             fontWeight = FontWeight.Black,
             fontSize = 112.sp,
@@ -1792,12 +1897,16 @@ private fun LandscapeTaskSelector(
                 .height(48.dp),
             border = BorderStroke(1.dp, Cloud.copy(alpha = 0.5f)),
         ) {
-            Text("FOCUS TASK", color = Cloud, style = MaterialTheme.typography.labelMedium)
+            Text(
+                "FOCUS TASK",
+                color = darkModeTextColor(Cloud),
+                style = MaterialTheme.typography.labelMedium,
+            )
             Spacer(Modifier.width(12.dp))
             Text(
                 title,
                 modifier = Modifier.weight(1f),
-                color = Butter,
+                color = darkModeTextColor(Butter),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 textAlign = TextAlign.End,
@@ -1852,7 +1961,8 @@ private fun TimerOrbit(
         label = "Timer progress",
     )
     val status = timer?.status ?: "idle"
-    val timeText = timerTimeText(minutes, seconds, status == TimerStatus.Paused, palette.onContainer)
+    val textColor = darkModeTextColor(palette.onContainer)
+    val timeText = timerTimeText(minutes, seconds, status == TimerStatus.Paused, textColor)
 
     BoxWithConstraints(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         val orbitSize = min(min(maxWidth.value, maxSize.value), 318f).dp
@@ -1905,7 +2015,7 @@ private fun TimerOrbit(
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
                     text = timeText,
-                    color = palette.onContainer,
+                    color = textColor,
                     fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Black,
                     fontSize = if (orbitSize < 280.dp) 48.sp else 62.sp,
@@ -1913,13 +2023,13 @@ private fun TimerOrbit(
                 )
                 Text(
                     text = phaseLabel(phase),
-                    color = palette.onContainer.copy(alpha = 0.68f),
+                    color = textColor.copy(alpha = 0.68f),
                     style = MaterialTheme.typography.titleLarge,
                 )
                 Spacer(Modifier.height(8.dp))
                 Surface(
                     color = palette.onContainer.copy(alpha = 0.1f),
-                    contentColor = palette.onContainer,
+                    contentColor = textColor,
                     shape = CircleShape,
                 ) {
                     Text(
@@ -1981,7 +2091,11 @@ private fun PatternSection(
             onChangeDuration = onChangeDuration,
         )
         Spacer(Modifier.height(12.dp))
-        Surface(color = Ink, contentColor = Cloud, shape = MaterialTheme.shapes.large) {
+        Surface(
+            color = Ink,
+            contentColor = darkModeTextColor(Cloud),
+            shape = MaterialTheme.shapes.large,
+        ) {
             Row(
                 modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -1990,7 +2104,7 @@ private fun PatternSection(
                     Text("Auto-start breaks", style = MaterialTheme.typography.titleLarge)
                     Text(
                         "Short after focus, long every fourth.",
-                        color = Lavender,
+                        color = darkModeTextColor(Lavender),
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 }
@@ -2017,6 +2131,7 @@ private fun PhaseCard(
     val selected = settings.selectedPhase == phase
     val minutes = settings.minutesFor(phase)
     val palette = phasePalette(phase)
+    val selectedTextColor = darkModeTextColor(Ink)
     val shape = if (selected) {
         RoundedCornerShape(topStart = 36.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 36.dp)
     } else {
@@ -2032,7 +2147,7 @@ private fun PhaseCard(
                 stateDescription = "$minutes minutes"
             },
         color = if (selected) palette.container else MaterialTheme.colorScheme.surfaceVariant,
-        contentColor = Ink,
+        contentColor = if (selected) selectedTextColor else MaterialTheme.colorScheme.onSurfaceVariant,
         shape = shape,
         border = if (selected) BorderStroke(2.dp, palette.accent) else null,
     ) {
@@ -2048,7 +2163,15 @@ private fun PhaseCard(
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(phaseLabel(phase), style = MaterialTheme.typography.titleLarge)
-                Text(supportingText, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    supportingText,
+                    color = if (selected) {
+                        selectedTextColor.copy(alpha = 0.72f)
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                )
             }
             StepButton("−", "Decrease ${phaseLabel(phase)} duration", enabled) {
                 onChangeDuration(phase, -1)
@@ -2058,7 +2181,7 @@ private fun PhaseCard(
                 modifier = Modifier
                     .width(45.dp)
                     .clearAndSetSemantics { },
-                color = Ink,
+                color = if (selected) selectedTextColor else MaterialTheme.colorScheme.onSurfaceVariant,
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Black,
                 fontSize = 22.sp,
@@ -2101,7 +2224,11 @@ private fun HistoryTitle(count: Int, modifier: Modifier = Modifier) {
             SectionLabel("COMPLETED SESSIONS")
             Text("Recent focus", style = MaterialTheme.typography.headlineMedium)
         }
-        Surface(color = Violet, contentColor = Cloud, shape = CircleShape) {
+        Surface(
+            color = Violet,
+            contentColor = darkModeTextColor(Cloud),
+            shape = CircleShape,
+        ) {
             Text(
                 count.toString().padStart(2, '0'),
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
@@ -2127,7 +2254,7 @@ private fun HistoryRow(
                 contentDescription = historyDescription(item, taskTitle, showPending)
             },
         color = MaterialTheme.colorScheme.surfaceVariant,
-        contentColor = Ink,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
         shape = MaterialTheme.shapes.large,
     ) {
         Row(
@@ -2137,7 +2264,7 @@ private fun HistoryRow(
             Surface(
                 modifier = Modifier.size(48.dp),
                 color = palette.container,
-                contentColor = Ink,
+                contentColor = darkModeTextColor(Ink),
                 shape = RoundedCornerShape(16.dp),
             ) {
                 Box(contentAlignment = Alignment.Center) {
@@ -2152,12 +2279,16 @@ private fun HistoryRow(
                 )
                 Text(formatHistoryDate(item), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
                 if (taskTitle != null) {
-                    Text(taskTitle, color = Violet, style = MaterialTheme.typography.labelMedium)
+                    Text(
+                        taskTitle,
+                        color = darkModeTextColor(MaterialTheme.colorScheme.primary),
+                        style = MaterialTheme.typography.labelMedium,
+                    )
                 }
             }
             Text(
                 "${(item.plannedDurationMs / 60_000).coerceAtLeast(1)} min",
-                color = Violet,
+                color = darkModeTextColor(MaterialTheme.colorScheme.primary),
                 style = MaterialTheme.typography.labelLarge,
             )
         }
@@ -2172,7 +2303,12 @@ private fun MessageCard(
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Surface(modifier = modifier.fillMaxWidth(), color = containerColor, shape = MaterialTheme.shapes.large) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = containerColor,
+        contentColor = darkModeTextColor(Ink),
+        shape = MaterialTheme.shapes.large,
+    ) {
         Row(
             modifier = Modifier.padding(start = 18.dp, top = 14.dp, bottom = 14.dp, end = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -2181,7 +2317,7 @@ private fun MessageCard(
                 Text(title, style = MaterialTheme.typography.titleLarge)
                 Text(message, style = MaterialTheme.typography.bodyMedium)
             }
-            TextButton(onClick = onDismiss) { Text("Dismiss", color = Ink) }
+            TextButton(onClick = onDismiss) { Text("Dismiss", color = darkModeTextColor(Ink)) }
         }
     }
 }
@@ -2191,7 +2327,7 @@ private fun NoticeCard(message: String, onDismiss: () -> Unit, modifier: Modifie
     MessageCard(
         title = "Heads up",
         message = message,
-        containerColor = Butter,
+        containerColor = MaterialTheme.colorScheme.tertiaryContainer,
         onDismiss = onDismiss,
         modifier = modifier.clearAndSetSemantics {
             contentDescription = "Heads up. $message"
@@ -2228,7 +2364,7 @@ private fun BrandMark(compact: Boolean = false) {
         Spacer(Modifier.width(if (compact) 10.dp else 14.dp))
         Text(
             "pomodorough",
-            color = Cloud,
+            color = darkModeTextColor(Cloud),
             style = if (compact) MaterialTheme.typography.titleLarge else MaterialTheme.typography.headlineMedium,
         )
     }
@@ -2239,7 +2375,10 @@ private fun BrandOrb(size: androidx.compose.ui.unit.Dp) {
     Box(
         modifier = Modifier
             .size(size)
-            .background(Butter, RoundedCornerShape(topStart = 50.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 50.dp)),
+            .background(
+                MaterialTheme.colorScheme.tertiaryContainer,
+                RoundedCornerShape(topStart = 50.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 50.dp),
+            ),
         contentAlignment = Alignment.Center,
     ) {
         Box(Modifier.size(size * 0.4f).background(DangerAccent, CircleShape))
@@ -2251,15 +2390,20 @@ private fun SectionLabel(text: String) {
     Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelMedium)
 }
 
+@Composable
+private fun darkModeTextColor(lightColor: Color): Color =
+    if (LocalPomodoroughDarkTheme.current) Color.White else lightColor
+
 private data class PhasePalette(
     val container: Color,
     val accent: Color,
     val onContainer: Color = Ink,
 )
 
+@Composable
 private fun phasePalette(phase: String): PhasePalette = when (phase) {
     TimerPhase.ShortBreak, TimerPhase.LongBreak -> PhasePalette(container = Lavender, accent = DangerAccent)
-    else -> PhasePalette(container = Butter, accent = DangerAccent)
+    else -> PhasePalette(container = MaterialTheme.colorScheme.tertiaryContainer, accent = DangerAccent)
 }
 
 private fun syncLabel(state: AppState): String {
@@ -2307,10 +2451,11 @@ private fun resolutionWarning(strategy: BootstrapStrategy): String = when (strat
         "Local and remote operations will be combined. Conflicting operations may be ignored or rejected, and errors are possible."
 }
 
+@Composable
 private fun syncColor(status: SyncStatus): Color = when (status) {
     SyncStatus.Synced, SyncStatus.Offline -> Lavender
-    SyncStatus.Conflict, SyncStatus.Retrying -> Butter
-    SyncStatus.Syncing, SyncStatus.Queued, SyncStatus.Checking -> Butter
+    SyncStatus.Conflict, SyncStatus.Retrying -> MaterialTheme.colorScheme.tertiaryContainer
+    SyncStatus.Syncing, SyncStatus.Queued, SyncStatus.Checking -> MaterialTheme.colorScheme.tertiaryContainer
 }
 
 private fun timerInstruction(status: String): String = when (status) {

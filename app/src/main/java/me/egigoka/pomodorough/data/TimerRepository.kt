@@ -56,6 +56,8 @@ import me.egigoka.pomodorough.domain.SettingsReducer
 import me.egigoka.pomodorough.domain.TaskReducer
 import me.egigoka.pomodorough.domain.TimerReducer
 import me.egigoka.pomodorough.timer.TimerAlarmScheduler
+import me.egigoka.pomodorough.timer.SystemTimerCompletionNotifier
+import me.egigoka.pomodorough.timer.shouldStopCompletionAlert
 import okhttp3.Response
 import okhttp3.sse.EventSource
 import okhttp3.sse.EventSourceListener
@@ -177,6 +179,7 @@ class TimerRepository(
     private val bootId: () -> String? = ::readBootId,
     private val uuidEntropy: () -> ByteArray = UuidV7::secureEntropy,
     private val initialSyncRetryDelayMs: Long = 1_000L,
+    private val remoteSyncIntervalMs: Long = 15_000L,
     private val replication: IrohReplicationController? = null,
     workspaceCoordinator: LocalWorkspaceCoordinator =
         (replication as? me.egigoka.pomodorough.data.iroh.IrohReplicationRepository)
@@ -240,7 +243,19 @@ class TimerRepository(
     override val state: StateFlow<AppState> = _state.asStateFlow()
 
     init {
+        require(remoteSyncIntervalMs > 0) { "Remote sync interval must be positive" }
         scope.launch { syncLoop() }
+        scope.launch {
+            while (isActive) {
+                delay(remoteSyncIntervalMs)
+                if (foreground && online && authStatus == AuthStatus.SignedIn &&
+                    replicationMode() == ReplicationMode.CENTRALIZED &&
+                    historyResolution == null && accountSwitch == null
+                ) {
+                    requestSync(force = true)
+                }
+            }
+        }
         replication?.let { controller ->
             scope.launch {
                 controller.state.collectLatest { next ->
@@ -1822,13 +1837,15 @@ class TimerRepository(
             val dependencies = mutableMapOf<String, String>()
             dependencyForTimer(current.id)?.let { dependencies[finish.id] = it }
             val nextPhase = if (current.phase == TimerPhase.Focus) {
-                val completedFocusCount = TimerReducer.replay(
+                val projected = TimerReducer.replay(
                     canonicalTimer,
                     canonicalHistory,
                     pending + finish,
-                ).history.count {
-                    it.status == TimerStatus.Completed && it.phase == TimerPhase.Focus
-                }
+                )
+                val completedFocusCount = TimerReducer.completedFocusCountForDay(
+                    projected.history,
+                    Instant.ofEpochMilli(physicalNowMs),
+                )
                 nextBreakPhase(completedFocusCount)
             } else {
                 TimerPhase.Focus
@@ -2052,9 +2069,13 @@ class TimerRepository(
                 if (!accepted && source != null) discardedSourceTimerIds += source.timerId
                 return@forEach
             }
+            val acceptedSource = source ?: return@forEach
 
-            val completedFocusTimerIds = completedFocusTimerIds(canonicalResponse)
-            completedFocusTimerIds += source.timerId
+            val completedFocusTimerIds = completedFocusTimerIds(
+                canonicalResponse,
+                completionReference(canonicalResponse, acceptedSource),
+            )
+            completedFocusTimerIds += acceptedSource.timerId
             val phase = nextBreakPhase(completedFocusTimerIds.size)
             val durationMs = nextSettings.durationMsFor(phase)
             val generatedBreakCompleted = projection.history.any {
@@ -2125,12 +2146,18 @@ class TimerRepository(
                 }
                 when {
                     canonicallyCompleted && generatedStart != null -> {
-                        val completed = completedFocusTimerIds(canonicalResponse)
+                        val completed = completedFocusTimerIds(
+                            canonicalResponse,
+                            completionReference(canonicalResponse, finish),
+                        )
                         completed += finish.timerId
                         nextBreakPhase(completed.size)
                     }
                     canonicallyCompleted && finish.phase == TimerPhase.Focus -> {
-                        val completed = completedFocusTimerIds(canonicalResponse)
+                        val completed = completedFocusTimerIds(
+                            canonicalResponse,
+                            completionReference(canonicalResponse, finish),
+                        )
                         completed += finish.timerId
                         nextBreakPhase(completed.size)
                     }
@@ -2142,14 +2169,38 @@ class TimerRepository(
             }
     }
 
-    private fun completedFocusTimerIds(response: SyncResponse): MutableSet<String> =
+    private fun completionReference(response: SyncResponse, source: TimerCommand): Instant {
+        val sourceTimestamp = response.history.firstOrNull {
+            it.timerId == source.timerId &&
+                it.status == TimerStatus.Completed &&
+                (it.commandId == source.id || it.commandId == null)
+        }?.let { it.completedAt ?: it.endedAt }
+            ?: response.canonicalTimer?.takeIf {
+                it.id == source.timerId && it.status == TimerStatus.Completed
+            }?.anchorAt
+            ?: source.physicalOccurredAt
+            ?: source.occurredAt
+        return runCatching { Instant.parse(sourceTimestamp) }
+            .getOrElse { Instant.parse(source.occurredAt) }
+    }
+
+    private fun completedFocusTimerIds(
+        response: SyncResponse,
+        reference: Instant,
+    ): MutableSet<String> =
         response.history.asSequence()
-            .filter { it.phase == TimerPhase.Focus && it.status == TimerStatus.Completed }
+            .filter {
+                it.phase == TimerPhase.Focus &&
+                    it.status == TimerStatus.Completed &&
+                    TimerReducer.occursOnLocalDay(it.completedAt ?: it.endedAt, reference)
+            }
             .map(HistoryItem::timerId)
             .toMutableSet()
             .also { completed ->
                 response.canonicalTimer?.takeIf {
-                    it.phase == TimerPhase.Focus && it.status == TimerStatus.Completed
+                    it.phase == TimerPhase.Focus &&
+                        it.status == TimerStatus.Completed &&
+                        TimerReducer.occursOnLocalDay(it.anchorAt, reference)
                 }?.let { completed += it.id }
             }
 
@@ -2705,7 +2756,11 @@ class TimerRepository(
         pending.filter { it.id !in commandDependencies }
 
     private fun rebuildProjections() {
+        val previousTimerID = projection.timer?.id
         projection = TimerReducer.replay(canonicalTimer, canonicalHistory, pending)
+        if (shouldStopCompletionAlert(previousTimerID, projection.timer)) {
+            SystemTimerCompletionNotifier.cancel(appContext)
+        }
         tasks = TaskReducer.replay(canonicalTasks, pendingTaskOperations)
         val pendingUpserts = pendingTaskOperations.mapNotNull { operation ->
             operation.title

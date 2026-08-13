@@ -179,6 +179,7 @@ internal fun testRepository(
     bootId: () -> String? = { "test-boot" },
     uuidEntropy: () -> ByteArray = me.egigoka.pomodorough.data.UuidV7::secureEntropy,
     initialSyncRetryDelayMs: Long = 1_000L,
+    remoteSyncIntervalMs: Long = 15_000L,
 ) = TimerRepository(
     context = context,
     dao = dao,
@@ -191,6 +192,7 @@ internal fun testRepository(
     bootId = bootId,
     uuidEntropy = uuidEntropy,
     initialSyncRetryDelayMs = initialSyncRetryDelayMs,
+    remoteSyncIntervalMs = remoteSyncIntervalMs,
 )
 
 internal fun testState(
