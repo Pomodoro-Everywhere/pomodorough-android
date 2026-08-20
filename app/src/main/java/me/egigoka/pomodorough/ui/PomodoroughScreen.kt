@@ -495,12 +495,24 @@ private fun TimerScreen(
                             color = MaterialTheme.colorScheme.surfaceVariant,
                             shape = MaterialTheme.shapes.large,
                         ) {
-                            Text(
-                                "Add a task to give the next focus session a destination.",
-                                modifier = Modifier.padding(22.dp),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                style = MaterialTheme.typography.bodyLarge,
-                            )
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(22.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                            ) {
+                                Text(
+                                    "No tasks yet",
+                                    style = MaterialTheme.typography.titleLarge,
+                                    textAlign = TextAlign.Center,
+                                )
+                                Text(
+                                    "Add a task, then assign it before starting focus.",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    textAlign = TextAlign.Center,
+                                )
+                            }
                         }
                     }
                 } else {
@@ -544,12 +556,24 @@ private fun TimerScreen(
                             color = MaterialTheme.colorScheme.surfaceVariant,
                             shape = MaterialTheme.shapes.large,
                         ) {
-                            Text(
-                                "Your first completed or cancelled session will land here.",
-                                modifier = Modifier.padding(22.dp),
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(22.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                            ) {
+                                Text(
+                                    "No arrivals yet",
+                                    style = MaterialTheme.typography.titleLarge,
+                                    textAlign = TextAlign.Center,
+                                )
+                                Text(
+                                    "Your first run appears here.",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center,
+                                )
+                            }
                         }
                     }
                 } else {
@@ -591,11 +615,11 @@ private fun TimerScreen(
             shape = MaterialTheme.shapes.extraLarge,
             containerColor = MaterialTheme.colorScheme.surface,
             icon = { BrandOrb(42.dp) },
-            title = { Text("Log out on this device?") },
+            title = { Text("Sign out of Pomodorough?") },
             text = {
                 Text(
                     if (state.pendingCount > 0) {
-                        "${state.pendingCount} action${if (state.pendingCount == 1) " is" else "s are"} still waiting to sync. Logging out discards ${if (state.pendingCount == 1) "it" else "them"}."
+                        "${state.pendingCount} action${if (state.pendingCount == 1) " is" else "s are"} still waiting to sync. Signing out discards ${if (state.pendingCount == 1) "it" else "them"}."
                     } else {
                         "Local account data will be removed. Your synced history stays on your account."
                     },
@@ -609,7 +633,7 @@ private fun TimerScreen(
                     },
                 ) {
                     Text(
-                        "Log out",
+                        "Sign out",
                         color = darkModeTextColor(MaterialTheme.colorScheme.error),
                         fontWeight = FontWeight.Bold,
                     )
@@ -684,7 +708,7 @@ private fun TimerScreen(
                         resolution.submitting -> "Applying history choice"
                         resolution.pendingStrategy != null -> "Retry history choice"
                         selected != null -> "Confirm ${resolutionLabel(selected)}"
-                        else -> "Choose your history"
+                        else -> "Choose synchronized state"
                     },
                 )
             },
@@ -939,7 +963,7 @@ private fun AppHeader(state: AppState, onSignIn: () -> Unit, onLogout: () -> Uni
                 BrandMark(compact = true)
                 when (state.authStatus) {
                     AuthStatus.SignedIn -> TextButton(onClick = onLogout) {
-                        Text("Log out", color = darkModeTextColor(Lavender))
+                        Text("Sign out", color = darkModeTextColor(Lavender))
                     }
                     AuthStatus.SigningIn -> TextButton(onClick = {}, enabled = false) {
                         Text("Signing in...", color = darkModeTextColor(Lavender))
@@ -1377,10 +1401,10 @@ private fun TaskBoardHeader(
     val totalTime = summaries.sumOf(TaskDailySummary::timeSpentMs)
     Column(modifier) {
         SectionLabel("TASK BOARD")
-        Text("Focus by destination", style = MaterialTheme.typography.headlineMedium)
+        Text("Task board", style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(6.dp))
         Text(
-            "$totalFinished pomodoros · ${formatTaskDuration(totalTime)} today",
+            "$totalFinished ${if (totalFinished == 1) "pomodoro" else "pomodoros"} · ${formatTaskDuration(totalTime)} today",
             color = darkModeTextColor(MaterialTheme.colorScheme.primary),
             style = MaterialTheme.typography.titleLarge,
         )
@@ -1425,13 +1449,13 @@ private fun TaskColumnLabels(modifier: Modifier = Modifier) {
         Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
             Text("Task", Modifier.weight(2f), style = MaterialTheme.typography.labelMedium)
             Text(
-                "Finished pomodoros today",
+                "Finished",
                 Modifier.weight(1.2f),
                 style = MaterialTheme.typography.labelMedium,
                 textAlign = TextAlign.Center,
             )
             Text(
-                "Time today spent",
+                "Time",
                 Modifier.weight(1.35f),
                 style = MaterialTheme.typography.labelMedium,
                 textAlign = TextAlign.Center,
@@ -1440,7 +1464,7 @@ private fun TaskColumnLabels(modifier: Modifier = Modifier) {
                 "Action",
                 Modifier.weight(0.9f),
                 style = MaterialTheme.typography.labelMedium,
-                textAlign = TextAlign.End,
+                textAlign = TextAlign.Center,
             )
         }
     }
@@ -1607,7 +1631,7 @@ private fun TimerHero(
         }
         Column(Modifier.padding(14.dp)) {
             if (showContextLabel) {
-                SectionLabel("CURRENT TIMER")
+                SectionLabel("CURRENT SERVICE")
                 Spacer(Modifier.height(6.dp))
             }
             TimerOrbit(timer = timer, settings = settings, palette = palette, maxSize = orbitMaxSize)
@@ -2055,11 +2079,11 @@ private fun PatternSection(
 ) {
     val active = timer?.status == TimerStatus.Running || timer?.status == TimerStatus.Paused
     Column(modifier) {
-        SectionLabel("YOUR RHYTHM")
-        Text("Shape your session", style = MaterialTheme.typography.headlineMedium)
+        SectionLabel("ROUTE")
+        Text("Service pattern", style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(6.dp))
         Text(
-            "Choose what comes next, then tune its length.",
+            "Choose a mode and duration",
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodyMedium,
         )
@@ -2103,7 +2127,7 @@ private fun PatternSection(
                 Column(Modifier.weight(1f)) {
                     Text("Auto-start breaks", style = MaterialTheme.typography.titleLarge)
                     Text(
-                        "Short after focus, long every fourth.",
+                        "Short after focus. Long every fourth completed focus.",
                         color = darkModeTextColor(Lavender),
                         style = MaterialTheme.typography.bodyMedium,
                     )
@@ -2221,8 +2245,8 @@ private fun HistoryTitle(count: Int, modifier: Modifier = Modifier) {
         verticalAlignment = Alignment.Bottom,
     ) {
         Column {
-            SectionLabel("COMPLETED SESSIONS")
-            Text("Recent focus", style = MaterialTheme.typography.headlineMedium)
+            SectionLabel("RUN LOG / THIS ACCOUNT")
+            Text("Recent arrivals", style = MaterialTheme.typography.headlineMedium)
         }
         Surface(
             color = Violet,
@@ -2444,11 +2468,11 @@ private fun resolutionLabel(strategy: BootstrapStrategy): String = when (strateg
 
 private fun resolutionWarning(strategy: BootstrapStrategy): String = when (strategy) {
     BootstrapStrategy.ReplaceRemote ->
-        "Remote account history will be replaced by this device's local history. This cannot be undone."
+        "Account timer, history, tasks, settings, and queued changes will be replaced by this device's data."
     BootstrapStrategy.KeepRemote ->
-        "Local history and unsynced operations will be removed, then remote account history will be installed. This cannot be undone."
+        "This device's timer, history, tasks, settings, and queued changes will be replaced by account data."
     BootstrapStrategy.Merge ->
-        "Local and remote operations will be combined. Conflicting operations may be ignored or rejected, and errors are possible."
+        "Queued local changes will be merged into account data. Conflicts or rejected changes are possible."
 }
 
 @Composable

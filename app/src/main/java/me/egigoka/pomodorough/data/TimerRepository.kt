@@ -637,7 +637,7 @@ class TimerRepository(
                 publish()
             }
         } catch (error: Exception) {
-            notice = error.message ?: "Logout failed. Local timer data was kept."
+            notice = error.message ?: "Sign out failed. Local timer data was kept."
             publish()
         }
     }

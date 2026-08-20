@@ -59,16 +59,16 @@ class PomodoroughScreenTest {
 
         composeRule.onNodeWithText("Keep Local").performClick()
         composeRule.onNodeWithText(
-            "Remote account history will be replaced by this device's local history. This cannot be undone.",
+            "Account timer, history, tasks, settings, and queued changes will be replaced by this device's data.",
         ).assertExists()
         composeRule.onNodeWithContentDescription("Cancel history choice").performClick()
 
         assertNull(resolved)
-        composeRule.onNodeWithText("Choose your history").assertExists()
+        composeRule.onNodeWithText("Choose synchronized state").assertExists()
 
         composeRule.onNodeWithText("Keep Both").performClick()
         composeRule.onNodeWithText(
-            "Local and remote operations will be combined. Conflicting operations may be ignored or rejected, and errors are possible.",
+            "Queued local changes will be merged into account data. Conflicts or rejected changes are possible.",
         ).assertExists()
         composeRule.onNode(hasText("Confirm Keep Both") and hasClickAction()).performClick()
 
@@ -92,7 +92,7 @@ class PomodoroughScreenTest {
         composeRule.onNodeWithText("Local only").assertExists()
         composeRule.onNodeWithText("Local clock · sign in to sync").assertDoesNotExist()
         composeRule.onNode(hasText("Arrivals") or hasContentDescription("Arrivals")).performClick()
-        composeRule.onNodeWithText("Recent focus").assertExists()
+        composeRule.onNodeWithText("Recent arrivals").assertExists()
         composeRule.onNodeWithText("Focus · queued").assertDoesNotExist()
         composeRule.onNodeWithContentDescription(
             "Focus, completed",
