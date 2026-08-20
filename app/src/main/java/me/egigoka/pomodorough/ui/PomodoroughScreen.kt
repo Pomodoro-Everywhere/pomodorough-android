@@ -1579,7 +1579,7 @@ private fun TimerHero(
     modifier: Modifier = Modifier,
 ) {
     val status = timer?.status ?: "idle"
-    val phase = timer?.phase ?: settings.selectedPhase
+    val phase = displayPhase(timer, settings)
     val showContextLabel = LocalConfiguration.current.fontScale < 1.3f
     val active = status == TimerStatus.Running || status == TimerStatus.Paused
     val clearable = timer != null && !active
@@ -1828,9 +1828,13 @@ private fun LandscapeTimerReadout(
             delay(250)
         }
     }
-    val phase = timer?.phase ?: settings.selectedPhase
-    val duration = timer?.plannedDurationMs ?: settings.durationMsFor(phase)
-    val elapsed = if (timer == null) 0 else TimerReducer.elapsedAt(timer, now)
+    val phase = displayPhase(timer, settings)
+    val duration = displayPlannedDurationMs(timer, settings)
+    val elapsed = if (timer == null || timer.status == TimerStatus.Completed) {
+        0
+    } else {
+        TimerReducer.elapsedAt(timer, now)
+    }
     val remaining = (duration - elapsed).coerceAtLeast(0)
     val totalSeconds = ceil(remaining / 1000.0).toLong()
     val minutes = totalSeconds / 60
@@ -1971,9 +1975,13 @@ private fun TimerOrbit(
             delay(250)
         }
     }
-    val phase = timer?.phase ?: settings.selectedPhase
-    val duration = timer?.plannedDurationMs ?: settings.durationMsFor(phase)
-    val elapsed = if (timer == null) 0 else TimerReducer.elapsedAt(timer, now)
+    val phase = displayPhase(timer, settings)
+    val duration = displayPlannedDurationMs(timer, settings)
+    val elapsed = if (timer == null || timer.status == TimerStatus.Completed) {
+        0
+    } else {
+        TimerReducer.elapsedAt(timer, now)
+    }
     val remaining = (duration - elapsed).coerceAtLeast(0)
     val totalSeconds = ceil(remaining / 1000.0).toLong()
     val minutes = totalSeconds / 60
@@ -2460,6 +2468,22 @@ private fun syncLabel(state: AppState): String {
     }
 }
 
+internal fun displayPhase(timer: CanonicalTimer?, settings: TimerSettings): String =
+    if (timer?.status == TimerStatus.Completed) {
+        settings.selectedPhase
+    } else {
+        timer?.phase ?: settings.selectedPhase
+    }
+
+internal fun displayPlannedDurationMs(timer: CanonicalTimer?, settings: TimerSettings): Long {
+    val phase = displayPhase(timer, settings)
+    return if (timer == null || timer.status == TimerStatus.Completed) {
+        settings.durationMsFor(phase)
+    } else {
+        timer.plannedDurationMs
+    }
+}
+
 private fun resolutionLabel(strategy: BootstrapStrategy): String = when (strategy) {
     BootstrapStrategy.ReplaceRemote -> "Keep Local"
     BootstrapStrategy.KeepRemote -> "Keep Remote"
@@ -2468,9 +2492,9 @@ private fun resolutionLabel(strategy: BootstrapStrategy): String = when (strateg
 
 private fun resolutionWarning(strategy: BootstrapStrategy): String = when (strategy) {
     BootstrapStrategy.ReplaceRemote ->
-        "Account timer, history, tasks, settings, and queued changes will be replaced by this device's data."
+        "Account timer, history, tasks, settings, and queued changes will be replaced by this device's data. This cannot be undone."
     BootstrapStrategy.KeepRemote ->
-        "This device's timer, history, tasks, settings, and queued changes will be replaced by account data."
+        "This device's timer, history, tasks, settings, and queued changes will be replaced by account data. This cannot be undone."
     BootstrapStrategy.Merge ->
         "Queued local changes will be merged into account data. Conflicts or rejected changes are possible."
 }

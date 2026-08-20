@@ -405,7 +405,7 @@ class PomodoroughScreenTest {
 
         composeRule.onNodeWithText("Review Keep Remote").performClick()
         composeRule.onNodeWithText(
-            "Local history and unsynced operations will be removed, then remote account history will be installed. This cannot be undone.",
+            "This device's timer, history, tasks, settings, and queued changes will be replaced by account data. This cannot be undone.",
         ).assertExists()
         composeRule.onNode(hasText("Confirm Keep Remote") and hasClickAction()).performClick()
 

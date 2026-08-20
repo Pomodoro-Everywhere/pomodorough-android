@@ -786,12 +786,10 @@ class TimerRepository(
                 commands.associate { it.id to source }
             }.orEmpty()
             val nextProjection = TimerReducer.replay(projection.timer, projection.history, commands)
-            val completedAtDeadline = current.status == TimerStatus.Running &&
-                TimerReducer.elapsedAt(current, physicalNowMs) >= current.plannedDurationMs &&
-                nextProjection.history.any {
-                    it.timerId == current.id && it.status == TimerStatus.Completed
-                }
-            val nextPhase = if (completedAtDeadline) {
+            val completionApplied = nextProjection.history.any {
+                it.timerId == current.id && it.status == TimerStatus.Completed
+            }
+            val nextPhase = if (completionApplied) {
                 if (current.phase == TimerPhase.Focus) {
                     nextBreakPhase(
                         nextProjection.history
