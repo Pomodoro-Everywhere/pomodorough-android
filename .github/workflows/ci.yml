@@ -40,7 +40,7 @@ jobs:
           python3 scripts/check_docs.py
           python3 scripts/check_protocol_fixture.py
           python3 scripts/check_workflow_pins.py
-          python3 -m unittest scripts/test_check_localization.py -v
+          python3 -m unittest scripts/test_check_localization.py scripts/test_ci_workflow.py -v
           python3 scripts/check_localization.py
 
       - name: Set up JDK
@@ -135,7 +135,7 @@ jobs:
           python3 scripts/check_docs.py
           python3 scripts/check_protocol_fixture.py
           python3 scripts/check_workflow_pins.py
-          python3 -m unittest scripts/test_check_localization.py -v
+          python3 -m unittest scripts/test_check_localization.py scripts/test_ci_workflow.py -v
           python3 scripts/check_localization.py
 
       - name: Set up JDK
@@ -218,14 +218,13 @@ jobs:
           profile: pixel_6
           disable-animations: true
           script: |
-            set -euo pipefail
-            shopt -s nullglob
-            release_apks=(dist/*-release-unsigned.apk)
-            if (( ${#release_apks[@]} != 1 )); then
+            set -eu
+            set -- dist/*-release-unsigned.apk
+            if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
               echo "Expected exactly one unsigned release APK" >&2
               exit 1
             fi
-            unsigned_apk="${release_apks[0]}"
+            unsigned_apk="$1"
             smoke_apk="$RUNNER_TEMP/pomodorough-release-smoke.apk"
             smoke_keystore="$RUNNER_TEMP/pomodorough-release-smoke.jks"
             cp "$unsigned_apk" "$smoke_apk"
@@ -239,7 +238,7 @@ jobs:
             adb install "$smoke_apk"
             launch_output="$(adb shell am start -W -n me.egigoka.pomodorough/.MainActivity)"
             printf '%s\n' "$launch_output"
-            grep -Fq 'Status: ok' <<< "$launch_output"
+            printf '%s\n' "$launch_output" | grep -Fq 'Status: ok'
 
   dependency-review:
     name: Dependency review
