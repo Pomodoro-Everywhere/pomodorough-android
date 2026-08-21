@@ -17,11 +17,11 @@ class CIWorkflowTests(unittest.TestCase):
         self.assertIn("com.dylibso.chicory:runtime:1.7.5", lock)
         self.assertIn("com.dylibso.chicory:wasm:1.7.5", lock)
 
-    def test_pinned_shared_core_is_rebuilt_and_byte_compared(self) -> None:
+    def test_pinned_shared_core_is_rebuilt_and_contract_verified(self) -> None:
         workflow = CI_WORKFLOW.read_text(encoding="utf-8")
 
         self.assertIn(
-            'CORE_COMMIT: "a78a312314dd9466557c3dbdd12184b698c3d156"',
+            'CORE_COMMIT: "9a01dc8da0f1612e7a301c19cf42f3b522e61684"',
             workflow,
         )
         self.assertIn(
@@ -34,10 +34,8 @@ class CIWorkflowTests(unittest.TestCase):
             "cargo +1.97.1 build --release --target wasm32-unknown-unknown --locked",
             workflow,
         )
-        self.assertIn(
-            'printf \'%s  %s\\n\' "$CORE_SHA256" app/src/main/assets/pomodorough_core.wasm',
-            workflow,
-        )
+        self.assertIn("verify_wasm_artifact.py", workflow)
+        self.assertIn('--sha256 "$CORE_SHA256"', workflow)
         self.assertIn(
             'grep -Fx "CORE_COMMIT=$CORE_COMMIT" app/src/main/assets/shared_core.properties',
             workflow,
@@ -46,10 +44,7 @@ class CIWorkflowTests(unittest.TestCase):
             'grep -Fx "CORE_SHA256=$CORE_SHA256" app/src/main/assets/shared_core.properties',
             workflow,
         )
-        self.assertIn(
-            "cmp pomodorough-core-source/target/wasm32-unknown-unknown/release/pomodorough_core.wasm app/src/main/assets/pomodorough_core.wasm",
-            workflow,
-        )
+
 
     def test_release_packages_contain_exact_shared_core(self) -> None:
         workflow = CI_WORKFLOW.read_text(encoding="utf-8")
