@@ -24,6 +24,7 @@ class SharedCore private constructor(
     private val instance: Instance,
 ) {
     private val lock = Any()
+    private var unusableCause: Throwable? = null
     private val memory = instance.memory()
     private val allocate = requireExport(
         name = "pomodorough_alloc",
@@ -43,6 +44,9 @@ class SharedCore private constructor(
 
     /** Dispatches UTF-8 JSON and returns successful envelope value. */
     fun dispatch(operation: String, inputJson: String): JsonElement = synchronized(lock) {
+        unusableCause?.let { cause ->
+            throw SharedCoreException.Abi("shared-core instance is unusable after cleanup failure", cause)
+        }
         val operationBytes = operation.toByteArray(UTF_8)
         val inputBytes = inputJson.toByteArray(UTF_8)
         require(operationBytes.isNotEmpty()) { "shared-core operation must not be empty" }
@@ -93,6 +97,7 @@ class SharedCore private constructor(
             try {
                 release(pointer, bytes.size.toLong())
             } catch (cleanup: Throwable) {
+                unusableCause = cleanup
                 cause.addSuppressed(cleanup)
             }
             throw cause
@@ -113,6 +118,7 @@ class SharedCore private constructor(
             try {
                 release(pointer, length)
             } catch (cleanup: Throwable) {
+                unusableCause = cleanup
                 if (failure == null) {
                     failure = cleanup
                 } else {

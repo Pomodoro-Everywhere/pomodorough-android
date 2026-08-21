@@ -8,7 +8,15 @@ CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 SMOKE_SCRIPT = ROOT / ".github" / "scripts" / "smoke-packaged-release.sh"
 
 
+DEPENDENCY_LOCK = ROOT / "app" / "gradle.lockfile"
+
+
 class CIWorkflowTests(unittest.TestCase):
+    def test_chicory_dependencies_are_locked(self) -> None:
+        lock = DEPENDENCY_LOCK.read_text(encoding="utf-8")
+        self.assertIn("com.dylibso.chicory:runtime:1.7.5", lock)
+        self.assertIn("com.dylibso.chicory:wasm:1.7.5", lock)
+
     def test_pinned_shared_core_is_rebuilt_and_byte_compared(self) -> None:
         workflow = CI_WORKFLOW.read_text(encoding="utf-8")
 
@@ -42,6 +50,13 @@ class CIWorkflowTests(unittest.TestCase):
             "cmp pomodorough-core-source/target/wasm32-unknown-unknown/release/pomodorough_core.wasm app/src/main/assets/pomodorough_core.wasm",
             workflow,
         )
+
+    def test_release_packages_contain_exact_shared_core(self) -> None:
+        workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("Verify shared core in unsigned release APK", workflow)
+        self.assertIn("unzip -p \"$release_apk\" assets/pomodorough_core.wasm", workflow)
+        self.assertIn("unzip -p \"$release_aab\" base/assets/pomodorough_core.wasm", workflow)
+        self.assertIn('test "$packaged_core_sha" = "$CORE_SHA256"', workflow)
 
     def test_emulator_runner_invokes_checked_in_release_smoke_script_once(self) -> None:
         workflow = CI_WORKFLOW.read_text(encoding="utf-8")

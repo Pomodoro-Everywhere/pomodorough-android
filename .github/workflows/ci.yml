@@ -97,6 +97,15 @@ jobs:
         if: ${{ !inputs.upload-release-bundle }}
         run: ./gradlew --no-daemon --stacktrace :app:assembleRelease
 
+      - name: Verify shared core in unsigned release APK
+        if: ${{ !inputs.upload-release-bundle }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_apk="app/build/outputs/apk/release/app-release-unsigned.apk"
+          packaged_core_sha=$(unzip -p "$release_apk" assets/pomodorough_core.wasm | sha256sum | awk '{print $1}')
+          test "$packaged_core_sha" = "$CORE_SHA256"
+
       - name: Build, verify, and package unsigned release artifacts
         if: inputs.upload-release-bundle
         run: |
@@ -119,6 +128,10 @@ jobs:
           release_aab="app/build/outputs/bundle/release/app-release.aab"
           test -f "$release_apk"
           test -f "$release_aab"
+          packaged_core_sha=$(unzip -p "$release_apk" assets/pomodorough_core.wasm | sha256sum | awk '{print $1}')
+          test "$packaged_core_sha" = "$CORE_SHA256"
+          packaged_core_sha=$(unzip -p "$release_aab" base/assets/pomodorough_core.wasm | sha256sum | awk '{print $1}')
+          test "$packaged_core_sha" = "$CORE_SHA256"
           if "$ANDROID_HOME/build-tools/$ANDROID_BUILD_TOOLS_VERSION/apksigner" verify "$release_apk" >/dev/null 2>&1; then
             echo "Release APK unexpectedly contains a production signature" >&2
             exit 1

@@ -64,6 +64,21 @@ class SharedCoreTest {
     }
 
     @Test
+    fun invalidatedInstanceRejectsSubsequentDispatches() {
+        val field = SharedCore::class.java.getDeclaredField("unusableCause").apply {
+            isAccessible = true
+        }
+        field.set(core, IllegalStateException("cleanup failed"))
+
+        try {
+            core.dispatch("core.version", "{}")
+            fail("invalidated shared core must reject reuse")
+        } catch (error: SharedCoreException.Abi) {
+            assertTrue(error.message.orEmpty().contains("unusable after cleanup failure"))
+        }
+    }
+
+    @Test
     fun oneInstanceSafelyServesConcurrentDispatches() {
         val executor = Executors.newFixedThreadPool(4)
         try {
