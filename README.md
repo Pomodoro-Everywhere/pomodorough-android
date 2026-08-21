@@ -32,11 +32,12 @@ Pomodorough client family.
 ## Requirements
 
 - Android Studio with JDK 17 or newer
-- Android SDK Platform 35
-- Android SDK Build Tools 35.0.0
+- Android SDK Platform 36
+- Android SDK Build Tools 36.0.0
 - Android 8.0 (API 26) or newer on the target device
 
-The application compiles against API 35 and currently targets API 34.
+The application compiles against and targets API 36. Android 15 and Android 16
+are included in the required release-device test matrix.
 
 ## Getting started
 
@@ -141,23 +142,38 @@ an emulator or connected device:
 ./gradlew :app:connectedDebugAndroidTest
 ```
 
-Before tagging a release, boot exactly one API 35 emulator or connect one API
-35 device, then run the complete local release gate:
+Before tagging a release, boot exactly one API 36 emulator or connect one API
+36 device, then run the complete local release gate:
 
 ```sh
 bash .github/scripts/run-local-release-gate.sh
 ```
 
-The gate runs unit tests, lint, debug and release builds, then all instrumented
-tests independently at 1.0x and 2.0x font scale. Standard GitHub-hosted runners
-cannot sustain a stable API 35 emulator, so device tests are a required local
-pre-tag step rather than a hosted CI job.
+The local gate runs unit tests, lint, debug and release builds, then all
+instrumented tests independently at 1.0x and 2.0x font scale. Hosted CI also
+runs `connectedDebugAndroidTest` on an API 36 Google APIs emulator. Run the local
+font-scale matrix before tagging so release verification covers both dimensions.
 
 ## Release builds
 
 Release builds enable code shrinking and resource optimization but are unsigned
-by default. Set all four values below through environment variables or private
-Gradle properties in `~/.gradle/gradle.properties` to produce a signed bundle:
+by default. Production-keystore signing is intentionally excluded from the current
+tag workflow. It performs two clean release builds and requires byte-identical
+APK/AAB payloads, publishes clearly named `release-unsigned` artifacts, checks
+that no production signature was introduced, and generates checksums, SBOMs,
+and provenance attestations. Before comparing the bundles, CI normalizes only
+R8's diagnostic `buildTimeNs` metadata field; executable and resource payloads
+are compared unchanged.
+
+The API 36 release-smoke job copies the exact unsigned APK, applies a one-use
+runner-temporary CI test identity, clean-installs it on a fresh emulator, and
+launches `MainActivity`. That ephemeral signed copy and key are never published.
+Published artifacts cannot be installed or sent to Play until an authorized release
+applies the appropriate production/upload signature.
+
+For a future credentialed local build, set all four values below through
+environment variables or private Gradle properties in
+`~/.gradle/gradle.properties`:
 
 ```text
 POMODOROUGH_RELEASE_STORE_FILE=/absolute/path/to/release.jks
@@ -167,22 +183,9 @@ POMODOROUGH_RELEASE_KEY_PASSWORD=...
 ```
 
 Never store signing credentials or keystores in this repository. A partial
-configuration fails during Gradle setup rather than silently producing an
-unsigned release. Tag releases require matching GitHub repository secrets:
-
-```text
-POMODOROUGH_RELEASE_KEYSTORE_BASE64
-POMODOROUGH_RELEASE_STORE_PASSWORD
-POMODOROUGH_RELEASE_KEY_ALIAS
-POMODOROUGH_RELEASE_KEY_PASSWORD
-```
-
-The tag workflow rejects missing or unsigned artifacts and verifies both
-signatures before publishing the GitHub release. Run the local API 35 gate above
-before creating the tag, then clean-install the published APK or a Play-generated
-APK on a clean device.
-
-Verify credentialed artifacts before upload:
+configuration fails during Gradle setup rather than silently choosing an
+unexpected identity. Before any future signed distribution, verify both
+signatures explicitly:
 
 ```sh
 ./gradlew :app:bundleRelease :app:assembleRelease
@@ -192,6 +195,12 @@ apksigner verify --verbose --print-certs app/build/outputs/apk/release/app-relea
 
 Keep Room schema JSON files under `app/schemas/` with every release so migration
 tests can validate upgrade paths.
+
+## Shared experience contract
+
+Navigation, timer-state language, account safety, completion guarantees,
+accessibility, and localization semantics are defined in the
+[cross-client experience contract](https://github.com/Pomodoro-Everywhere/pomodorough-server/blob/master/docs/client-experience-contract.md).
 
 ## Pomodorough projects
 

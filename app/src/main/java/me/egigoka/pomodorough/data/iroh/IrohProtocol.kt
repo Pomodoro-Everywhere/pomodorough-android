@@ -34,6 +34,7 @@ import me.egigoka.pomodorough.data.DurationOperation
 import me.egigoka.pomodorough.data.DurationsMs
 import me.egigoka.pomodorough.data.FocusTask
 import me.egigoka.pomodorough.data.HistoryItem
+import me.egigoka.pomodorough.data.SelectedTaskOperation
 import me.egigoka.pomodorough.data.SyncWireBounds
 import me.egigoka.pomodorough.data.TaskOperation
 import me.egigoka.pomodorough.data.TaskOperationType
@@ -276,6 +277,7 @@ enum class IrohDomain {
     task,
     duration,
     autoStart,
+    selectedTask,
 }
 
 @Serializable
@@ -285,6 +287,7 @@ data class IrohGenesis(
     val tasks: List<FocusTask>,
     val durationsMs: DurationsMs,
     val autoStartBreaks: Boolean,
+    val selectedTaskId: String? = null,
     val hlcWallMs: Long,
     val hlcCounter: Long,
 )
@@ -327,6 +330,7 @@ data class IrohOperationRecord(
             IrohDomain.task -> validateTask(decodeOperation())
             IrohDomain.duration -> validateDuration(decodeOperation())
             IrohDomain.autoStart -> validateAutoStart(decodeAutoStart(), deviceId)
+            IrohDomain.selectedTask -> validateSelectedTask(decodeOperation())
         }
     }
 
@@ -363,6 +367,7 @@ data class IrohOperationRecord(
             )
             val operation = IrohJson.strict.encodeToJsonElement(wireValue).jsonObject.toMutableMap()
             if (wireValue.canonicalTimer == null) operation["canonicalTimer"] = JsonNull
+            if (wireValue.selectedTaskId == null) operation["selectedTaskId"] = JsonNull
             operation["history"] = JsonArray(value.history.map { item ->
                 JsonObject(IrohJson.strict.encodeToJsonElement(item).jsonObject - "pending")
             })
@@ -382,6 +387,8 @@ data class IrohOperationRecord(
                 value.hlcCounter,
             ),
         )
+        fun selectedTask(deviceId: String, value: SelectedTaskOperation) =
+            of(IrohDomain.selectedTask, deviceId, value)
 
         private inline fun <reified T> of(domain: IrohDomain, deviceId: String, operation: T) =
             IrohOperationRecord(domain, deviceId, IrohJson.strict.encodeToJsonElement(operation).jsonObject)
@@ -399,7 +406,10 @@ data class IrohOperationRecord(
             )
             val keys = operationKeys(domain)
             requireExactKeys(record.operation, keys.first, keys.second)
-            requireOmittedNulls(record.operation, keys.second)
+            requireOmittedNulls(
+                record.operation,
+                keys.second - if (domain == IrohDomain.genesis) setOf("selectedTaskId") else emptySet(),
+            )
             if (domain == IrohDomain.genesis) validateGenesisShape(record.operation)
             record.validate()
             return record
@@ -420,6 +430,9 @@ data class IrohOperationRecord(
             require(value.tasks.map(FocusTask::id).toSet().size == value.tasks.size &&
                 value.tasks.all { TaskReducer.taskFromTitle(it.title) == it }
             ) { "Genesis tasks are invalid" }
+            require(value.selectedTaskId?.let(IrohProtocolV1::isIdentifier) ?: true) {
+                "Genesis selected task is invalid"
+            }
             value.canonicalTimer?.let(::validateCanonicalTimer)
             require(value.history.map(HistoryItem::id).toSet().size == value.history.size &&
                 value.history.map(HistoryItem::timerId).toSet().size == value.history.size
@@ -546,11 +559,18 @@ data class IrohOperationRecord(
             SyncWireBounds.requireOperationClock(value.occurredAt, value.hlcWallMs, value.hlcCounter, true)
         }
 
+        private fun validateSelectedTask(value: SelectedTaskOperation) {
+            require(IrohProtocolV1.isIdentifier(value.id) &&
+                (value.taskId?.let(IrohProtocolV1::isIdentifier) ?: true)
+            ) { "Selected-task operation is invalid" }
+            SyncWireBounds.requireOperationClock(value.occurredAt, value.hlcWallMs, value.hlcCounter, false)
+        }
+
         private fun operationKeys(domain: IrohDomain): Pair<Set<String>, Set<String>> = when (domain) {
             IrohDomain.genesis -> setOf(
                 "canonicalTimer", "history", "tasks", "durationsMs", "autoStartBreaks",
                 "hlcWallMs", "hlcCounter",
-            ) to emptySet()
+            ) to setOf("selectedTaskId")
             IrohDomain.timer -> setOf(
                 "id", "deviceSequence", "timerId", "type", "phase", "plannedDurationMs",
                 "occurredAt", "hlcWallMs", "hlcCounter", "observedElapsedMs",
@@ -563,6 +583,9 @@ data class IrohOperationRecord(
             ) to emptySet()
             IrohDomain.autoStart -> setOf(
                 "id", "enabled", "occurredAt", "hlcWallMs", "hlcCounter",
+            ) to emptySet()
+            IrohDomain.selectedTask -> setOf(
+                "id", "taskId", "occurredAt", "hlcWallMs", "hlcCounter",
             ) to emptySet()
         }
 

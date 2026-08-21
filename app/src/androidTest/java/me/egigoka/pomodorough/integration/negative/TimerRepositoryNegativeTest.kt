@@ -12,6 +12,8 @@ import me.egigoka.pomodorough.data.Acknowledgement
 import me.egigoka.pomodorough.data.AuthStatus
 import me.egigoka.pomodorough.data.DurationAcknowledgement
 import me.egigoka.pomodorough.data.DurationsMs
+import me.egigoka.pomodorough.data.SelectedTaskAcknowledgement
+import me.egigoka.pomodorough.data.SelectedTaskOperation
 import me.egigoka.pomodorough.data.SyncResponse
 import me.egigoka.pomodorough.data.SyncStatus
 import me.egigoka.pomodorough.data.TaskAcknowledgement
@@ -25,6 +27,7 @@ import me.egigoka.pomodorough.data.auth.AuthenticationRequired
 import me.egigoka.pomodorough.data.local.LocalStateEntity
 import me.egigoka.pomodorough.data.local.PendingCommandEntity
 import me.egigoka.pomodorough.data.local.PendingDurationOperationEntity
+import me.egigoka.pomodorough.data.local.PendingSelectedTaskOperationEntity
 import me.egigoka.pomodorough.data.local.PendingTaskOperationEntity
 import me.egigoka.pomodorough.data.local.PomodoroughDatabase
 import me.egigoka.pomodorough.integration.TestAuthSession
@@ -234,6 +237,188 @@ class TimerRepositoryNegativeTest {
         assertEquals(1, repository.state.value.pendingCount)
         assertEquals(listOf(command.id), database.timerDao().pendingCommands().map { it.id })
         assertEquals(1, service.syncCalls)
+    }
+
+    @Test
+    fun rejectedSelectedTaskAcknowledgementCannotSilentlyRevertSelection() = runBlocking {
+        val profile = testUser()
+        val task = requireNotNull(TaskReducer.taskFromTitle("Keep selected"))
+        val operation = SelectedTaskOperation(
+            id = "selected-task-rejected",
+            taskId = task.id,
+            occurredAt = "2026-01-01T00:00:00.001Z",
+            hlcWallMs = 1_767_225_600_001,
+            hlcCounter = 0,
+        )
+        database.timerDao().insertState(
+            testState(user = profile).copy(
+                tasksJson = repositoryJson.encodeToString(listOf(task)),
+                knownTasksJson = repositoryJson.encodeToString(listOf(task)),
+                selectedTaskId = task.id,
+            ),
+        )
+        database.timerDao().persistSelectedTaskOperation(
+            PendingSelectedTaskOperationEntity.from(operation),
+            requireNotNull(database.timerDao().localState()),
+        )
+        val service = TestRepositoryService(profile).apply {
+            syncResponse = syncResponse.copy(
+                revision = 1,
+                tasks = listOf(task),
+                selectedTaskId = null,
+                selectedTaskAcknowledgements = listOf(
+                    SelectedTaskAcknowledgement(operation.id, "rejected", "Selected task was deleted"),
+                ),
+                serverHlcWallMs = 1_767_225_600_100,
+            )
+            bootstrapResponse = syncResponse.copy(
+                revision = 0,
+                selectedTaskAcknowledgements = emptyList(),
+            )
+        }
+        val repository = testRepository(
+            context,
+            database.timerDao(),
+            service,
+            TestAuthSession(tokensAvailable = true),
+        )
+
+        repository.initialize()
+        awaitState { service.syncCalls == 1 && repository.state.value.pendingCount == 0 }
+
+        assertNull(repository.state.value.selectedTaskId)
+        assertEquals("Selected task was deleted", repository.state.value.conflict)
+        assertEquals(SyncStatus.Conflict, repository.state.value.syncStatus)
+        assertTrue(database.timerDao().pendingSelectedTaskOperations().isEmpty())
+    }
+
+    @Test
+    fun ignoredSelectedTaskConflictRemainsUntilConcurrentSelectionConverges() = runBlocking {
+        val profile = testUser()
+        val first = requireNotNull(TaskReducer.taskFromTitle("First selection"))
+        val second = requireNotNull(TaskReducer.taskFromTitle("Second selection"))
+        val third = requireNotNull(TaskReducer.taskFromTitle("Third selection"))
+        val tasks = listOf(first, second, third)
+        val initialOperation = SelectedTaskOperation(
+            id = "selected-task-ignored",
+            taskId = first.id,
+            occurredAt = "2026-01-01T00:00:00.001Z",
+            hlcWallMs = 1_767_225_600_001,
+            hlcCounter = 0,
+        )
+        database.timerDao().insertState(
+            testState(user = profile).copy(
+                tasksJson = repositoryJson.encodeToString(tasks),
+                knownTasksJson = repositoryJson.encodeToString(tasks),
+                selectedTaskId = first.id,
+            ),
+        )
+        database.timerDao().persistSelectedTaskOperation(
+            PendingSelectedTaskOperationEntity.from(initialOperation),
+            requireNotNull(database.timerDao().localState()),
+        )
+        val firstStarted = CompletableDeferred<Unit>()
+        val releaseFirst = CompletableDeferred<Unit>()
+        val secondStarted = CompletableDeferred<Unit>()
+        val releaseSecond = CompletableDeferred<Unit>()
+        val thirdStarted = CompletableDeferred<Unit>()
+        val holdThird = CompletableDeferred<Unit>()
+        val service = TestRepositoryService(profile).apply {
+            bootstrapResponse = syncResponse.copy(
+                tasks = tasks,
+                selectedTaskId = null,
+            )
+            syncHandler = { request ->
+                when (syncCalls) {
+                    1 -> {
+                        firstStarted.complete(Unit)
+                        releaseFirst.await()
+                        syncResponse.copy(
+                            revision = 1,
+                            tasks = tasks,
+                            selectedTaskId = null,
+                            selectedTaskAcknowledgements = listOf(
+                                SelectedTaskAcknowledgement(
+                                    request.selectedTaskOperations.single().id,
+                                    "ignored",
+                                    "Selection was superseded",
+                                ),
+                            ),
+                            serverHlcWallMs = 1_767_225_600_100,
+                        )
+                    }
+                    2 -> {
+                        secondStarted.complete(Unit)
+                        releaseSecond.await()
+                        syncResponse.copy(
+                            revision = 2,
+                            tasks = tasks,
+                            selectedTaskId = second.id,
+                            selectedTaskAcknowledgements = listOf(
+                                SelectedTaskAcknowledgement(
+                                    request.selectedTaskOperations.single().id,
+                                    "applied",
+                                    "",
+                                ),
+                            ),
+                            serverHlcWallMs = 1_767_225_600_200,
+                        )
+                    }
+                    else -> {
+                        thirdStarted.complete(Unit)
+                        holdThird.await()
+                        syncResponse.copy(
+                            revision = 3,
+                            tasks = tasks,
+                            selectedTaskId = third.id,
+                            selectedTaskAcknowledgements = listOf(
+                                SelectedTaskAcknowledgement(
+                                    request.selectedTaskOperations.single().id,
+                                    "applied",
+                                    "",
+                                ),
+                            ),
+                            serverHlcWallMs = 1_767_225_600_300,
+                        )
+                    }
+                }
+            }
+        }
+        val repository = testRepository(
+            context,
+            database.timerDao(),
+            service,
+            TestAuthSession(tokensAvailable = true),
+        )
+
+        repository.initialize()
+        firstStarted.await()
+        repository.selectTask(second.id)
+        releaseFirst.complete(Unit)
+        secondStarted.await()
+        awaitState { repository.state.value.conflict == "Selection was superseded" }
+        assertEquals("Selection was superseded", repository.state.value.conflict)
+        assertEquals(1, repository.state.value.pendingCount)
+        assertEquals(second.id, repository.state.value.selectedTaskId)
+
+        repository.selectTask(third.id)
+        releaseSecond.complete(Unit)
+        thirdStarted.await()
+
+        assertEquals("Selection was superseded", repository.state.value.conflict)
+        assertEquals(SyncStatus.Conflict, repository.state.value.syncStatus)
+        assertEquals(1, repository.state.value.pendingCount)
+        assertEquals(third.id, repository.state.value.selectedTaskId)
+        assertEquals(
+            third.id,
+            database.timerDao().pendingSelectedTaskOperations().single().taskId,
+        )
+
+        holdThird.complete(Unit)
+        awaitState {
+            repository.state.value.pendingCount == 0 && repository.state.value.conflict == null
+        }
+        assertEquals(third.id, repository.state.value.selectedTaskId)
     }
 
     @Test

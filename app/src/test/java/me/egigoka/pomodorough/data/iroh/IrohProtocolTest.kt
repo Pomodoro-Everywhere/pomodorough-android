@@ -186,6 +186,7 @@ class IrohProtocolTest {
                 tasks = emptyList(),
                 durationsMs = me.egigoka.pomodorough.data.DurationsMs(),
                 autoStartBreaks = false,
+                selectedTaskId = null,
                 hlcWallMs = 1,
                 hlcCounter = 0,
             ),
@@ -195,6 +196,25 @@ class IrohProtocolTest {
         assertEquals(setOf("type", "commandId", "occurredAt"), intent.keys)
         record.validate()
         assertEquals(record, IrohOperationRecord.fromJson(record.toJson()))
+    }
+
+    @Test
+    fun legacyGenesisWithoutSelectedTaskDecodesAsNullButStillRejectsUnknownFields() {
+        val legacy = kotlinx.serialization.json.Json.parseToJsonElement(
+            """{"domain":"genesis","deviceId":"device-legacy1","operation":{"canonicalTimer":null,"history":[],"tasks":[],"durationsMs":{"focus":1500000,"short_break":300000,"long_break":900000},"autoStartBreaks":false,"hlcWallMs":0,"hlcCounter":0}}""",
+        ).jsonObject
+
+        val decoded = IrohOperationRecord.fromJson(legacy)
+
+        assertEquals(null, decoded.decodeOperation<IrohGenesis>().selectedTaskId)
+        val unknown = kotlinx.serialization.json.JsonObject(
+            legacy + ("operation" to kotlinx.serialization.json.JsonObject(
+                decoded.operation + ("unexpected" to kotlinx.serialization.json.JsonPrimitive(true)),
+            )),
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            IrohOperationRecord.fromJson(unknown)
+        }
     }
 
     @Test

@@ -12,6 +12,8 @@ import me.egigoka.pomodorough.data.DurationOperation
 import me.egigoka.pomodorough.data.BootstrapResolutionRequest
 import me.egigoka.pomodorough.data.BootstrapStrategy
 import me.egigoka.pomodorough.data.SyncRequest
+import me.egigoka.pomodorough.data.SyncResponse
+import me.egigoka.pomodorough.data.SelectedTaskOperation
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -31,13 +33,39 @@ class PomodoroughApiTest {
         api = PomodoroughApi(
             baseUrl = server.url("/api/v1/").toString(),
             client = OkHttpClient(),
-            json = Json { ignoreUnknownKeys = true },
+            json = Json {
+                ignoreUnknownKeys = true
+                explicitNulls = false
+            },
         )
     }
 
     @After
     fun tearDown() {
         server.shutdown()
+    }
+
+    @Test
+    fun canonicalShippingFixtureUsesProductionSyncDecoder() = runTest {
+        val fixture = checkNotNull(javaClass.classLoader?.getResourceAsStream("protocol-fixtures-v1.json"))
+            .bufferedReader()
+            .use { Json.parseToJsonElement(it.readText()).jsonObject }
+        server.enqueue(jsonResponse(fixture.getValue("syncResponse").toString()))
+
+        val response: SyncResponse = api.sync(
+            "access-token",
+            SyncRequest("fixture-decoder", 0, emptyList(), emptyList()),
+        )
+
+        assertEquals(5, response.revision)
+        assertEquals("01a0219e-0800-7002-8000-000000000002", response.canonicalTimer?.id)
+        assertEquals("Ship release", response.tasks.single().title)
+        assertEquals(1, response.acknowledgements.size)
+        assertEquals(1, response.taskAcknowledgements.size)
+        assertEquals(1, response.durationAcknowledgements.size)
+        assertEquals(1, response.autoStartAcknowledgements.size)
+        assertEquals(1, response.selectedTaskAcknowledgements.size)
+        assertEquals(null, response.selectedTaskId)
     }
 
     @Test
@@ -59,6 +87,20 @@ class PomodoroughApiTest {
     }
 
     @Test
+    fun deleteAccountUsesAuthenticatedDeleteAndExactCaseConfirmation() = runTest {
+        server.enqueue(MockResponse().setResponseCode(204))
+
+        api.deleteAccount("access-token", "DELETE")
+        val request = server.takeRequest()
+
+        assertEquals("DELETE", request.method)
+        assertEquals("/api/v1/account", request.path)
+        assertEquals("Bearer access-token", request.getHeader("Authorization"))
+        assertEquals("application/json; charset=utf-8", request.getHeader("Content-Type"))
+        assertEquals("{\"confirmation\":\"DELETE\"}", request.body.readUtf8())
+    }
+
+    @Test
     fun syncSendsBearerTokenAndRequestPayload() = runTest {
         server.enqueue(jsonResponse("""{
             "acknowledgements":[],
@@ -71,6 +113,8 @@ class PomodoroughApiTest {
             "tasks":[],
             "autoStartAcknowledgements":[],
             "autoStartBreaks":false,
+            "selectedTaskAcknowledgements":[],
+            "selectedTaskId":null,
             "serverTime":"2026-01-01T00:00:00Z",
             "serverHlcWallMs":1767225600000,
             "serverHlcCounter":7
@@ -117,6 +161,7 @@ class PomodoroughApiTest {
             taskOperations = emptyList(),
             durationOperations = emptyList(),
             autoStartOperations = emptyList(),
+            selectedTaskOperations = emptyList(),
         )
 
         api.resolveBootstrap("access-token", requestModel)
@@ -135,6 +180,7 @@ class PomodoroughApiTest {
                 "taskOperations",
                 "durationOperations",
                 "autoStartOperations",
+                "selectedTaskOperations",
             ),
             body.keys,
         )
@@ -143,6 +189,81 @@ class PomodoroughApiTest {
         assertTrue(body.getValue("taskOperations").jsonArray.isEmpty())
         assertTrue(body.getValue("durationOperations").jsonArray.isEmpty())
         assertTrue(body.getValue("autoStartOperations").jsonArray.isEmpty())
+        assertTrue(body.getValue("selectedTaskOperations").jsonArray.isEmpty())
+    }
+
+    @Test
+    fun selectedTaskSyncUsesNullableCanonicalWireAndExactAcknowledgements() = runTest {
+        server.enqueue(jsonResponse(canonicalResponse(
+            revision = 8,
+            selectedTaskId = "aaf83054-24b2-8c0e-901f-a974147bfe82",
+            selectedTaskAcknowledgements = """[{"operationId":"selected-task-op-1","outcome":"applied","reason":""}]""",
+        )))
+        val operation = SelectedTaskOperation(
+            id = "selected-task-op-1",
+            taskId = null,
+            occurredAt = "2026-01-01T00:00:00Z",
+            hlcWallMs = 1_767_225_600_000,
+            hlcCounter = 2,
+        )
+
+        val response = api.sync(
+            "access-token",
+            SyncRequest(
+                "device-1",
+                7,
+                emptyList(),
+                emptyList(),
+                selectedTaskOperations = listOf(operation),
+            ),
+        )
+        val body = Json.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject
+        val encoded = body.getValue("selectedTaskOperations").jsonArray.single().jsonObject
+
+        assertEquals(
+            setOf("id", "taskId", "occurredAt", "hlcWallMs", "hlcCounter"),
+            encoded.keys,
+        )
+        assertTrue(encoded.getValue("taskId").toString() == "null")
+        assertEquals(operation.id, response.selectedTaskAcknowledgements.single().operationId)
+        assertEquals("aaf83054-24b2-8c0e-901f-a974147bfe82", response.selectedTaskId)
+    }
+
+    @Test
+    fun bootstrapSelectedTaskOperationsPreserveOmissionVersusPresentEmpty() = runTest {
+        server.enqueue(jsonResponse(canonicalResponse(revision = 13)))
+        api.resolveBootstrap(
+            "access-token",
+            BootstrapResolutionRequest(
+                requestId = "bootstrap-request-omitted",
+                deviceId = "device-1",
+                expectedRevision = 12,
+                strategy = BootstrapStrategy.ReplaceRemote,
+                commands = emptyList(),
+                taskOperations = emptyList(),
+                durationOperations = emptyList(),
+                selectedTaskOperations = null,
+            ),
+        )
+        val omitted = Json.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject
+        assertTrue("selectedTaskOperations" !in omitted)
+
+        server.enqueue(jsonResponse(canonicalResponse(revision = 14)))
+        api.resolveBootstrap(
+            "access-token",
+            BootstrapResolutionRequest(
+                requestId = "bootstrap-request-empty",
+                deviceId = "device-1",
+                expectedRevision = 13,
+                strategy = BootstrapStrategy.ReplaceRemote,
+                commands = emptyList(),
+                taskOperations = emptyList(),
+                durationOperations = emptyList(),
+                selectedTaskOperations = emptyList(),
+            ),
+        )
+        val present = Json.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject
+        assertTrue(present.getValue("selectedTaskOperations").jsonArray.isEmpty())
     }
 
     @Test
@@ -185,6 +306,8 @@ class PomodoroughApiTest {
             "tasks":[],
             "autoStartAcknowledgements":[],
             "autoStartBreaks":false,
+            "selectedTaskAcknowledgements":[],
+            "selectedTaskId":null,
             "serverTime":"2026-01-01T00:00:00Z",
             "serverHlcWallMs":1767225600000,
             "serverHlcCounter":0
@@ -227,6 +350,8 @@ class PomodoroughApiTest {
                 {"operationId":"00000000-0000-4000-8000-000000000002","outcome":"applied","reason":""}
             ],
             "autoStartBreaks":false,
+            "selectedTaskAcknowledgements":[],
+            "selectedTaskId":null,
             "revision":8,
             "canonicalTimer":null,
             "history":[],
@@ -278,6 +403,8 @@ class PomodoroughApiTest {
             "tasks":[],
             "autoStartAcknowledgements":[],
             "autoStartBreaks":false,
+            "selectedTaskAcknowledgements":[],
+            "selectedTaskId":null,
             "serverTime":"2026-01-01T00:00:00Z",
             "serverHlcWallMs":1767225600000,
             "serverHlcCounter":0
@@ -300,6 +427,8 @@ class PomodoroughApiTest {
             "tasks":[],
             "autoStartAcknowledgements":[],
             "autoStartBreaks":false,
+            "selectedTaskAcknowledgements":[],
+            "selectedTaskId":null,
             "serverTime":"2026-01-01T00:00:00Z",
             "serverHlcWallMs":1767225600000,
             "serverHlcCounter":0
@@ -322,6 +451,8 @@ class PomodoroughApiTest {
             "tasks":[],
             "autoStartAcknowledgements":[],
             "autoStartBreaks":false,
+            "selectedTaskAcknowledgements":[],
+            "selectedTaskId":null,
             "serverTime":"2026-01-01T00:00:00Z",
             "serverHlcWallMs":1767225600000,
             "serverHlcCounter":0
@@ -344,6 +475,8 @@ class PomodoroughApiTest {
             "durationsMs":{"focus":1500000,"short_break":300000,"long_break":900000},
             "autoStartAcknowledgements":[],
             "autoStartBreaks":false,
+            "selectedTaskAcknowledgements":[],
+            "selectedTaskId":null,
             "serverTime":"2026-01-01T00:00:00Z",
             "serverHlcWallMs":1767225600000,
             "serverHlcCounter":0
@@ -427,7 +560,11 @@ class PomodoroughApiTest {
         .setHeader("Content-Type", "application/json")
         .setBody(body)
 
-    private fun canonicalResponse(revision: Long) = """{
+    private fun canonicalResponse(
+        revision: Long,
+        selectedTaskId: String? = null,
+        selectedTaskAcknowledgements: String = "[]",
+    ) = """{
         "acknowledgements":[],
         "revision":$revision,
         "canonicalTimer":null,
@@ -438,6 +575,8 @@ class PomodoroughApiTest {
         "tasks":[],
         "autoStartAcknowledgements":[],
         "autoStartBreaks":false,
+        "selectedTaskAcknowledgements":$selectedTaskAcknowledgements,
+        "selectedTaskId":${selectedTaskId?.let { "\"$it\"" } ?: "null"},
         "serverTime":"2026-01-01T00:00:00Z",
         "serverHlcWallMs":1767225600000,
         "serverHlcCounter":0

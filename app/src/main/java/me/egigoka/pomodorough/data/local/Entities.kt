@@ -6,6 +6,7 @@ import androidx.room.Index
 import androidx.room.PrimaryKey
 import me.egigoka.pomodorough.data.AutoStartOperation
 import me.egigoka.pomodorough.data.DurationOperation
+import me.egigoka.pomodorough.data.SelectedTaskOperation
 import me.egigoka.pomodorough.data.TaskOperation
 import me.egigoka.pomodorough.data.TimerCommand
 
@@ -48,6 +49,7 @@ data class PendingBootstrapResolutionEntity(
     val ownerUserId: String,
     val userJson: String,
     val autoStartOperationsJson: String? = null,
+    val selectedTaskOperationsJson: String? = null,
 )
 
 @Entity(
@@ -198,6 +200,27 @@ data class PendingAutoStartOperationEntity(
             occurredAt = operation.occurredAt,
             hlcWallMs = operation.hlcWallMs,
             hlcCounter = operation.hlcCounter,
+        )
+    }
+}
+
+@Entity(tableName = "pending_selected_task_operations")
+data class PendingSelectedTaskOperationEntity(
+    @PrimaryKey val id: String,
+    val taskId: String?,
+    val occurredAt: String,
+    val hlcWallMs: Long,
+    val hlcCounter: Long,
+) {
+    fun toModel() = SelectedTaskOperation(id, taskId, occurredAt, hlcWallMs, hlcCounter)
+
+    companion object {
+        fun from(operation: SelectedTaskOperation) = PendingSelectedTaskOperationEntity(
+            operation.id,
+            operation.taskId,
+            operation.occurredAt,
+            operation.hlcWallMs,
+            operation.hlcCounter,
         )
     }
 }

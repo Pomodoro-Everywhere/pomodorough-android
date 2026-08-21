@@ -289,6 +289,59 @@ class AuthRepositoryTest {
         assertEquals(1, store.clearCalls)
     }
 
+    @Test
+    fun deleteAccountClearsTokensOnlyAfterServerConfirmation() = runTest {
+        val store = FakeTokenStore(freshTokens())
+        val service = FakeService()
+
+        repository(service, store).deleteAccount("DELETE")
+
+        assertEquals(listOf("fresh-access" to "DELETE"), service.deleteAccountRequests)
+        assertNull(store.tokens)
+        assertEquals(1, store.clearCalls)
+    }
+
+    @Test
+    fun deleteAccountFailureRetainsTokensForSafeRetry() = runTest {
+        val original = freshTokens()
+        val store = FakeTokenStore(original)
+        val service = FakeService().apply { deleteAccountFailure = ApiException(500, "unavailable") }
+
+        capture<ApiException> { repository(service, store).deleteAccount("DELETE") }
+
+        assertEquals(original, store.tokens)
+        assertEquals(0, store.clearCalls)
+    }
+
+    @Test
+    fun completedDeletionDoesNotClearTokensFromAConcurrentNewSignIn() = runTest {
+        val accountA = freshTokens()
+        val accountB = freshTokens().copy(
+            accessToken = "account-b-access",
+            refreshToken = "account-b-refresh",
+        )
+        val store = FakeTokenStore(accountA)
+        val deletionStarted = CompletableDeferred<Unit>()
+        val releaseDeletion = CompletableDeferred<Unit>()
+        val service = FakeService().apply {
+            deleteAccountHandler = {
+                deletionStarted.complete(Unit)
+                releaseDeletion.await()
+            }
+            exchangeHandler = { accountB }
+        }
+        val repository = repository(service, store)
+
+        val deletion = async { repository.deleteAccount("DELETE") }
+        deletionStarted.await()
+        repository.signIn(FakeGoogleCredentialProvider("account-b-id-token"), "device-b")
+        releaseDeletion.complete(Unit)
+        deletion.await()
+
+        assertEquals(accountB, store.tokens)
+        assertEquals(0, store.clearCalls)
+    }
+
     private fun repository(service: FakeService, store: FakeTokenStore) = AuthRepository(
         api = service,
         tokenVault = store,
@@ -343,6 +396,9 @@ class AuthRepositoryTest {
         var refreshHandler: suspend (String) -> TokenPair = { error("Unexpected refresh") }
         val logoutTokens = mutableListOf<String>()
         var logoutFailure: Throwable? = null
+        val deleteAccountRequests = mutableListOf<Pair<String, String>>()
+        var deleteAccountFailure: Throwable? = null
+        var deleteAccountHandler: (suspend () -> Unit)? = null
         var challenge = NativeChallenge(
             challenge = "challenge",
             nonce = "nonce",
@@ -362,6 +418,12 @@ class AuthRepositoryTest {
         override suspend fun logout(accessToken: String) {
             logoutTokens += accessToken
             logoutFailure?.let { throw it }
+        }
+
+        override suspend fun deleteAccount(accessToken: String, confirmation: String) {
+            deleteAccountRequests += accessToken to confirmation
+            deleteAccountFailure?.let { throw it }
+            deleteAccountHandler?.invoke()
         }
 
         override suspend fun createChallenge(): NativeChallenge = challenge

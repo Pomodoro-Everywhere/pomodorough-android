@@ -8,6 +8,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import me.egigoka.pomodorough.data.ApiError
 import me.egigoka.pomodorough.data.BootstrapResolutionRequest
+import me.egigoka.pomodorough.data.DeleteAccountRequest
 import me.egigoka.pomodorough.data.MeResponse
 import me.egigoka.pomodorough.data.NativeChallenge
 import me.egigoka.pomodorough.data.NativeExchangeRequest
@@ -50,6 +51,9 @@ interface PomodoroughService {
     ): SyncResponse
     suspend fun sync(accessToken: String, request: SyncRequest): SyncResponse
     suspend fun logout(accessToken: String)
+    suspend fun deleteAccount(accessToken: String, confirmation: String) {
+        throw UnsupportedOperationException("Account deletion is not implemented")
+    }
     fun revisionStream(accessToken: String, listener: EventSourceListener): EventSource
 }
 
@@ -85,6 +89,13 @@ class PomodoroughApi(
     override suspend fun logout(accessToken: String) {
         val request = requestBuilder("auth/logout", accessToken)
             .post(ByteArray(0).toRequestBody())
+            .build()
+        execute(request).use(::requireSuccess)
+    }
+
+    override suspend fun deleteAccount(accessToken: String, confirmation: String) {
+        val request = requestBuilder("account", accessToken)
+            .delete(json.encodeToString(DeleteAccountRequest(confirmation)).toRequestBody(jsonMediaType))
             .build()
         execute(request).use(::requireSuccess)
     }

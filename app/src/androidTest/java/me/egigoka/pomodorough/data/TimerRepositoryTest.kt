@@ -94,6 +94,44 @@ class TimerRepositoryTest {
     }
 
     @Test
+    fun successfulAccountDeletionScrubsCorruptedLocalAccountData() = runBlocking {
+        val account = user("account-1")
+        val malformed = state(account, timer("timer-1")).copy(settingsJson = "{malformed")
+        database.timerDao().insertState(malformed)
+        database.timerDao().insertCommand(PendingCommandEntity.from(command("command-1", "timer-1")))
+        database.timerDao().insertTaskOperation(PendingTaskOperationEntity.from(taskOperation()))
+        database.timerDao().upsertDurationOperation(
+            PendingDurationOperationEntity.from(durationOperation()),
+        )
+        val auth = FakeAuthSession()
+        val repository = repository(FakeService(account), auth)
+
+        repository.initialize()
+        assertEquals(
+            "Persisted timer state is corrupted. Sync and local mutations are blocked.",
+            repository.state.value.conflict,
+        )
+
+        repository.deleteAccount("DELETE")
+
+        val stored = requireNotNull(database.timerDao().localState())
+        assertEquals(listOf("DELETE"), auth.deleteAccountConfirmations)
+        assertEquals(1, auth.clearCalls)
+        assertNull(stored.ownerUserId)
+        assertNull(stored.userJson)
+        assertNull(stored.canonicalTimerJson)
+        assertEquals("[]", stored.historyJson)
+        assertEquals("[]", stored.tasksJson)
+        assertEquals("[]", stored.knownTasksJson)
+        assertNull(stored.selectedTaskId)
+        assertTrue(database.timerDao().pendingCommands().isEmpty())
+        assertTrue(database.timerDao().pendingTaskOperations().isEmpty())
+        assertTrue(database.timerDao().pendingDurationOperations().isEmpty())
+        assertEquals(AuthStatus.SignedOut, repository.state.value.authStatus)
+        assertNull(repository.state.value.conflict)
+    }
+
+    @Test
     fun lateSyncResponseCannotRestoreLoggedOutAccount() = runBlocking {
         val account = user("account-1")
         val running = timer("timer-1")
@@ -224,6 +262,8 @@ class TimerRepositoryTest {
 
     private class FakeAuthSession : AuthSession {
         var logoutCalls = 0
+        var clearCalls = 0
+        val deleteAccountConfirmations = mutableListOf<String>()
 
         override suspend fun signIn(
             credentialProvider: GoogleCredentialProvider,
@@ -234,7 +274,12 @@ class TimerRepositoryTest {
         override suspend fun logout() {
             logoutCalls += 1
         }
-        override fun clear() = Unit
+        override suspend fun deleteAccount(confirmation: String) {
+            deleteAccountConfirmations += confirmation
+        }
+        override fun clear() {
+            clearCalls += 1
+        }
     }
 
     private class FakeService(private val profile: User) : PomodoroughService {

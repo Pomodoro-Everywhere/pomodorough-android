@@ -32,15 +32,15 @@ check(releaseSigningValues.none { it.isPresent } || releaseSigningConfigured) {
 
 android {
     namespace = "me.egigoka.pomodorough"
-    compileSdk = 35
-    buildToolsVersion = "35.0.0"
+    compileSdk = 36
+    buildToolsVersion = "36.0.0"
 
     defaultConfig {
         applicationId = "me.egigoka.pomodorough"
         minSdk = 26
-        targetSdk = 34
-        versionCode = 17
-        versionName = "0.2.4"
+        targetSdk = 36
+        versionCode = 18
+        versionName = "0.3.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "API_BASE_URL", "\"${apiBaseUrl.get().trimEnd('/')}\"")
@@ -59,6 +59,9 @@ android {
     }
 
     buildTypes {
+        debug {
+            isPseudoLocalesEnabled = true
+        }
         release {
             if (releaseSigningConfigured) {
                 signingConfig = signingConfigs.getByName("release")

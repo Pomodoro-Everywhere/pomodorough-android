@@ -10,6 +10,7 @@ interface TimerRepositoryContract {
     suspend fun initialize()
     suspend fun signIn(credentialProvider: GoogleCredentialProvider)
     suspend fun logout()
+    suspend fun deleteAccount(confirmation: String)
     fun refresh()
     suspend fun toggleTimer()
     suspend fun finishTimer()
@@ -19,7 +20,7 @@ interface TimerRepositoryContract {
     suspend fun changeDuration(phase: String, delta: Int)
     suspend fun setAutoStart(enabled: Boolean)
     suspend fun selectTask(taskId: String?)
-    suspend fun addTask(title: String)
+    suspend fun addTask(title: String): Boolean
     suspend fun deleteTask(taskId: String)
     suspend fun finishExpiredTimer(): Boolean
     suspend fun resolveHistory(strategy: BootstrapStrategy)

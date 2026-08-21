@@ -8,6 +8,7 @@ import me.egigoka.pomodorough.data.local.PendingAutoStartOperationEntity
 import me.egigoka.pomodorough.data.local.PendingBootstrapResolutionEntity
 import me.egigoka.pomodorough.data.local.PendingCommandEntity
 import me.egigoka.pomodorough.data.local.PendingDurationOperationEntity
+import me.egigoka.pomodorough.data.local.PendingSelectedTaskOperationEntity
 import me.egigoka.pomodorough.data.local.PendingTaskOperationEntity
 
 internal object WorkspaceCodec {
@@ -23,6 +24,7 @@ private data class StoredWorkspace(
     val taskOperations: List<StoredTaskOperation>,
     val durationOperations: List<StoredDurationOperation>,
     val autoStartOperations: List<StoredAutoStartOperation>,
+    val selectedTaskOperations: List<StoredSelectedTaskOperation> = emptyList(),
     val bootstrapResolution: StoredBootstrapResolution?,
 )
 
@@ -101,6 +103,15 @@ private data class StoredAutoStartOperation(
 )
 
 @Serializable
+private data class StoredSelectedTaskOperation(
+    val id: String,
+    val taskId: String?,
+    val occurredAt: String,
+    val hlcWallMs: Long,
+    val hlcCounter: Long,
+)
+
+@Serializable
 private data class StoredBootstrapResolution(
     val id: Int,
     val requestId: String,
@@ -113,6 +124,7 @@ private data class StoredBootstrapResolution(
     val ownerUserId: String,
     val userJson: String,
     val autoStartOperationsJson: String?,
+    val selectedTaskOperationsJson: String? = null,
 )
 
 private fun LocalWorkspaceSnapshot.toStored() = StoredWorkspace(
@@ -141,11 +153,14 @@ private fun LocalWorkspaceSnapshot.toStored() = StoredWorkspace(
     autoStartOperations = autoStartOperations.map { value -> value.run {
         StoredAutoStartOperation(id, deviceId, enabled, occurredAt, hlcWallMs, hlcCounter)
     } },
+    selectedTaskOperations = selectedTaskOperations.map { value -> value.run {
+        StoredSelectedTaskOperation(id, taskId, occurredAt, hlcWallMs, hlcCounter)
+    } },
     bootstrapResolution = bootstrapResolution?.run {
         StoredBootstrapResolution(
             id, requestId, deviceId, expectedRevision, strategy, commandsJson,
             taskOperationsJson, durationOperationsJson, ownerUserId, userJson,
-            autoStartOperationsJson,
+            autoStartOperationsJson, selectedTaskOperationsJson,
         )
     },
 )
@@ -176,11 +191,14 @@ private fun StoredWorkspace.toEntity() = LocalWorkspaceSnapshot(
     autoStartOperations = autoStartOperations.map { value -> value.run {
         PendingAutoStartOperationEntity(id, deviceId, enabled, occurredAt, hlcWallMs, hlcCounter)
     } },
+    selectedTaskOperations = selectedTaskOperations.map { value -> value.run {
+        PendingSelectedTaskOperationEntity(id, taskId, occurredAt, hlcWallMs, hlcCounter)
+    } },
     bootstrapResolution = bootstrapResolution?.run {
         PendingBootstrapResolutionEntity(
             id, requestId, deviceId, expectedRevision, strategy, commandsJson,
             taskOperationsJson, durationOperationsJson, ownerUserId, userJson,
-            autoStartOperationsJson,
+            autoStartOperationsJson, selectedTaskOperationsJson,
         )
     },
 )

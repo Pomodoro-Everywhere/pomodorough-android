@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-expected_api=35
+expected_api=36
 device_count=0
 device_serial=""
 
@@ -25,6 +25,9 @@ if [[ "$actual_api" != "$expected_api" ]]; then
 fi
 
 echo "Running Android release gate on $device_serial (API $actual_api)"
+
+python3 -m unittest scripts/test_check_localization.py -v
+python3 scripts/check_localization.py
 
 ./gradlew --no-daemon --stacktrace \
   :app:testDebugUnitTest \

@@ -30,5 +30,6 @@ data class LocalWorkspaceSnapshot(
     val taskOperations: List<PendingTaskOperationEntity> = emptyList(),
     val durationOperations: List<PendingDurationOperationEntity> = emptyList(),
     val autoStartOperations: List<PendingAutoStartOperationEntity> = emptyList(),
+    val selectedTaskOperations: List<PendingSelectedTaskOperationEntity> = emptyList(),
     val bootstrapResolution: PendingBootstrapResolutionEntity? = null,
 )

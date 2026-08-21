@@ -8,6 +8,7 @@ font_scale="${FONT_SCALE:-1.0}"
 scale_slug="${font_scale//./_}"
 results_dir="app/build/outputs/androidTest-results/direct-font-$scale_slug"
 diagnostics_dir="app/build/reports/androidTests/diagnostics-font-$scale_slug"
+screenshots_dir="app/build/reports/androidTests/screenshots-font-$scale_slug"
 runner_output="$results_dir/instrumentation-output.txt"
 original_font_scale="$(adb shell settings get system font_scale | tr -d '\r')"
 
@@ -84,13 +85,17 @@ adb shell settings put system font_scale "$font_scale"
 test "$(adb shell settings get system font_scale | tr -d '\r')" = "$font_scale"
 rm -rf "$results_dir"
 rm -rf "$diagnostics_dir"
+rm -rf "$screenshots_dir"
 mkdir -p "$results_dir"
+mkdir -p "$screenshots_dir"
 adb logcat -c
 
 adb uninstall me.egigoka.pomodorough.test >/dev/null 2>&1 || true
 adb uninstall me.egigoka.pomodorough >/dev/null 2>&1 || true
 adb install -r "$app_apk"
 adb install -r "$test_apk"
+adb shell am start -W -n me.egigoka.pomodorough/.MainActivity >/dev/null
+adb exec-out screencap -p > "$screenshots_dir/launch.png"
 adb shell pm list instrumentation | grep -F \
   'instrumentation:me.egigoka.pomodorough.test/androidx.test.runner.AndroidJUnitRunner'
 
@@ -100,6 +105,7 @@ adb shell am instrument -w -r \
   | tee "$runner_output"
 runner_status=${PIPESTATUS[0]}
 set -e
+adb exec-out screencap -p > "$screenshots_dir/after-tests.png" || true
 
 announced_tests="$(grep -m 1 '^INSTRUMENTATION_STATUS: numtests=' "$runner_output" \
   | cut -d= -f2 | tr -d '\r')"

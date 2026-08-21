@@ -82,6 +82,8 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalAccessibilityManager
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -114,6 +116,7 @@ import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.sin
 import kotlinx.coroutines.delay
+import me.egigoka.pomodorough.R
 import me.egigoka.pomodorough.data.AppState
 import me.egigoka.pomodorough.data.AuthStatus
 import me.egigoka.pomodorough.data.BootstrapStrategy
@@ -144,7 +147,7 @@ fun PomodoroughScreen(
     onChangeDuration: (String, Int) -> Unit,
     onSetAutoStart: (Boolean) -> Unit,
     onSelectTask: (String?) -> Unit,
-    onAddTask: (String) -> Unit,
+    onAddTask: (String, (Boolean) -> Unit) -> Unit,
     onDeleteTask: (String) -> Unit,
     onResolveHistory: (BootstrapStrategy) -> Unit,
     onRecoverHistoryResolution: () -> Unit,
@@ -160,6 +163,8 @@ fun PomodoroughScreen(
     onSyncIrohNow: () -> Unit,
     onCopyIrohInvite: (String) -> Unit,
     onShareIrohInvite: (String) -> Unit,
+    onDeleteAccount: (String) -> Unit = {},
+    onOpenPrivacy: () -> Unit = {},
 ) {
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         if (!state.ready) {
@@ -194,6 +199,8 @@ fun PomodoroughScreen(
                 onSyncIrohNow = onSyncIrohNow,
                 onCopyIrohInvite = onCopyIrohInvite,
                 onShareIrohInvite = onShareIrohInvite,
+                onDeleteAccount = onDeleteAccount,
+                onOpenPrivacy = onOpenPrivacy,
             )
         }
     }
@@ -217,7 +224,7 @@ private fun LoadingScreen() {
             )
             Spacer(Modifier.height(28.dp))
             Text(
-                "Syncing your clock",
+                stringResource(R.string.syncing_your_clock),
                 color = darkModeTextColor(Cloud),
                 style = MaterialTheme.typography.titleLarge,
             )
@@ -252,13 +259,13 @@ private fun SignInScreen(
             BrandMark()
             Spacer(Modifier.height(30.dp))
             Text(
-                text = "Make time\nfeel yours.",
+                text = stringResource(R.string.make_time_feel_yours),
                 color = darkModeTextColor(Cloud),
                 style = MaterialTheme.typography.headlineLarge,
             )
             Spacer(Modifier.height(10.dp))
             Text(
-                text = "One focused clock, in sync everywhere.",
+                text = stringResource(R.string.one_focused_clock_in_sync_everywhere),
                 color = darkModeTextColor(Lavender),
                 style = MaterialTheme.typography.bodyLarge,
             )
@@ -274,12 +281,12 @@ private fun SignInScreen(
                 ),
             ) {
                 Column(Modifier.padding(24.dp)) {
-                    SectionLabel("YOUR CLOCK, ANYWHERE")
+                    SectionLabel(stringResource(R.string.your_clock_anywhere))
                     Spacer(Modifier.height(10.dp))
-                    Text("Pick up where you left off", style = MaterialTheme.typography.headlineMedium)
+                    Text(stringResource(R.string.pick_up_where_you_left_off), style = MaterialTheme.typography.headlineMedium)
                     Spacer(Modifier.height(10.dp))
                     Text(
-                        "Google sign-in keeps timers and completed sessions shared across your devices. Offline actions wait safely for sync.",
+                        stringResource(R.string.google_sign_in_keeps_timers_and_completed_sessions),
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -302,9 +309,9 @@ private fun SignInScreen(
                                 indicatorColor = Violet,
                             )
                             Spacer(Modifier.width(12.dp))
-                            Text("CONTACTING GOOGLE")
+                            Text(stringResource(R.string.contacting_google))
                         } else {
-                            Text("SIGN IN WITH GOOGLE")
+                            Text(stringResource(R.string.sign_in_with_google))
                         }
                     }
                 }
@@ -332,7 +339,7 @@ private fun TimerScreen(
     onChangeDuration: (String, Int) -> Unit,
     onSetAutoStart: (Boolean) -> Unit,
     onSelectTask: (String?) -> Unit,
-    onAddTask: (String) -> Unit,
+    onAddTask: (String, (Boolean) -> Unit) -> Unit,
     onDeleteTask: (String) -> Unit,
     onResolveHistory: (BootstrapStrategy) -> Unit,
     onRecoverHistoryResolution: () -> Unit,
@@ -348,8 +355,13 @@ private fun TimerScreen(
     onSyncIrohNow: () -> Unit,
     onCopyIrohInvite: (String) -> Unit,
     onShareIrohInvite: (String) -> Unit,
+    onDeleteAccount: (String) -> Unit,
+    onOpenPrivacy: () -> Unit,
 ) {
     var showLogoutDialog by remember { mutableStateOf(false) }
+    var showAccountDialog by remember { mutableStateOf(false) }
+    var showDeleteDialog by remember { mutableStateOf(false) }
+    var deleteConfirmation by remember { mutableStateOf("") }
     var confirmationStrategy by remember(
         state.historyResolution?.requestId,
         state.historyResolution?.pendingStrategy,
@@ -402,7 +414,7 @@ private fun TimerScreen(
                             state = state,
                             mutationsEnabled = mutationsEnabled,
                             onSignIn = onSignIn,
-                            onLogout = { showLogoutDialog = true },
+                            onLogout = { showAccountDialog = true },
                             onToggleTimer = onToggleTimer,
                             onFinishTimer = onFinishTimer,
                             onCancelTimer = onCancelTimer,
@@ -452,13 +464,13 @@ private fun TimerScreen(
             AppHeader(
                 state = state,
                 onSignIn = onSignIn,
-                onLogout = { showLogoutDialog = true },
+                onLogout = { showAccountDialog = true },
             )
         }
         if (state.conflict != null) {
             item {
                 MessageCard(
-                    title = "Changes resolved on another device",
+                    title = stringResource(R.string.changes_resolved_on_another_device),
                     message = state.conflict,
                     containerColor = Lavender,
                     onDismiss = onDismissConflict,
@@ -502,12 +514,12 @@ private fun TimerScreen(
                                 horizontalAlignment = Alignment.CenterHorizontally,
                             ) {
                                 Text(
-                                    "No tasks yet",
+                                    stringResource(R.string.no_tasks_yet),
                                     style = MaterialTheme.typography.titleLarge,
                                     textAlign = TextAlign.Center,
                                 )
                                 Text(
-                                    "Add a task, then assign it before starting focus.",
+                                    stringResource(R.string.add_a_task_then_assign_it_before_starting),
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     style = MaterialTheme.typography.bodyLarge,
                                     textAlign = TextAlign.Center,
@@ -547,6 +559,13 @@ private fun TimerScreen(
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 18.dp),
                     )
                 }
+                item {
+                    CompletedFocusBreakdown(
+                        history = recentHistory,
+                        tasks = state.knownTasks,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    )
+                }
                 if (recentHistory.isEmpty()) {
                     item {
                         Surface(
@@ -563,12 +582,12 @@ private fun TimerScreen(
                                 horizontalAlignment = Alignment.CenterHorizontally,
                             ) {
                                 Text(
-                                    "No arrivals yet",
+                                    stringResource(R.string.no_arrivals_yet),
                                     style = MaterialTheme.typography.titleLarge,
                                     textAlign = TextAlign.Center,
                                 )
                                 Text(
-                                    "Your first run appears here.",
+                                    stringResource(R.string.your_first_run_appears_here),
                                     style = MaterialTheme.typography.bodyLarge,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     textAlign = TextAlign.Center,
@@ -609,19 +628,89 @@ private fun TimerScreen(
         }
     }
 
+    if (showAccountDialog && state.authStatus == AuthStatus.SignedIn) {
+        AlertDialog(
+            onDismissRequest = { showAccountDialog = false },
+            title = { Text(stringResource(R.string.account_sync)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(state.user?.email.orEmpty(), style = MaterialTheme.typography.titleMedium)
+                    Text(stringResource(R.string.cloud_sync_value, syncLabel(state)))
+                    Text(stringResource(R.string.peer_route_value, networkStatusTitle(state.network.status)))
+                    TextButton(onClick = {
+                        showAccountDialog = false
+                        activeTab = MainTab.Network
+                    }, modifier = Modifier.heightIn(min = 48.dp)) { Text(stringResource(R.string.open_network_routes)) }
+                    TextButton(onClick = onOpenPrivacy, modifier = Modifier.heightIn(min = 48.dp)) {
+                        Text(stringResource(R.string.privacy_policy))
+                    }
+                    TextButton(onClick = {
+                        showAccountDialog = false
+                        showLogoutDialog = true
+                    }, modifier = Modifier.heightIn(min = 48.dp)) { Text(stringResource(R.string.sign_out)) }
+                    TextButton(onClick = {
+                        showAccountDialog = false
+                        showDeleteDialog = true
+                    }, modifier = Modifier.heightIn(min = 48.dp)) {
+                        Text(stringResource(R.string.delete_account), color = darkModeTextColor(MaterialTheme.colorScheme.error))
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showAccountDialog = false }) { Text(stringResource(R.string.done)) }
+            },
+        )
+    }
+
+    if (showDeleteDialog && state.authStatus == AuthStatus.SignedIn) {
+        AlertDialog(
+            onDismissRequest = { showDeleteDialog = false },
+            title = { Text(stringResource(R.string.permanently_delete_account)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(stringResource(R.string.this_permanently_deletes_profile_sessions_timers_history_tasks))
+                    Text(stringResource(R.string.type_delete_exactly_to_confirm), fontWeight = FontWeight.Bold)
+                    OutlinedTextField(
+                        value = deleteConfirmation,
+                        onValueChange = { deleteConfirmation = it },
+                        label = { Text(stringResource(R.string.confirmation)) },
+                        singleLine = true,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDeleteDialog = false
+                        onDeleteAccount(deleteConfirmation)
+                        deleteConfirmation = ""
+                    },
+                    enabled = deleteConfirmation == "DELETE",
+                ) { Text(stringResource(R.string.delete_forever), color = darkModeTextColor(MaterialTheme.colorScheme.error)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteDialog = false }) { Text(stringResource(R.string.cancel)) }
+            },
+        )
+    }
+
     if (showLogoutDialog && state.authStatus == AuthStatus.SignedIn) {
         AlertDialog(
             onDismissRequest = { showLogoutDialog = false },
             shape = MaterialTheme.shapes.extraLarge,
             containerColor = MaterialTheme.colorScheme.surface,
             icon = { BrandOrb(42.dp) },
-            title = { Text("Sign out of Pomodorough?") },
+            title = { Text(stringResource(R.string.sign_out_of_pomodorough)) },
             text = {
                 Text(
                     if (state.pendingCount > 0) {
-                        "${state.pendingCount} action${if (state.pendingCount == 1) " is" else "s are"} still waiting to sync. Signing out discards ${if (state.pendingCount == 1) "it" else "them"}."
+                        pluralStringResource(
+                            R.plurals.pending_sign_out_warning,
+                            state.pendingCount,
+                            state.pendingCount,
+                        )
                     } else {
-                        "Local account data will be removed. Your synced history stays on your account."
+                        stringResource(R.string.local_account_data_will_be_removed_your_synced)
                     },
                 )
             },
@@ -633,14 +722,14 @@ private fun TimerScreen(
                     },
                 ) {
                     Text(
-                        "Sign out",
+                        stringResource(R.string.sign_out),
                         color = darkModeTextColor(MaterialTheme.colorScheme.error),
                         fontWeight = FontWeight.Bold,
                     )
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showLogoutDialog = false }) { Text("Stay signed in") }
+                TextButton(onClick = { showLogoutDialog = false }) { Text(stringResource(R.string.stay_signed_in)) }
             },
         )
     }
@@ -650,11 +739,15 @@ private fun TimerScreen(
             onDismissRequest = {},
             shape = MaterialTheme.shapes.extraLarge,
             containerColor = MaterialTheme.colorScheme.surface,
-            title = { Text("Different account detected") },
+            title = { Text(stringResource(R.string.different_account_detected)) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        "Local data belongs to ${accountSwitch.localAccount}, but ${accountSwitch.incomingAccount} is signed in. Switching accounts permanently removes this device's timer, history, tasks, and unsynced operations.",
+                        stringResource(
+                            R.string.account_switch_warning,
+                            accountSwitch.localAccount,
+                            accountSwitch.incomingAccount,
+                        ),
                     )
                     accountSwitch.error?.let {
                         Text(
@@ -671,7 +764,7 @@ private fun TimerScreen(
                     enabled = !accountSwitch.submitting,
                 ) {
                     Text(
-                        "Switch and remove local data",
+                        stringResource(R.string.switch_and_remove_local_data),
                         color = darkModeTextColor(MaterialTheme.colorScheme.error),
                         fontWeight = FontWeight.Bold,
                     )
@@ -681,12 +774,13 @@ private fun TimerScreen(
                 TextButton(
                     onClick = onCancelAccountSwitch,
                     enabled = !accountSwitch.submitting,
-                ) { Text("Keep local data") }
+                ) { Text(stringResource(R.string.keep_local_data)) }
             },
         )
     }
 
     state.historyResolution?.let { resolution ->
+        val cancelHistoryChoiceDescription = stringResource(R.string.cancel_history_choice)
         val selected = resolution.pendingStrategy ?: confirmationStrategy
         val confirmingKeepRemoteRecovery = resolution.corrupted &&
             resolution.recovery == ResolutionRecovery.KeepRemote &&
@@ -702,13 +796,13 @@ private fun TimerScreen(
             title = {
                 Text(
                     when {
-                        confirmingKeepRemoteRecovery -> "Confirm Keep Remote"
-                        resolution.recovery == ResolutionRecovery.KeepRemote -> "Local changes cannot be submitted"
-                        resolution.corrupted -> "Saved history choice is corrupted"
-                        resolution.submitting -> "Applying history choice"
-                        resolution.pendingStrategy != null -> "Retry history choice"
-                        selected != null -> "Confirm ${resolutionLabel(selected)}"
-                        else -> "Choose synchronized state"
+                        confirmingKeepRemoteRecovery -> stringResource(R.string.confirm_keep_remote)
+                        resolution.recovery == ResolutionRecovery.KeepRemote -> stringResource(R.string.local_changes_cannot_be_submitted)
+                        resolution.corrupted -> stringResource(R.string.saved_history_choice_is_corrupted)
+                        resolution.submitting -> stringResource(R.string.applying_history_choice)
+                        resolution.pendingStrategy != null -> stringResource(R.string.retry_history_choice)
+                        selected != null -> stringResource(R.string.confirm_choice, resolutionLabel(selected))
+                        else -> stringResource(R.string.choose_synchronized_state)
                     },
                 )
             },
@@ -718,11 +812,11 @@ private fun TimerScreen(
                         if (confirmingKeepRemoteRecovery) {
                             resolutionWarning(BootstrapStrategy.KeepRemote)
                         } else if (resolution.recovery == ResolutionRecovery.KeepRemote) {
-                            "Local queues exceed the safe request limit or contain invalid saved data. Keep Remote is available, but it will discard those queues only after the server confirms."
+                            stringResource(R.string.local_queues_exceed_the_safe_request_limit_or)
                         } else if (resolution.corrupted) {
-                            "Discard only the corrupted saved request, then fetch account history again. Local timer, history, tasks, settings, and queued operations stay on this device."
+                            stringResource(R.string.discard_only_the_corrupted_saved_request_then_fetch)
                         } else if (selected == null) {
-                            "This device and your account both contain synchronized timer, history, task, or settings data. Choose how to continue before making more changes."
+                            stringResource(R.string.this_device_and_your_account_both_contain_synchronized)
                         } else {
                             resolutionWarning(selected)
                         },
@@ -735,7 +829,7 @@ private fun TimerScreen(
                         )
                     }
                     if (resolution.pendingStrategy != null) {
-                        Text("Retry sends the exact saved request ID and operation payload.")
+                        Text(stringResource(R.string.retry_sends_the_exact_saved_request_id_and))
                     }
                 }
             },
@@ -745,7 +839,7 @@ private fun TimerScreen(
                         ResolutionRecovery.KeepRemote -> TextButton(
                             onClick = { confirmationStrategy = BootstrapStrategy.KeepRemote },
                             enabled = !resolution.submitting,
-                        ) { Text("Review Keep Remote", fontWeight = FontWeight.Bold) }
+                        ) { Text(stringResource(R.string.review_keep_remote), fontWeight = FontWeight.Bold) }
                         ResolutionRecovery.Repreview -> TextButton(
                             onClick = {
                                 if (state.authStatus == AuthStatus.SignedIn) {
@@ -760,10 +854,10 @@ private fun TimerScreen(
                         ) {
                             Text(
                                 when (state.authStatus) {
-                                    AuthStatus.SignedOut -> "Sign in to re-check"
-                                    AuthStatus.SigningIn -> "Signing in..."
-                                    AuthStatus.Loading -> "Checking account..."
-                                    AuthStatus.SignedIn -> "Discard request and re-check"
+                                    AuthStatus.SignedOut -> stringResource(R.string.sign_in_to_re_check)
+                                    AuthStatus.SigningIn -> stringResource(R.string.signing_in)
+                                    AuthStatus.Loading -> stringResource(R.string.checking_account)
+                                    AuthStatus.SignedIn -> stringResource(R.string.discard_request_and_re_check)
                                 },
                                 fontWeight = FontWeight.Bold,
                             )
@@ -773,13 +867,13 @@ private fun TimerScreen(
                 } else if (selected == null) {
                     Column(horizontalAlignment = Alignment.End) {
                         TextButton(onClick = { confirmationStrategy = BootstrapStrategy.ReplaceRemote }) {
-                            Text("Keep Local")
+                            Text(stringResource(R.string.keep_local))
                         }
                         TextButton(onClick = { confirmationStrategy = BootstrapStrategy.KeepRemote }) {
-                            Text("Keep Remote")
+                            Text(stringResource(R.string.keep_remote))
                         }
                         TextButton(onClick = { confirmationStrategy = BootstrapStrategy.Merge }) {
-                            Text("Keep Both")
+                            Text(stringResource(R.string.keep_both))
                         }
                     }
                 } else {
@@ -796,11 +890,11 @@ private fun TimerScreen(
                     ) {
                         Text(
                             when {
-                                state.authStatus == AuthStatus.SignedOut -> "Sign in to retry"
-                                state.authStatus == AuthStatus.SigningIn -> "Signing in to retry..."
-                                state.authStatus == AuthStatus.Loading -> "Checking account..."
-                                resolution.pendingStrategy != null -> "Retry"
-                                else -> "Confirm ${resolutionLabel(selected)}"
+                                state.authStatus == AuthStatus.SignedOut -> stringResource(R.string.sign_in_to_retry)
+                                state.authStatus == AuthStatus.SigningIn -> stringResource(R.string.signing_in_to_retry)
+                                state.authStatus == AuthStatus.Loading -> stringResource(R.string.checking_account)
+                                resolution.pendingStrategy != null -> stringResource(R.string.retry)
+                                else -> stringResource(R.string.confirm_choice, resolutionLabel(selected))
                             },
                             fontWeight = FontWeight.Bold,
                         )
@@ -817,9 +911,9 @@ private fun TimerScreen(
                         onClick = { confirmationStrategy = null },
                         enabled = !resolution.submitting,
                         modifier = Modifier.semantics {
-                            contentDescription = "Cancel history choice"
+                            contentDescription = cancelHistoryChoiceDescription
                         },
-                    ) { Text("Cancel") }
+                    ) { Text(stringResource(R.string.cancel)) }
                 }
             } else {
                 null
@@ -846,7 +940,7 @@ private fun PortraitTimerScreen(
         AppHeader(state = state, onSignIn = onSignIn, onLogout = onLogout)
         state.conflict?.let {
             MessageCard(
-                title = "Changes resolved on another device",
+                title = stringResource(R.string.changes_resolved_on_another_device),
                 message = it,
                 containerColor = Lavender,
                 onDismiss = onDismissConflict,
@@ -913,7 +1007,7 @@ private fun LandscapeTimerScreen(
     ) {
         state.conflict?.let {
             MessageCard(
-                title = "Changes resolved on another device",
+                title = stringResource(R.string.changes_resolved_on_another_device),
                 message = it,
                 containerColor = Lavender,
                 onDismiss = onDismissConflict,
@@ -963,16 +1057,16 @@ private fun AppHeader(state: AppState, onSignIn: () -> Unit, onLogout: () -> Uni
                 BrandMark(compact = true)
                 when (state.authStatus) {
                     AuthStatus.SignedIn -> TextButton(onClick = onLogout) {
-                        Text("Sign out", color = darkModeTextColor(Lavender))
+                        Text(stringResource(R.string.account), color = darkModeTextColor(Lavender))
                     }
                     AuthStatus.SigningIn -> TextButton(onClick = {}, enabled = false) {
-                        Text("Signing in...", color = darkModeTextColor(Lavender))
+                        Text(stringResource(R.string.signing_in), color = darkModeTextColor(Lavender))
                     }
                     AuthStatus.Loading -> TextButton(onClick = {}, enabled = false) {
-                        Text("Checking...", color = darkModeTextColor(Lavender))
+                        Text(stringResource(R.string.checking), color = darkModeTextColor(Lavender))
                     }
                     AuthStatus.SignedOut -> TextButton(onClick = onSignIn) {
-                        Text("Sign in", color = darkModeTextColor(Butter), fontWeight = FontWeight.Bold)
+                        Text(stringResource(R.string.sign_in), color = darkModeTextColor(Butter), fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -995,9 +1089,9 @@ private fun AppHeader(state: AppState, onSignIn: () -> Unit, onLogout: () -> Uni
                 Spacer(Modifier.width(12.dp))
                 Text(
                     text = when (state.authStatus) {
-                        AuthStatus.SignedIn -> state.user?.name?.ifBlank { state.user.email } ?: "Signed in"
-                        AuthStatus.Loading -> "Checking account"
-                        AuthStatus.SigningIn -> "Signing in"
+                        AuthStatus.SignedIn -> state.user?.name?.ifBlank { state.user.email } ?: stringResource(R.string.signed_in)
+                        AuthStatus.Loading -> stringResource(R.string.checking_account_2)
+                        AuthStatus.SigningIn -> stringResource(R.string.signing_in_2)
                         AuthStatus.SignedOut -> ""
                     },
                     modifier = Modifier.weight(1f),
@@ -1012,12 +1106,12 @@ private fun AppHeader(state: AppState, onSignIn: () -> Unit, onLogout: () -> Uni
     }
 }
 
-private enum class MainTab(val label: String) {
-    Timer("Timer"),
-    Tasks("Tasks"),
-    Pattern("Pattern"),
-    Arrivals("Arrivals"),
-    Network("Network"),
+private enum class MainTab(val labelRes: Int) {
+    Timer(R.string.timer),
+    Tasks(R.string.tasks),
+    Pattern(R.string.pattern),
+    Arrivals(R.string.arrivals),
+    Network(R.string.network),
 }
 
 @Composable
@@ -1027,7 +1121,8 @@ private fun MainNavigationBar(
 ) {
     val showLabels = LocalConfiguration.current.fontScale < 1.3f
     NavigationBar {
-        MainTab.entries.forEach { tab ->
+        listOf(MainTab.Timer, MainTab.Tasks, MainTab.Pattern, MainTab.Arrivals).forEach { tab ->
+            val label = stringResource(tab.labelRes)
             NavigationBarItem(
                 selected = tab == active,
                 onClick = { onSelect(tab) },
@@ -1040,11 +1135,11 @@ private fun MainNavigationBar(
                             MainTab.Arrivals -> Icons.Outlined.History
                             MainTab.Network -> Icons.Outlined.Hub
                         },
-                        contentDescription = tab.label,
+                        contentDescription = label,
                     )
                 },
                 label = if (showLabels) {
-                    { Text(tab.label, maxLines = 1) }
+                    { Text(label, maxLines = 1) }
                 } else {
                     null
                 },
@@ -1071,14 +1166,14 @@ private fun NetworkSection(
     var confirmLeave by remember { mutableStateOf(false) }
     val network = state.network
     Column(modifier, verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        SectionLabel("NETWORK ROUTE")
-        Text("Choose where time travels", style = MaterialTheme.typography.headlineMedium)
+        SectionLabel(stringResource(R.string.network_route))
+        Text(stringResource(R.string.choose_where_time_travels), style = MaterialTheme.typography.headlineMedium)
         Text(
-            "Your clock always works on this device. Routes change replication only; saved local and room workspaces stay intact.",
+            stringResource(R.string.your_clock_always_works_on_this_device_routes),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodyLarge,
         )
-        RouteSwitch(network.mode, onSetMode)
+        RouteSwitch(network.mode, network.roomId != null, onSetMode)
 
         Surface(
             color = Ink,
@@ -1095,28 +1190,35 @@ private fun NetworkSection(
                 )
                 network.roomId?.let { roomId ->
                     Text(
-                        network.roomName ?: "Unnamed room",
+                        network.roomName ?: stringResource(R.string.unnamed_room),
                         color = darkModeTextColor(Butter),
                         style = MaterialTheme.typography.labelLarge,
                     )
                     Text(
-                        "ROOM ${roomId.take(8)}…${roomId.takeLast(6)}",
+                        stringResource(R.string.room_identifier, roomId.take(8), roomId.takeLast(6)),
                         fontFamily = FontFamily.Monospace,
                         style = MaterialTheme.typography.labelMedium,
                     )
                     Text(
-                        "${network.peerCount} saved peer${if (network.peerCount == 1) "" else "s"} · " +
-                            "${network.operationCount} durable record${if (network.operationCount == 1) "" else "s"}",
+                        stringResource(
+                            R.string.network_counts,
+                            pluralStringResource(R.plurals.saved_peers, network.peerCount, network.peerCount),
+                            pluralStringResource(
+                                R.plurals.durable_records,
+                                network.operationCount,
+                                network.operationCount,
+                            ),
+                        ),
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 }
                 if (network.mode == ReplicationMode.IROH && network.roomId != null) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilledTonalButton(onClick = onSyncNow, modifier = Modifier.height(48.dp)) {
-                            Text("Sync now")
+                            Text(stringResource(R.string.sync_now))
                         }
                         TextButton(onClick = { confirmLeave = true }, modifier = Modifier.height(48.dp)) {
-                            Text("Leave room", color = darkModeTextColor(Danger))
+                            Text(stringResource(R.string.leave_room), color = darkModeTextColor(Danger))
                         }
                     }
                 }
@@ -1130,13 +1232,13 @@ private fun NetworkSection(
                 shape = MaterialTheme.shapes.large,
             ) {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("Open a peer route", style = MaterialTheme.typography.titleLarge)
+                    Text(stringResource(R.string.open_a_peer_route), style = MaterialTheme.typography.titleLarge)
                     OutlinedTextField(
                         value = roomName,
                         onValueChange = { roomName = it },
                         modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Room name, optional") },
-                        supportingText = { Text("1–64 characters when set") },
+                        label = { Text(stringResource(R.string.room_name_optional)) },
+                        supportingText = { Text(stringResource(R.string.copy_1_64_characters_when_set)) },
                         singleLine = true,
                     )
                     Button(
@@ -1144,7 +1246,7 @@ private fun NetworkSection(
                         enabled = roomName.codePointCount(0, roomName.length) <= 64,
                         modifier = Modifier.fillMaxWidth().height(54.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = Violet),
-                    ) { Text("CREATE IROH ROOM") }
+                    ) { Text(stringResource(R.string.create_iroh_room)) }
                 }
             }
 
@@ -1154,13 +1256,13 @@ private fun NetworkSection(
                 shape = MaterialTheme.shapes.large,
             ) {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("Join an existing route", style = MaterialTheme.typography.titleLarge)
+                    Text(stringResource(R.string.join_an_existing_route), style = MaterialTheme.typography.titleLarge)
                     OutlinedTextField(
                         value = joinCode,
                         onValueChange = { joinCode = it },
                         modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Room invite") },
-                        placeholder = { Text("pomodorough1.…") },
+                        label = { Text(stringResource(R.string.room_invite)) },
+                        placeholder = { Text(stringResource(R.string.pomodorough1)) },
                         minLines = 3,
                         maxLines = 6,
                     )
@@ -1169,19 +1271,20 @@ private fun NetworkSection(
                         enabled = joinCode.isNotBlank(),
                         modifier = Modifier.fillMaxWidth().height(54.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = Ink),
-                    ) { Text("JOIN ROOM") }
+                    ) { Text(stringResource(R.string.join_room)) }
                 }
             }
         }
 
         network.invite?.let { invite ->
+            val inviteDescription = stringResource(R.string.iroh_room_invite_treat_as_full_read_and)
             Surface(
                 color = MaterialTheme.colorScheme.tertiaryContainer,
                 contentColor = darkModeTextColor(Ink),
                 shape = MaterialTheme.shapes.large,
             ) {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("Room pass", style = MaterialTheme.typography.titleLarge)
+                    Text(stringResource(R.string.room_pass), style = MaterialTheme.typography.titleLarge)
                     Text(
                         invite,
                         maxLines = 4,
@@ -1189,18 +1292,18 @@ private fun NetworkSection(
                         fontFamily = FontFamily.Monospace,
                         style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.semantics {
-                            contentDescription = "Iroh room invite. Treat as full read and write access."
+                            contentDescription = inviteDescription
                         },
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(onClick = { onCopyInvite(invite) }, modifier = Modifier.height(48.dp)) {
-                            Text("Copy")
+                            Text(stringResource(R.string.copy))
                         }
                         OutlinedButton(onClick = { onShareInvite(invite) }, modifier = Modifier.height(48.dp)) {
-                            Text("Share")
+                            Text(stringResource(R.string.share))
                         }
                         TextButton(onClick = onRefreshInvite, modifier = Modifier.height(48.dp)) {
-                            Text("Refresh")
+                            Text(stringResource(R.string.refresh))
                         }
                     }
                 }
@@ -1213,14 +1316,14 @@ private fun NetworkSection(
             shape = MaterialTheme.shapes.large,
         ) {
             Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                SectionLabel("PRIVACY & ACCESS")
-                Text("Room invites grant full read and write access. Version 1 has no member revocation.")
+                SectionLabel(stringResource(R.string.privacy_access))
+                Text(stringResource(R.string.room_invites_grant_full_read_and_write_access))
                 Text(
-                    "Direct connections reveal peer IP addresses. Relay traffic is end-to-end encrypted, but relay operators can observe endpoint IDs, IP addresses, timing, and transfer volume.",
+                    stringResource(R.string.direct_connections_reveal_peer_ip_addresses_relay_traffic),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
-                    "Peer networking runs only while Pomodorough is in the foreground. No online peer is normal; changes remain durable until peers return.",
+                    stringResource(R.string.peer_networking_runs_only_while_pomodorough_is_in),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -1230,9 +1333,9 @@ private fun NetworkSection(
     if (confirmLeave) {
         AlertDialog(
             onDismissRequest = { confirmLeave = false },
-            title = { Text("Leave Iroh room?") },
+            title = { Text(stringResource(R.string.leave_iroh_room)) },
             text = {
-                Text("Your previous on-device or cloud workspace will be restored. Room operations remain saved for a later return.")
+                Text(stringResource(R.string.your_previous_on_device_or_cloud_workspace_will))
             },
             confirmButton = {
                 TextButton(onClick = {
@@ -1240,36 +1343,47 @@ private fun NetworkSection(
                     onLeaveRoom()
                 }) {
                     Text(
-                        "Leave and restore",
+                        stringResource(R.string.leave_and_restore),
                         color = darkModeTextColor(MaterialTheme.colorScheme.error),
                         fontWeight = FontWeight.Bold,
                     )
                 }
             },
             dismissButton = {
-                TextButton(onClick = { confirmLeave = false }) { Text("Stay in room") }
+                TextButton(onClick = { confirmLeave = false }) { Text(stringResource(R.string.stay_in_room)) }
             },
         )
     }
 }
 
 @Composable
-private fun RouteSwitch(active: ReplicationMode, onSetMode: (ReplicationMode) -> Unit) {
+private fun RouteSwitch(
+    active: ReplicationMode,
+    hasIrohRoom: Boolean,
+    onSetMode: (ReplicationMode) -> Unit,
+) {
     val choices = listOf(
-        ReplicationMode.OFFLINE to ("On device" to "No remote endpoint"),
-        ReplicationMode.IROH to ("Iroh room" to "Equal peers"),
-        ReplicationMode.CENTRALIZED to ("Cloud" to "Signed-in server"),
+        ReplicationMode.OFFLINE to (stringResource(R.string.on_device) to stringResource(R.string.no_remote_endpoint)),
+        ReplicationMode.IROH to (stringResource(R.string.iroh_room) to stringResource(R.string.equal_peers)),
+        ReplicationMode.CENTRALIZED to (stringResource(R.string.cloud) to stringResource(R.string.signed_in_server)),
     )
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         choices.forEach { (mode, copy) ->
             val selected = active == mode
+            val enabled = mode != ReplicationMode.IROH || hasIrohRoom
+            val selectionDescription = if (selected) {
+                stringResource(R.string.selected)
+            } else {
+                stringResource(R.string.not_selected)
+            }
             Surface(
                 onClick = { onSetMode(mode) },
+                enabled = enabled,
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 62.dp)
                     .semantics {
-                        stateDescription = if (selected) "Selected" else "Not selected"
+                        stateDescription = selectionDescription
                     },
                 color = if (selected) Violet else MaterialTheme.colorScheme.surface,
                 contentColor = darkModeTextColor(
@@ -1298,33 +1412,40 @@ private fun RouteSwitch(active: ReplicationMode, onSetMode: (ReplicationMode) ->
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
                         Text(copy.first, style = MaterialTheme.typography.labelLarge)
-                        Text(copy.second, style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            if (mode == ReplicationMode.IROH && !hasIrohRoom) {
+                                stringResource(R.string.create_or_join_a_room_below_first)
+                            } else copy.second,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
                     }
-                    Text(if (selected) "ACTIVE" else "SELECT", style = MaterialTheme.typography.labelMedium)
+                    Text(if (selected) stringResource(R.string.active) else stringResource(R.string.select), style = MaterialTheme.typography.labelMedium)
                 }
             }
         }
     }
 }
 
+@Composable
 private fun networkStatusTitle(status: IrohConnectionStatus): String = when (status) {
-    IrohConnectionStatus.STOPPED -> "Route stopped"
-    IrohConnectionStatus.STARTING -> "Opening route"
-    IrohConnectionStatus.LISTENING -> "Ready for peers"
-    IrohConnectionStatus.SYNCING -> "Exchanging changes"
-    IrohConnectionStatus.WAITING_FOR_PEERS -> "Waiting for peers"
-    IrohConnectionStatus.CONFLICT -> "Repair required"
-    IrohConnectionStatus.UNAVAILABLE -> "Route unavailable"
+    IrohConnectionStatus.STOPPED -> stringResource(R.string.route_stopped)
+    IrohConnectionStatus.STARTING -> stringResource(R.string.opening_route)
+    IrohConnectionStatus.LISTENING -> stringResource(R.string.ready_for_peers)
+    IrohConnectionStatus.SYNCING -> stringResource(R.string.exchanging_changes)
+    IrohConnectionStatus.WAITING_FOR_PEERS -> stringResource(R.string.waiting_for_peers)
+    IrohConnectionStatus.CONFLICT -> stringResource(R.string.repair_required)
+    IrohConnectionStatus.UNAVAILABLE -> stringResource(R.string.route_unavailable)
 }
 
+@Composable
 private fun networkStatusDescription(status: IrohConnectionStatus): String = when (status) {
-    IrohConnectionStatus.STOPPED -> "No peer endpoint is running."
-    IrohConnectionStatus.STARTING -> "Binding encrypted Iroh transport."
-    IrohConnectionStatus.LISTENING -> "Foreground endpoint is listening on Pomodorough Sync v1."
-    IrohConnectionStatus.SYNCING -> "Pulling bounded inventory and immutable operations."
-    IrohConnectionStatus.WAITING_FOR_PEERS -> "No peer is online. Local changes remain durable."
-    IrohConnectionStatus.CONFLICT -> "Two payloads claim one immutable operation ID. Replication is stopped."
-    IrohConnectionStatus.UNAVAILABLE -> "Use on-device or cloud mode while this route is unavailable."
+    IrohConnectionStatus.STOPPED -> stringResource(R.string.no_peer_endpoint_is_running)
+    IrohConnectionStatus.STARTING -> stringResource(R.string.binding_encrypted_iroh_transport)
+    IrohConnectionStatus.LISTENING -> stringResource(R.string.foreground_endpoint_is_listening_on_pomodorough_sync_v1)
+    IrohConnectionStatus.SYNCING -> stringResource(R.string.pulling_bounded_inventory_and_immutable_operations)
+    IrohConnectionStatus.WAITING_FOR_PEERS -> stringResource(R.string.no_peer_is_online_local_changes_remain_durable)
+    IrohConnectionStatus.CONFLICT -> stringResource(R.string.two_payloads_claim_one_immutable_operation_id_replication)
+    IrohConnectionStatus.UNAVAILABLE -> stringResource(R.string.use_on_device_or_cloud_mode_while_this)
 }
 
 @Composable
@@ -1341,9 +1462,9 @@ private fun TaskSelector(
     val active = timer?.status == TimerStatus.Running || timer?.status == TimerStatus.Paused
     val enabled = mutationsEnabled && !active && selectedPhase == TimerPhase.Focus
     val selectedTitle = if (active) {
-        taskTitle ?: "No task"
+        taskTitle ?: stringResource(R.string.no_task)
     } else {
-        tasks.firstOrNull { it.id == selectedTaskId }?.title ?: "No task"
+        tasks.firstOrNull { it.id == selectedTaskId }?.title ?: stringResource(R.string.no_task)
     }
 
     Box(Modifier.fillMaxWidth()) {
@@ -1355,7 +1476,7 @@ private fun TaskSelector(
                 .height(48.dp),
             border = BorderStroke(1.dp, Ink.copy(alpha = 0.35f)),
         ) {
-            Text("FOCUS TASK", style = MaterialTheme.typography.labelMedium)
+            Text(stringResource(R.string.focus_task), style = MaterialTheme.typography.labelMedium)
             Spacer(Modifier.width(10.dp))
             Text(
                 selectedTitle,
@@ -1370,7 +1491,7 @@ private fun TaskSelector(
             onDismissRequest = { expanded = false },
         ) {
             DropdownMenuItem(
-                text = { Text("No task") },
+                text = { Text(stringResource(R.string.no_task)) },
                 onClick = {
                     expanded = false
                     onSelectTask(null)
@@ -1393,18 +1514,27 @@ private fun TaskSelector(
 private fun TaskBoardHeader(
     summaries: List<TaskDailySummary>,
     mutationsEnabled: Boolean,
-    onAddTask: (String) -> Unit,
+    onAddTask: (String, (Boolean) -> Unit) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var draft by remember { mutableStateOf("") }
+    var submissionError by remember { mutableStateOf<String?>(null) }
+    val validationErrorKey = TaskDraftPolicy.validate(draft, summaries.map { it.task.title })
+    val validationError = if (validationErrorKey == null) null else stringResource(validationErrorKey.messageRes)
+    val submissionFailureCopy = stringResource(R.string.task_could_not_be_saved_try_again)
     val totalFinished = summaries.sumOf(TaskDailySummary::finishedPomodoros)
     val totalTime = summaries.sumOf(TaskDailySummary::timeSpentMs)
     Column(modifier) {
-        SectionLabel("TASK BOARD")
-        Text("Task board", style = MaterialTheme.typography.headlineMedium)
+        SectionLabel(stringResource(R.string.task_board))
+        Text(stringResource(R.string.task_board_2), style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(6.dp))
         Text(
-            "$totalFinished ${if (totalFinished == 1) "pomodoro" else "pomodoros"} · ${formatTaskDuration(totalTime)} today",
+            pluralStringResource(
+                R.plurals.pomodoro_today,
+                totalFinished,
+                totalFinished,
+                formatTaskDuration(totalTime),
+            ),
             color = darkModeTextColor(MaterialTheme.colorScheme.primary),
             style = MaterialTheme.typography.titleLarge,
         )
@@ -1417,27 +1547,39 @@ private fun TaskBoardHeader(
             Column(Modifier.padding(16.dp)) {
                 OutlinedTextField(
                     value = draft,
-                    onValueChange = { draft = it },
+                    onValueChange = {
+                        draft = it
+                        submissionError = null
+                    },
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Task") },
-                    placeholder = { Text("Write release notes") },
+                    label = { Text(stringResource(R.string.task)) },
+                    placeholder = { Text(stringResource(R.string.write_release_notes)) },
                     singleLine = true,
                     enabled = mutationsEnabled,
+                    isError = draft.isNotEmpty() && validationError != null,
+                    supportingText = {
+                        (submissionError ?: validationError?.takeIf { draft.isNotEmpty() })?.let { Text(it) }
+                    },
                 )
                 Spacer(Modifier.height(10.dp))
                 Button(
                     onClick = {
-                        if (draft.isNotEmpty()) {
-                            onAddTask(draft)
-                            draft = ""
+                        if (validationError == null) {
+                            onAddTask(draft) { accepted ->
+                                if (accepted) {
+                                    draft = ""
+                                } else {
+                                    submissionError = submissionFailureCopy
+                                }
+                            }
                         }
                     },
-                    enabled = mutationsEnabled,
+                    enabled = mutationsEnabled && validationError == null,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(52.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = Ink),
-                ) { Text("ADD TASK") }
+                ) { Text(stringResource(R.string.add_task)) }
             }
         }
     }
@@ -1447,21 +1589,21 @@ private fun TaskBoardHeader(
 private fun TaskColumnLabels(modifier: Modifier = Modifier) {
     if (LocalConfiguration.current.fontScale < 1.3f) {
         Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
-            Text("Task", Modifier.weight(2f), style = MaterialTheme.typography.labelMedium)
+            Text(stringResource(R.string.task), Modifier.weight(2f), style = MaterialTheme.typography.labelMedium)
             Text(
-                "Finished",
+                stringResource(R.string.finished),
                 Modifier.weight(1.2f),
                 style = MaterialTheme.typography.labelMedium,
                 textAlign = TextAlign.Center,
             )
             Text(
-                "Time",
+                stringResource(R.string.time),
                 Modifier.weight(1.35f),
                 style = MaterialTheme.typography.labelMedium,
                 textAlign = TextAlign.Center,
             )
             Text(
-                "Action",
+                stringResource(R.string.action),
                 Modifier.weight(0.9f),
                 style = MaterialTheme.typography.labelMedium,
                 textAlign = TextAlign.Center,
@@ -1478,6 +1620,7 @@ private fun TaskSummaryRow(
     modifier: Modifier = Modifier,
 ) {
     val useStackedLayout = LocalConfiguration.current.fontScale >= 1.3f
+    val summaryDescription = taskSummaryDescription(summary)
     Surface(
         modifier = modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surfaceVariant,
@@ -1488,7 +1631,7 @@ private fun TaskSummaryRow(
             Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
                 Column(
                     modifier = Modifier.clearAndSetSemantics {
-                        contentDescription = taskSummaryDescription(summary)
+                        contentDescription = summaryDescription
                     },
                 ) {
                     Text(
@@ -1498,7 +1641,12 @@ private fun TaskSummaryRow(
                         style = MaterialTheme.typography.titleLarge,
                     )
                     Text(
-                        "${summary.finishedPomodoros} finished · ${formatTaskDuration(summary.timeSpentMs)} today",
+                        pluralStringResource(
+                            R.plurals.finished_today,
+                            summary.finishedPomodoros,
+                            summary.finishedPomodoros,
+                            formatTaskDuration(summary.timeSpentMs),
+                        ),
                         color = darkModeTextColor(MaterialTheme.colorScheme.primary),
                         style = MaterialTheme.typography.labelLarge,
                     )
@@ -1508,7 +1656,7 @@ private fun TaskSummaryRow(
                     enabled = mutationsEnabled,
                     modifier = Modifier.align(Alignment.End),
                 ) {
-                    Text("Delete", color = darkModeTextColor(MaterialTheme.colorScheme.error))
+                    Text(stringResource(R.string.delete), color = darkModeTextColor(MaterialTheme.colorScheme.error))
                 }
             }
         } else {
@@ -1520,7 +1668,7 @@ private fun TaskSummaryRow(
                     modifier = Modifier
                         .weight(4.55f)
                         .clearAndSetSemantics {
-                            contentDescription = taskSummaryDescription(summary)
+                            contentDescription = summaryDescription
                         },
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -1552,7 +1700,7 @@ private fun TaskSummaryRow(
                     enabled = mutationsEnabled,
                     modifier = Modifier.weight(0.9f),
                 ) {
-                    Text("Delete", color = darkModeTextColor(MaterialTheme.colorScheme.error))
+                    Text(stringResource(R.string.delete), color = darkModeTextColor(MaterialTheme.colorScheme.error))
                 }
             }
         }
@@ -1631,7 +1779,7 @@ private fun TimerHero(
         }
         Column(Modifier.padding(14.dp)) {
             if (showContextLabel) {
-                SectionLabel("CURRENT SERVICE")
+                SectionLabel(stringResource(R.string.current_service))
                 Spacer(Modifier.height(6.dp))
             }
             TimerOrbit(timer = timer, settings = settings, palette = palette, maxSize = orbitMaxSize)
@@ -1669,9 +1817,12 @@ private fun TimerHero(
             ) {
                 Text(
                     when (status) {
-                        TimerStatus.Running -> "Pause"
-                        TimerStatus.Paused -> "Resume"
-                        else -> "Start ${phaseLabel(settings.selectedPhase).lowercase()}"
+                        TimerStatus.Running -> stringResource(R.string.pause)
+                        TimerStatus.Paused -> stringResource(R.string.resume)
+                        else -> stringResource(
+                            R.string.start_phase,
+                            phaseLabel(settings.selectedPhase).lowercase(),
+                        )
                     },
                 )
             }
@@ -1683,7 +1834,7 @@ private fun TimerHero(
                     modifier = Modifier
                         .weight(1f)
                         .height(48.dp),
-                ) { Text("Finish") }
+                ) { Text(stringResource(R.string.finish)) }
                 OutlinedButton(
                     onClick = {
                         if (active) onCancelTimer() else onClearTimer()
@@ -1693,7 +1844,7 @@ private fun TimerHero(
                         .weight(1f)
                         .height(48.dp),
                     border = BorderStroke(1.5.dp, palette.onContainer.copy(alpha = 0.55f)),
-                ) { Text(if (active) "Cancel" else "Stop sound") }
+                ) { Text(if (active) stringResource(R.string.cancel) else stringResource(R.string.stop_sound)) }
             }
         }
     }
@@ -1727,7 +1878,7 @@ private fun LandscapeTimerHero(
     ) {
         if (showContextLabel) {
             Text(
-                "CURRENT SERVICE",
+                stringResource(R.string.current_service),
                 color = darkModeTextColor(Cloud),
                 style = MaterialTheme.typography.labelMedium,
             )
@@ -1761,9 +1912,12 @@ private fun LandscapeTimerHero(
             ) {
                 Text(
                     when (status) {
-                        TimerStatus.Running -> "Pause"
-                        TimerStatus.Paused -> "Resume"
-                        else -> "Start ${phaseLabel(settings.selectedPhase).lowercase()}"
+                        TimerStatus.Running -> stringResource(R.string.pause)
+                        TimerStatus.Paused -> stringResource(R.string.resume)
+                        else -> stringResource(
+                            R.string.start_phase,
+                            phaseLabel(settings.selectedPhase).lowercase(),
+                        )
                     },
                     maxLines = 1,
                 )
@@ -1775,7 +1929,7 @@ private fun LandscapeTimerHero(
                     modifier = Modifier
                         .weight(1f)
                         .height(54.dp),
-                ) { Text("Finish") }
+                ) { Text(stringResource(R.string.finish)) }
                 OutlinedButton(
                     onClick = onCancelTimer,
                     enabled = ready,
@@ -1783,7 +1937,7 @@ private fun LandscapeTimerHero(
                         .weight(1f)
                         .height(54.dp),
                     border = BorderStroke(1.5.dp, Cloud.copy(alpha = 0.65f)),
-                ) { Text("Cancel", color = darkModeTextColor(Cloud)) }
+                ) { Text(stringResource(R.string.cancel), color = darkModeTextColor(Cloud)) }
             } else if (clearable) {
                 OutlinedButton(
                     onClick = onClearTimer,
@@ -1792,7 +1946,7 @@ private fun LandscapeTimerHero(
                         .weight(1f)
                         .height(54.dp),
                     border = BorderStroke(1.5.dp, Cloud.copy(alpha = 0.65f)),
-                ) { Text("Stop sound", color = darkModeTextColor(Cloud)) }
+                ) { Text(stringResource(R.string.stop_sound), color = darkModeTextColor(Cloud)) }
             }
         }
     }
@@ -1800,12 +1954,13 @@ private fun LandscapeTimerHero(
 
 @Composable
 private fun LongBreakProgress(progress: Int, color: Color) {
+    val progressDescription = stringResource(R.string.pomodoro_progress, progress)
     Text(
         text = "●".repeat(progress) + "○".repeat(4 - progress),
         modifier = Modifier
             .fillMaxWidth()
             .clearAndSetSemantics {
-                contentDescription = "Pomodoro progress: $progress of 4 today"
+                contentDescription = progressDescription
             },
         color = color.copy(alpha = 0.78f),
         fontFamily = FontFamily.Monospace,
@@ -1848,6 +2003,13 @@ private fun LandscapeTimerReadout(
     val status = timer?.status ?: "idle"
     val textColor = darkModeTextColor(Butter)
     val timeText = timerTimeText(minutes, seconds, status == TimerStatus.Paused, textColor)
+    val timerDescription = stringResource(
+        R.string.timer_remaining,
+        minutes,
+        seconds,
+        phaseLabel(phase),
+        statusLabel(status),
+    )
 
     Column(
         modifier = modifier
@@ -1855,7 +2017,7 @@ private fun LandscapeTimerReadout(
             .background(Cloud.copy(alpha = 0.07f), RoundedCornerShape(20.dp))
             .clearAndSetSemantics {
                 progressBarRangeInfo = ProgressBarRangeInfo(progress.coerceIn(0f, 1f), 0f..1f)
-                contentDescription = "$minutes minutes $seconds seconds remaining, ${phaseLabel(phase)}, $status"
+                contentDescription = timerDescription
             }
             .padding(horizontal = 20.dp, vertical = 8.dp),
     ) {
@@ -1911,9 +2073,9 @@ private fun LandscapeTaskSelector(
     val active = timer?.status == TimerStatus.Running || timer?.status == TimerStatus.Paused
     val enabled = mutationsEnabled && !active && selectedPhase == TimerPhase.Focus
     val title = if (active) {
-        taskTitle ?: "No task"
+        taskTitle ?: stringResource(R.string.no_task)
     } else {
-        tasks.firstOrNull { it.id == selectedTaskId }?.title ?: "No task"
+        tasks.firstOrNull { it.id == selectedTaskId }?.title ?: stringResource(R.string.no_task)
     }
 
     Box {
@@ -1926,7 +2088,7 @@ private fun LandscapeTaskSelector(
             border = BorderStroke(1.dp, Cloud.copy(alpha = 0.5f)),
         ) {
             Text(
-                "FOCUS TASK",
+                stringResource(R.string.focus_task),
                 color = darkModeTextColor(Cloud),
                 style = MaterialTheme.typography.labelMedium,
             )
@@ -1942,7 +2104,7 @@ private fun LandscapeTaskSelector(
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             DropdownMenuItem(
-                text = { Text("No task") },
+                text = { Text(stringResource(R.string.no_task)) },
                 onClick = {
                     expanded = false
                     onSelectTask(null)
@@ -1995,6 +2157,13 @@ private fun TimerOrbit(
     val status = timer?.status ?: "idle"
     val textColor = darkModeTextColor(palette.onContainer)
     val timeText = timerTimeText(minutes, seconds, status == TimerStatus.Paused, textColor)
+    val timerDescription = stringResource(
+        R.string.timer_remaining,
+        minutes,
+        seconds,
+        phaseLabel(phase),
+        statusLabel(status),
+    )
 
     BoxWithConstraints(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         val orbitSize = min(min(maxWidth.value, maxSize.value), 318f).dp
@@ -2003,7 +2172,7 @@ private fun TimerOrbit(
                 .size(orbitSize)
                 .clearAndSetSemantics {
                     progressBarRangeInfo = ProgressBarRangeInfo(progress.coerceIn(0f, 1f), 0f..1f)
-                    contentDescription = "$minutes minutes $seconds seconds remaining, ${phaseLabel(phase)}, $status"
+                    contentDescription = timerDescription
                 },
             contentAlignment = Alignment.Center,
         ) {
@@ -2065,7 +2234,11 @@ private fun TimerOrbit(
                     shape = CircleShape,
                 ) {
                     Text(
-                        "${duration / 60_000} min",
+                        pluralStringResource(
+                            R.plurals.minutes_short,
+                            (duration / 60_000).toInt(),
+                            duration / 60_000,
+                        ),
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                         style = MaterialTheme.typography.labelMedium,
                     )
@@ -2087,18 +2260,18 @@ private fun PatternSection(
 ) {
     val active = timer?.status == TimerStatus.Running || timer?.status == TimerStatus.Paused
     Column(modifier) {
-        SectionLabel("ROUTE")
-        Text("Service pattern", style = MaterialTheme.typography.headlineMedium)
+        SectionLabel(stringResource(R.string.route))
+        Text(stringResource(R.string.service_pattern), style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(6.dp))
         Text(
-            "Choose a mode and duration",
+            stringResource(R.string.choose_a_mode_and_duration),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodyMedium,
         )
         Spacer(Modifier.height(16.dp))
         PhaseCard(
             phase = TimerPhase.Focus,
-            supportingText = "Deep work",
+            supportingText = stringResource(R.string.deep_work),
             settings = settings,
             enabled = mutationsEnabled && !active,
             onSelect = onSelectPhase,
@@ -2107,7 +2280,7 @@ private fun PatternSection(
         Spacer(Modifier.height(10.dp))
         PhaseCard(
             phase = TimerPhase.ShortBreak,
-            supportingText = "Quick reset",
+            supportingText = stringResource(R.string.quick_reset),
             settings = settings,
             enabled = mutationsEnabled && !active,
             onSelect = onSelectPhase,
@@ -2116,7 +2289,7 @@ private fun PatternSection(
         Spacer(Modifier.height(10.dp))
         PhaseCard(
             phase = TimerPhase.LongBreak,
-            supportingText = "Full recharge",
+            supportingText = stringResource(R.string.full_recharge),
             settings = settings,
             enabled = mutationsEnabled && !active,
             onSelect = onSelectPhase,
@@ -2133,9 +2306,9 @@ private fun PatternSection(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(Modifier.weight(1f)) {
-                    Text("Auto-start breaks", style = MaterialTheme.typography.titleLarge)
+                    Text(stringResource(R.string.auto_start_breaks), style = MaterialTheme.typography.titleLarge)
                     Text(
-                        "Short after focus. Long every fourth completed focus.",
+                        stringResource(R.string.short_after_focus_long_every_fourth_completed_focus),
                         color = darkModeTextColor(Lavender),
                         style = MaterialTheme.typography.bodyMedium,
                     )
@@ -2164,6 +2337,7 @@ private fun PhaseCard(
     val minutes = settings.minutesFor(phase)
     val palette = phasePalette(phase)
     val selectedTextColor = darkModeTextColor(Ink)
+    val durationDescription = pluralStringResource(R.plurals.minutes_long, minutes, minutes)
     val shape = if (selected) {
         RoundedCornerShape(topStart = 36.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 36.dp)
     } else {
@@ -2176,53 +2350,91 @@ private fun PhaseCard(
             .fillMaxWidth()
             .semantics {
                 this.selected = selected
-                stateDescription = "$minutes minutes"
+                stateDescription = durationDescription
             },
         color = if (selected) palette.container else MaterialTheme.colorScheme.surfaceVariant,
         contentColor = if (selected) selectedTextColor else MaterialTheme.colorScheme.onSurfaceVariant,
         shape = shape,
         border = if (selected) BorderStroke(2.dp, palette.accent) else null,
     ) {
-        Row(
-            modifier = Modifier.padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(14.dp)
-                    .background(if (selected) palette.accent else MaterialTheme.colorScheme.outline, CircleShape),
-            )
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(phaseLabel(phase), style = MaterialTheme.typography.titleLarge)
-                Text(
-                    supportingText,
-                    color = if (selected) {
-                        selectedTextColor.copy(alpha = 0.72f)
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
+        val stacked = LocalConfiguration.current.fontScale >= 1.3f
+        if (stacked) {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                PhaseCardHeader(phase, supportingText, selected, palette, selectedTextColor)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    PhaseDurationControls(phase, minutes, enabled, selected, selectedTextColor, onChangeDuration)
+                }
+            }
+        } else {
+            Row(
+                modifier = Modifier.padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                PhaseCardHeader(
+                    phase, supportingText, selected, palette, selectedTextColor,
+                    modifier = Modifier.weight(1f),
                 )
-            }
-            StepButton("−", "Decrease ${phaseLabel(phase)} duration", enabled) {
-                onChangeDuration(phase, -1)
-            }
-            Text(
-                "$minutes",
-                modifier = Modifier
-                    .width(45.dp)
-                    .clearAndSetSemantics { },
-                color = if (selected) selectedTextColor else MaterialTheme.colorScheme.onSurfaceVariant,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Black,
-                fontSize = 22.sp,
-                textAlign = TextAlign.Center,
-            )
-            StepButton("+", "Increase ${phaseLabel(phase)} duration", enabled) {
-                onChangeDuration(phase, 1)
+                PhaseDurationControls(phase, minutes, enabled, selected, selectedTextColor, onChangeDuration)
             }
         }
+    }
+}
+
+@Composable
+private fun PhaseCardHeader(
+    phase: String,
+    supportingText: String,
+    selected: Boolean,
+    palette: PhasePalette,
+    selectedTextColor: Color,
+    modifier: Modifier = Modifier,
+) {
+    Row(modifier, verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            modifier = Modifier
+                .size(14.dp)
+                .background(if (selected) palette.accent else MaterialTheme.colorScheme.outline, CircleShape),
+        )
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(phaseLabel(phase), style = MaterialTheme.typography.titleLarge)
+            Text(
+                supportingText,
+                color = if (selected) selectedTextColor.copy(alpha = 0.72f)
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+    }
+}
+
+@Composable
+private fun PhaseDurationControls(
+    phase: String,
+    minutes: Int,
+    enabled: Boolean,
+    selected: Boolean,
+    selectedTextColor: Color,
+    onChangeDuration: (String, Int) -> Unit,
+) {
+    StepButton("−", stringResource(R.string.decrease_phase_duration, phaseLabel(phase)), enabled) {
+        onChangeDuration(phase, -1)
+    }
+    Text(
+        "$minutes",
+        modifier = Modifier.width(56.dp).clearAndSetSemantics { },
+        color = if (selected) selectedTextColor else MaterialTheme.colorScheme.onSurfaceVariant,
+        fontFamily = FontFamily.Monospace,
+        fontWeight = FontWeight.Black,
+        fontSize = 22.sp,
+        textAlign = TextAlign.Center,
+    )
+    StepButton("+", stringResource(R.string.increase_phase_duration, phaseLabel(phase)), enabled) {
+        onChangeDuration(phase, 1)
     }
 }
 
@@ -2246,6 +2458,62 @@ private fun StepButton(
 }
 
 @Composable
+private fun CompletedFocusBreakdown(
+    history: List<HistoryItem>,
+    tasks: List<FocusTask>,
+    modifier: Modifier = Modifier,
+) {
+    val completed = history.filter {
+        it.phase == TimerPhase.Focus && it.status == TimerStatus.Completed
+    }
+    val taskNames = tasks.associate { it.id to it.title }
+    val totals = mutableListOf<Triple<String, Int, Long>>()
+    for ((taskId, items) in completed.groupBy { it.taskId }) {
+        val label = when {
+            taskId == null -> stringResource(R.string.unassigned)
+            taskNames[taskId] != null -> taskNames.getValue(taskId)
+            else -> stringResource(R.string.deleted_task)
+        }
+        totals += Triple(label, items.size, items.sumOf { it.plannedDurationMs })
+    }
+    totals.sortBy { it.first.lowercase(Locale.getDefault()) }
+    val summaryParts = mutableListOf<String>()
+    for ((title, count, duration) in totals) {
+        summaryParts += pluralStringResource(
+            R.plurals.summary_sessions,
+            count,
+            title,
+            count,
+            formatTaskDuration(duration),
+        )
+    }
+    val summaryDescription = if (totals.isEmpty()) {
+        stringResource(R.string.completed_focus_summary_no_completed_focus_sessions)
+    } else {
+        stringResource(R.string.completed_focus_summary) + summaryParts.joinToString(". ")
+    }
+    Surface(
+        modifier = modifier.fillMaxWidth().clearAndSetSemantics {
+            contentDescription = summaryDescription
+        },
+        color = MaterialTheme.colorScheme.tertiaryContainer,
+        shape = MaterialTheme.shapes.large,
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(stringResource(R.string.completed_focus), style = MaterialTheme.typography.titleLarge)
+            if (totals.isEmpty()) {
+                Text(stringResource(R.string.no_completed_focus_sessions_yet))
+            } else totals.forEach { (title, count, duration) ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(title, Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(stringResource(R.string.count_and_duration, count, formatTaskDuration(duration)))
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun HistoryTitle(count: Int, modifier: Modifier = Modifier) {
     Row(
         modifier = modifier.fillMaxWidth(),
@@ -2253,8 +2521,8 @@ private fun HistoryTitle(count: Int, modifier: Modifier = Modifier) {
         verticalAlignment = Alignment.Bottom,
     ) {
         Column {
-            SectionLabel("RUN LOG / THIS ACCOUNT")
-            Text("Recent arrivals", style = MaterialTheme.typography.headlineMedium)
+            SectionLabel(stringResource(R.string.run_log_this_account))
+            Text(stringResource(R.string.recent_arrivals), style = MaterialTheme.typography.headlineMedium)
         }
         Surface(
             color = Violet,
@@ -2279,11 +2547,12 @@ private fun HistoryRow(
     modifier: Modifier = Modifier,
 ) {
     val palette = phasePalette(item.phase)
+    val description = historyDescription(item, taskTitle, showPending)
     Surface(
         modifier = modifier
             .fillMaxWidth()
             .clearAndSetSemantics {
-                contentDescription = historyDescription(item, taskTitle, showPending)
+                contentDescription = description
             },
         color = MaterialTheme.colorScheme.surfaceVariant,
         contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -2306,20 +2575,27 @@ private fun HistoryRow(
             Spacer(Modifier.width(13.dp))
             Column(Modifier.weight(1f)) {
                 Text(
-                    phaseLabel(item.phase) + if (item.pending && showPending) " · queued" else "",
+                    phaseLabel(item.phase) + if (item.pending && showPending) stringResource(R.string.queued) else "",
                     style = MaterialTheme.typography.titleLarge,
                 )
                 Text(formatHistoryDate(item), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
-                if (taskTitle != null) {
-                    Text(
-                        taskTitle,
-                        color = darkModeTextColor(MaterialTheme.colorScheme.primary),
-                        style = MaterialTheme.typography.labelMedium,
-                    )
+                val taskContext = when {
+                    taskTitle != null -> taskTitle
+                    item.taskId != null -> stringResource(R.string.deleted_task)
+                    else -> stringResource(R.string.unassigned)
                 }
+                Text(
+                    taskContext,
+                    color = darkModeTextColor(MaterialTheme.colorScheme.primary),
+                    style = MaterialTheme.typography.labelMedium,
+                )
             }
             Text(
-                "${(item.plannedDurationMs / 60_000).coerceAtLeast(1)} min",
+                pluralStringResource(
+                    R.plurals.minutes_short,
+                    (item.plannedDurationMs / 60_000).coerceAtLeast(1).toInt(),
+                    (item.plannedDurationMs / 60_000).coerceAtLeast(1),
+                ),
                 color = darkModeTextColor(MaterialTheme.colorScheme.primary),
                 style = MaterialTheme.typography.labelLarge,
             )
@@ -2349,22 +2625,24 @@ private fun MessageCard(
                 Text(title, style = MaterialTheme.typography.titleLarge)
                 Text(message, style = MaterialTheme.typography.bodyMedium)
             }
-            TextButton(onClick = onDismiss) { Text("Dismiss", color = darkModeTextColor(Ink)) }
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.dismiss), color = darkModeTextColor(Ink)) }
         }
     }
 }
 
 @Composable
 private fun NoticeCard(message: String, onDismiss: () -> Unit, modifier: Modifier = Modifier) {
+    val description = stringResource(R.string.heads_up_message, message)
+    val dismissLabel = stringResource(R.string.dismiss)
     MessageCard(
-        title = "Heads up",
+        title = stringResource(R.string.heads_up),
         message = message,
         containerColor = MaterialTheme.colorScheme.tertiaryContainer,
         onDismiss = onDismiss,
         modifier = modifier.clearAndSetSemantics {
-            contentDescription = "Heads up. $message"
+            contentDescription = description
             liveRegion = LiveRegionMode.Polite
-            onClick(label = "Dismiss") {
+            onClick(label = dismissLabel) {
                 onDismiss()
                 true
             }
@@ -2395,7 +2673,7 @@ private fun BrandMark(compact: Boolean = false) {
         BrandOrb(if (compact) 38.dp else 52.dp)
         Spacer(Modifier.width(if (compact) 10.dp else 14.dp))
         Text(
-            "pomodorough",
+            stringResource(R.string.pomodorough),
             color = darkModeTextColor(Cloud),
             style = if (compact) MaterialTheme.typography.titleLarge else MaterialTheme.typography.headlineMedium,
         )
@@ -2438,33 +2716,34 @@ private fun phasePalette(phase: String): PhasePalette = when (phase) {
     else -> PhasePalette(container = MaterialTheme.colorScheme.tertiaryContainer, accent = DangerAccent)
 }
 
+@Composable
 private fun syncLabel(state: AppState): String {
-    if (state.network.mode == ReplicationMode.OFFLINE) return "On device"
+    if (state.network.mode == ReplicationMode.OFFLINE) return stringResource(R.string.on_device)
     if (state.network.mode == ReplicationMode.IROH) return when (state.network.status) {
-        IrohConnectionStatus.STARTING -> "Opening peer route"
-        IrohConnectionStatus.LISTENING -> "Ready for peers"
-        IrohConnectionStatus.SYNCING -> "Syncing with peers"
-        IrohConnectionStatus.WAITING_FOR_PEERS -> "Waiting for peers"
-        IrohConnectionStatus.CONFLICT -> "Peer conflict"
-        IrohConnectionStatus.UNAVAILABLE -> "Peer route unavailable"
-        IrohConnectionStatus.STOPPED -> "Peer route stopped"
+        IrohConnectionStatus.STARTING -> stringResource(R.string.opening_peer_route)
+        IrohConnectionStatus.LISTENING -> stringResource(R.string.ready_for_peers)
+        IrohConnectionStatus.SYNCING -> stringResource(R.string.syncing_with_peers)
+        IrohConnectionStatus.WAITING_FOR_PEERS -> stringResource(R.string.waiting_for_peers)
+        IrohConnectionStatus.CONFLICT -> stringResource(R.string.peer_conflict)
+        IrohConnectionStatus.UNAVAILABLE -> stringResource(R.string.peer_route_unavailable)
+        IrohConnectionStatus.STOPPED -> stringResource(R.string.peer_route_stopped)
     }
-    if (state.historyResolution != null) return "History choice needed"
+    if (state.historyResolution != null) return stringResource(R.string.history_choice_needed)
     if (state.authStatus != AuthStatus.SignedIn) {
         return when (state.authStatus) {
-            AuthStatus.Loading -> "Checking account"
-            AuthStatus.SigningIn -> "Signing in"
-            else -> "Local only"
+            AuthStatus.Loading -> stringResource(R.string.checking_account_2)
+            AuthStatus.SigningIn -> stringResource(R.string.signing_in_2)
+            else -> stringResource(R.string.local_only)
         }
     }
     return when (state.syncStatus) {
-        SyncStatus.Offline -> if (state.pendingCount > 0) "Offline · ${state.pendingCount} queued" else "Offline · local"
-        SyncStatus.Conflict -> if (state.pendingCount > 0) "Conflict · ${state.pendingCount} queued" else "Conflict"
-        SyncStatus.Syncing -> "Syncing"
-        SyncStatus.Retrying -> if (state.pendingCount > 0) "Retrying · ${state.pendingCount} queued" else "Retrying sync"
-        SyncStatus.Queued -> "${state.pendingCount} waiting to sync"
-        SyncStatus.Checking -> "Checking sync"
-        SyncStatus.Synced -> "In sync"
+        SyncStatus.Offline -> if (state.pendingCount > 0) pluralStringResource(R.plurals.offline_queued, state.pendingCount, state.pendingCount) else stringResource(R.string.offline_local)
+        SyncStatus.Conflict -> if (state.pendingCount > 0) pluralStringResource(R.plurals.conflict_queued, state.pendingCount, state.pendingCount) else stringResource(R.string.conflict)
+        SyncStatus.Syncing -> stringResource(R.string.syncing)
+        SyncStatus.Retrying -> if (state.pendingCount > 0) pluralStringResource(R.plurals.retrying_queued, state.pendingCount, state.pendingCount) else stringResource(R.string.retrying_sync)
+        SyncStatus.Queued -> pluralStringResource(R.plurals.waiting_to_sync, state.pendingCount, state.pendingCount)
+        SyncStatus.Checking -> stringResource(R.string.checking_sync)
+        SyncStatus.Synced -> stringResource(R.string.in_sync)
     }
 }
 
@@ -2484,19 +2763,21 @@ internal fun displayPlannedDurationMs(timer: CanonicalTimer?, settings: TimerSet
     }
 }
 
+@Composable
 private fun resolutionLabel(strategy: BootstrapStrategy): String = when (strategy) {
-    BootstrapStrategy.ReplaceRemote -> "Keep Local"
-    BootstrapStrategy.KeepRemote -> "Keep Remote"
-    BootstrapStrategy.Merge -> "Keep Both"
+    BootstrapStrategy.ReplaceRemote -> stringResource(R.string.keep_local)
+    BootstrapStrategy.KeepRemote -> stringResource(R.string.keep_remote)
+    BootstrapStrategy.Merge -> stringResource(R.string.keep_both)
 }
 
+@Composable
 private fun resolutionWarning(strategy: BootstrapStrategy): String = when (strategy) {
     BootstrapStrategy.ReplaceRemote ->
-        "Account timer, history, tasks, settings, and queued changes will be replaced by this device's data. This cannot be undone."
+        stringResource(R.string.account_timer_history_tasks_settings_and_queued_changes)
     BootstrapStrategy.KeepRemote ->
-        "This device's timer, history, tasks, settings, and queued changes will be replaced by account data. This cannot be undone."
+        stringResource(R.string.this_device_s_timer_history_tasks_settings_and)
     BootstrapStrategy.Merge ->
-        "Queued local changes will be merged into account data. Conflicts or rejected changes are possible."
+        stringResource(R.string.queued_local_changes_will_be_merged_into_account)
 }
 
 @Composable
@@ -2506,13 +2787,14 @@ private fun syncColor(status: SyncStatus): Color = when (status) {
     SyncStatus.Syncing, SyncStatus.Queued, SyncStatus.Checking -> MaterialTheme.colorScheme.tertiaryContainer
 }
 
+@Composable
 private fun timerInstruction(status: String): String = when (status) {
-    TimerStatus.Running -> "Pause whenever you need."
-    TimerStatus.Paused -> "Resume when ready."
-    TimerStatus.Completed -> "Session complete."
-    TimerStatus.Cancelled -> "Start again when ready."
-    TimerStatus.Superseded -> "This timer continued on another device."
-    else -> "Start when ready."
+    TimerStatus.Running -> stringResource(R.string.pause_whenever_you_need)
+    TimerStatus.Paused -> stringResource(R.string.resume_when_ready)
+    TimerStatus.Completed -> stringResource(R.string.session_complete)
+    TimerStatus.Cancelled -> stringResource(R.string.start_again_when_ready)
+    TimerStatus.Superseded -> stringResource(R.string.this_timer_continued_on_another_device)
+    else -> stringResource(R.string.start_when_ready)
 }
 
 @Composable
@@ -2541,16 +2823,28 @@ private fun timerTimeText(minutes: Long, seconds: Long, paused: Boolean, color: 
     }
 }
 
+@Composable
 private fun phaseLabel(phase: String): String = when (phase) {
-    TimerPhase.ShortBreak -> "Short break"
-    TimerPhase.LongBreak -> "Long break"
-    else -> "Focus"
+    TimerPhase.ShortBreak -> stringResource(R.string.short_break)
+    TimerPhase.LongBreak -> stringResource(R.string.long_break)
+    else -> stringResource(R.string.focus)
 }
 
+@Composable
+private fun statusLabel(status: String): String = when (status) {
+    TimerStatus.Running -> stringResource(R.string.running)
+    TimerStatus.Paused -> stringResource(R.string.paused)
+    TimerStatus.Completed -> stringResource(R.string.completed)
+    TimerStatus.Cancelled -> stringResource(R.string.cancelled)
+    TimerStatus.Superseded -> stringResource(R.string.superseded)
+    else -> stringResource(R.string.idle)
+}
+
+@Composable
 private fun phaseRouteLabel(phase: String): String = when (phase) {
-    TimerPhase.ShortBreak -> "Reset"
-    TimerPhase.LongBreak -> "Recover"
-    else -> "Work"
+    TimerPhase.ShortBreak -> stringResource(R.string.reset)
+    TimerPhase.LongBreak -> stringResource(R.string.recover)
+    else -> stringResource(R.string.work)
 }
 
 private fun phaseStamp(phase: String): String = when (phase) {
@@ -2564,36 +2858,55 @@ private fun historyEpoch(item: HistoryItem): Long {
     return runCatching { Instant.parse(value).toEpochMilli() }.getOrDefault(0)
 }
 
+@Composable
 private fun formatTaskDuration(milliseconds: Long): String {
     val minutes = milliseconds / 60_000
-    if (minutes == 0L) return "0 min"
+    if (minutes == 0L) return pluralStringResource(R.plurals.minutes_short, 0, 0)
     val hours = minutes / 60
     val remainingMinutes = minutes % 60
     return when {
-        hours == 0L -> "$minutes min"
-        remainingMinutes == 0L -> "$hours hr"
-        else -> "$hours hr $remainingMinutes min"
+        hours == 0L -> pluralStringResource(R.plurals.minutes_short, minutes.toInt(), minutes)
+        remainingMinutes == 0L -> pluralStringResource(R.plurals.hours_short, hours.toInt(), hours)
+        else -> stringResource(R.string.hours_minutes_short, hours, remainingMinutes)
     }
 }
 
+@Composable
 private fun taskSummaryDescription(summary: TaskDailySummary): String {
-    val pomodoros = if (summary.finishedPomodoros == 1) "pomodoro" else "pomodoros"
-    return "${summary.task.title}, ${summary.finishedPomodoros} finished $pomodoros today, " +
-        "${formatTaskDuration(summary.timeSpentMs)} spent"
+    return pluralStringResource(
+        R.plurals.task_summary_accessibility,
+        summary.finishedPomodoros,
+        summary.task.title,
+        summary.finishedPomodoros,
+        formatTaskDuration(summary.timeSpentMs),
+    )
 }
 
+@Composable
 private fun historyDescription(item: HistoryItem, taskTitle: String?, showPending: Boolean): String {
-    val pending = if (item.pending && showPending) ", queued" else ""
-    val task = taskTitle?.let { ", task $it" }.orEmpty()
-    return "${phaseLabel(item.phase)}, ${item.status}$pending, ${formatHistoryDate(item)}$task, " +
-        formatTaskDuration(item.plannedDurationMs)
+    val pending = if (item.pending && showPending) stringResource(R.string.queued_2) else ""
+    val task = when {
+        taskTitle != null -> stringResource(R.string.history_task, taskTitle)
+        item.taskId != null -> stringResource(R.string.deleted_task_2)
+        else -> stringResource(R.string.unassigned_2)
+    }
+    return stringResource(
+        R.string.history_accessibility,
+        phaseLabel(item.phase),
+        statusLabel(item.status),
+        pending,
+        formatHistoryDate(item),
+        task,
+        formatTaskDuration(item.plannedDurationMs),
+    )
 }
 
+@Composable
 private fun formatHistoryDate(item: HistoryItem): String {
-    val value = item.completedAt ?: item.endedAt ?: return "Time not recorded"
+    val value = item.completedAt ?: item.endedAt ?: return stringResource(R.string.time_not_recorded)
     return runCatching {
         DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM, FormatStyle.SHORT)
             .withLocale(Locale.getDefault())
             .format(Instant.parse(value).atZone(ZoneId.systemDefault()))
-    }.getOrDefault("Time not recorded")
+    }.getOrDefault(stringResource(R.string.time_not_recorded))
 }

@@ -714,6 +714,34 @@ class TimerRepositoryPositiveTest {
     }
 
     @Test
+    fun deletingSelectedTaskAtomicallyClearsSelectionAndSurvivesRestart() = runBlocking {
+        val repository = testRepository(context, database.timerDao())
+        repository.initialize()
+        repository.addTask("Delete selected task")
+        val task = repository.state.value.tasks.single()
+        repository.toggleTimer()
+        repository.finishTimer()
+        assertEquals(task.id, repository.state.value.history.single().taskId)
+
+        repository.deleteTask(task.id)
+
+        assertTrue(repository.state.value.tasks.isEmpty())
+        assertNull(repository.state.value.selectedTaskId)
+        assertEquals(task.id, repository.state.value.history.single().taskId)
+        assertNull(database.timerDao().localState()?.selectedTaskId)
+        assertEquals(TaskOperationType.Delete, database.timerDao().pendingTaskOperations().last().type)
+        assertNull(database.timerDao().pendingSelectedTaskOperations().last().taskId)
+
+        val restarted = testRepository(context, database.timerDao())
+        restarted.initialize()
+
+        assertTrue(restarted.state.value.tasks.isEmpty())
+        assertNull(restarted.state.value.selectedTaskId)
+        assertEquals(task.id, restarted.state.value.history.single().taskId)
+        assertNull(database.timerDao().pendingSelectedTaskOperations().last().taskId)
+    }
+
+    @Test
     fun taskSyncAcknowledgesOperationAndAcceptsAuthoritativeTasks() = runBlocking {
         val profile = testUser()
         val task = requireNotNull(TaskReducer.taskFromTitle("Ship Android"))

@@ -264,10 +264,11 @@ class PomodoroughScreenTest {
     fun navigationDestinationsHaveOneSemanticTargetEach() {
         setScreen(AppState(ready = true, authStatus = AuthStatus.SignedIn))
 
-        listOf("Timer", "Tasks", "Pattern", "Arrivals", "Network").forEach { label ->
+        listOf("Timer", "Tasks", "Pattern", "Arrivals").forEach { label ->
             composeRule.onAllNodes(hasText(label) or hasContentDescription(label))
                 .assertCountEquals(1)
         }
+        composeRule.onNode(hasText("Account") or hasContentDescription("Account")).assertExists()
     }
 
     @Test
@@ -293,7 +294,7 @@ class PomodoroughScreenTest {
                     onChangeDuration = { _, _ -> },
                     onSetAutoStart = {},
                     onSelectTask = {},
-                    onAddTask = {},
+                    onAddTask = { _, result -> result(true) },
                     onDeleteTask = {},
                     onResolveHistory = {},
                     onRecoverHistoryResolution = {},
@@ -313,7 +314,8 @@ class PomodoroughScreenTest {
             }
         }
 
-        composeRule.onNode(hasText("Network") or hasContentDescription("Network")).performClick()
+        composeRule.onNode(hasText("Account") or hasContentDescription("Account")).performClick()
+        composeRule.onNodeWithText("Open Network routes").performClick()
         composeRule.onNodeWithText("Iroh room").performClick()
         assertEquals(ReplicationMode.IROH, selectedMode)
         composeRule.onNodeWithText("Room invites grant full read and write access.", substring = true)
@@ -466,7 +468,7 @@ class PomodoroughScreenTest {
                     onChangeDuration = { _, _ -> },
                     onSetAutoStart = {},
                     onSelectTask = {},
-                    onAddTask = {},
+                    onAddTask = { _, result -> result(true) },
                     onDeleteTask = {},
                     onResolveHistory = onResolve,
                     onRecoverHistoryResolution = onRecover,

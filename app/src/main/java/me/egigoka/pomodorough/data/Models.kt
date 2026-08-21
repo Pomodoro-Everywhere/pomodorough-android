@@ -1,9 +1,23 @@
 package me.egigoka.pomodorough.data
 
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Required
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.Transient
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.descriptors.buildClassSerialDescriptor
+import kotlinx.serialization.descriptors.element
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.json.JsonDecoder
+import kotlinx.serialization.json.JsonEncoder
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.long
 
 object TimerPhase {
     const val Focus = "focus"
@@ -47,6 +61,9 @@ data class NativeExchangeRequest(
 
 @Serializable
 data class RefreshRequest(val refreshToken: String)
+
+@Serializable
+data class DeleteAccountRequest(val confirmation: String)
 
 @Serializable
 data class TokenPair(
@@ -125,7 +142,7 @@ data class HistoryItem(
 data class Acknowledgement(
     val commandId: String,
     val outcome: String,
-    val reason: String,
+    val reason: String = "",
 )
 
 object DurationLimits {
@@ -174,7 +191,7 @@ data class DurationOperation(
 data class DurationAcknowledgement(
     val operationId: String,
     val outcome: String,
-    val reason: String,
+    val reason: String = "",
 )
 
 @Serializable
@@ -191,7 +208,68 @@ data class AutoStartOperation(
 data class AutoStartAcknowledgement(
     val operationId: String,
     val outcome: String,
-    val reason: String,
+    val reason: String = "",
+)
+
+@Serializable(with = SelectedTaskOperationSerializer::class)
+data class SelectedTaskOperation(
+    val id: String,
+    val taskId: String?,
+    val occurredAt: String,
+    val hlcWallMs: Long,
+    val hlcCounter: Long,
+)
+
+object SelectedTaskOperationSerializer : KSerializer<SelectedTaskOperation> {
+    override val descriptor: SerialDescriptor = buildClassSerialDescriptor("SelectedTaskOperation") {
+        element<String>("id")
+        element<String?>("taskId")
+        element<String>("occurredAt")
+        element<Long>("hlcWallMs")
+        element<Long>("hlcCounter")
+    }
+
+    override fun serialize(encoder: Encoder, value: SelectedTaskOperation) {
+        require(encoder is JsonEncoder)
+        encoder.encodeJsonElement(JsonObject(linkedMapOf(
+            "id" to JsonPrimitive(value.id),
+            "taskId" to (value.taskId?.let(::JsonPrimitive) ?: JsonNull),
+            "occurredAt" to JsonPrimitive(value.occurredAt),
+            "hlcWallMs" to JsonPrimitive(value.hlcWallMs),
+            "hlcCounter" to JsonPrimitive(value.hlcCounter),
+        )))
+    }
+
+    override fun deserialize(decoder: Decoder): SelectedTaskOperation {
+        require(decoder is JsonDecoder)
+        val value = decoder.decodeJsonElement().jsonObject
+        require(value.keys == setOf("id", "taskId", "occurredAt", "hlcWallMs", "hlcCounter"))
+        fun string(name: String): String = value.getValue(name).jsonPrimitive.let { primitive ->
+            require(primitive.isString)
+            primitive.content
+        }
+        fun long(name: String): Long = value.getValue(name).jsonPrimitive.let { primitive ->
+            require(!primitive.isString)
+            primitive.long
+        }
+        return SelectedTaskOperation(
+            id = string("id"),
+            taskId = value.getValue("taskId").takeUnless { it is JsonNull }?.let {
+                require(it.jsonPrimitive.isString)
+                it.jsonPrimitive.content
+            },
+            occurredAt = string("occurredAt"),
+            hlcWallMs = long("hlcWallMs"),
+            hlcCounter = long("hlcCounter"),
+        )
+    }
+}
+
+@Serializable
+data class SelectedTaskAcknowledgement(
+    val operationId: String,
+    val outcome: String,
+    val reason: String = "",
 )
 
 object TaskOperationType {
@@ -220,7 +298,7 @@ data class TaskOperation(
 data class TaskAcknowledgement(
     val operationId: String,
     val outcome: String,
-    val reason: String,
+    val reason: String = "",
 )
 
 data class TaskDailySummary(
@@ -237,6 +315,7 @@ data class SyncRequest(
     val durationOperations: List<DurationOperation>,
     val taskOperations: List<TaskOperation> = emptyList(),
     val autoStartOperations: List<AutoStartOperation> = emptyList(),
+    val selectedTaskOperations: List<SelectedTaskOperation> = emptyList(),
 )
 
 @Serializable
@@ -263,6 +342,7 @@ data class BootstrapResolutionRequest(
     val taskOperations: List<TaskOperation>,
     val durationOperations: List<DurationOperation>,
     val autoStartOperations: List<AutoStartOperation>? = null,
+    val selectedTaskOperations: List<SelectedTaskOperation>? = null,
 )
 
 data class HistoryResolutionState(
@@ -298,6 +378,8 @@ data class SyncResponse(
     val tasks: List<FocusTask>,
     @Required val autoStartAcknowledgements: List<AutoStartAcknowledgement> = emptyList(),
     @Required val autoStartBreaks: Boolean = false,
+    @Required val selectedTaskAcknowledgements: List<SelectedTaskAcknowledgement> = emptyList(),
+    @Required val selectedTaskId: String? = null,
 )
 
 @Serializable

@@ -5,15 +5,21 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.jsonObject
 import me.egigoka.pomodorough.data.CanonicalTimer
 import me.egigoka.pomodorough.data.CommandType
 import me.egigoka.pomodorough.data.DurationsMs
 import me.egigoka.pomodorough.data.HistoryItem
+import me.egigoka.pomodorough.data.SelectedTaskOperation
+import me.egigoka.pomodorough.data.TaskOperation
+import me.egigoka.pomodorough.data.TaskOperationType
 import me.egigoka.pomodorough.data.TimerCommand
 import me.egigoka.pomodorough.data.TimerPhase
 import me.egigoka.pomodorough.data.TimerSettings
 import me.egigoka.pomodorough.data.TimerStatus
 import me.egigoka.pomodorough.data.local.LocalStateEntity
+import me.egigoka.pomodorough.data.local.PendingSelectedTaskOperationEntity
+import me.egigoka.pomodorough.data.local.PendingTaskOperationEntity
 import me.egigoka.pomodorough.data.local.PendingCommandEntity
 import me.egigoka.pomodorough.data.local.PomodoroughDatabase
 import me.egigoka.pomodorough.domain.TaskReducer
@@ -140,6 +146,43 @@ class IrohRoomStoreTest {
     }
 
     @Test
+    fun persistedLegacyGenesisWithoutSelectedTaskActivatesWithNullSelection() = runBlocking {
+        val original = state().copy(selectedTaskId = "stale-local-selection")
+        database.timerDao().insertState(original)
+        val secret = ByteArray(32) { it.toByte() }
+        val invite = IrohRoomInvite(
+            roomId = IrohProtocolV1.roomId(secret),
+            roomName = "Legacy room",
+            endpointTicket = "endpoint-ticket-placeholder",
+            roomSecret = secret,
+        )
+        store.prepareJoinedRoom(invite, "endpoint-1")
+        val operation = IrohJson.strict.parseToJsonElement(
+            """{"canonicalTimer":null,"history":[],"tasks":[],"durationsMs":{"focus":1500000,"short_break":300000,"long_break":900000},"autoStartBreaks":false,"hlcWallMs":0,"hlcCounter":0}""",
+        ).jsonObject
+        val record = IrohOperationRecord(IrohDomain.genesis, "device-legacy1", operation)
+        database.timerDao().insertIrohOperations(
+            listOf(
+                me.egigoka.pomodorough.data.local.IrohOperationEntity(
+                    roomId = invite.roomId,
+                    domain = IrohDomain.genesis.name,
+                    operationId = "genesis",
+                    originDeviceId = record.deviceId,
+                    operationJson = operation.toString(),
+                    digest = record.digest(),
+                    hlcWallMs = 0,
+                    hlcCounter = 0,
+                    deviceSequence = null,
+                ),
+            ),
+        )
+
+        store.activateJoinedRoom(invite.roomId)
+
+        assertEquals(null, database.timerDao().localState()?.selectedTaskId)
+    }
+
+    @Test
     fun rejoiningCompletedInactiveRoomRefreshesReturnWorkspace() = runBlocking {
         val original = state().copy(revision = 7)
         database.timerDao().insertState(original)
@@ -156,7 +199,7 @@ class IrohRoomStoreTest {
             listOf(
                 IrohOperationRecord.genesis(
                     "device-2",
-                    IrohGenesis(null, emptyList(), emptyList(), DurationsMs(), false, 0, 0),
+                    IrohGenesis(null, emptyList(), emptyList(), DurationsMs(), false, null, 0, 0),
                 ),
             ),
         )
@@ -322,7 +365,7 @@ class IrohRoomStoreTest {
         )
         val genesis = IrohOperationRecord.genesis(
             "device-genesis1",
-            IrohGenesis(null, listOf(seeded), emptyList(), DurationsMs(), false, 0, 0),
+            IrohGenesis(null, listOf(seeded), emptyList(), DurationsMs(), false, null, 0, 0),
         )
         val resume = IrohOperationRecord.timer(
             "device-resume01",
@@ -337,6 +380,57 @@ class IrohRoomStoreTest {
         )
         assertEquals("device-genesis1", projected.startedByDeviceId)
         assertEquals("device-resume01", projected.lastIntent?.deviceId)
+    }
+
+    @Test
+    fun selectedTaskDeletionEmitsExplicitNullIntoIrohLogAndPreservesHistoryIdentity() = runBlocking {
+        val task = requireNotNull(TaskReducer.taskFromTitle("Delete selected Iroh task"))
+        val taskHistory = history("timer-task-history", "2026-01-01T00:01:00Z").copy(taskId = task.id)
+        database.timerDao().insertState(
+            state().copy(
+                historyJson = IrohJson.strict.encodeToString(listOf(taskHistory)),
+                tasksJson = IrohJson.strict.encodeToString(listOf(task)),
+                knownTasksJson = IrohJson.strict.encodeToString(listOf(task)),
+                selectedTaskId = task.id,
+            ),
+        )
+        val room = store.createRoom(null).first
+        val deletion = TaskOperation(
+            id = "task-operation-delete-iroh",
+            taskId = task.id,
+            type = TaskOperationType.Delete,
+            title = null,
+            occurredAt = "2026-01-01T00:01:40Z",
+            hlcWallMs = NowMs,
+            hlcCounter = 1,
+        )
+        val clearSelection = SelectedTaskOperation(
+            id = "selected-task-clear-iroh",
+            taskId = null,
+            occurredAt = "2026-01-01T00:01:40Z",
+            hlcWallMs = NowMs,
+            hlcCounter = 2,
+        )
+        val local = requireNotNull(database.timerDao().localState())
+        database.timerDao().persistTaskOperation(
+            PendingTaskOperationEntity.from(deletion),
+            local.copy(
+                selectedTaskId = null,
+                hlcWallMs = NowMs,
+                hlcCounter = 2,
+            ),
+            PendingSelectedTaskOperationEntity.from(clearSelection),
+        )
+
+        store.captureLocalOperations()
+
+        val selectedRecord = database.timerDao().irohOperations(room.roomId)
+            .single { it.domain == IrohDomain.selectedTask.name }
+        assertTrue(IrohJson.strict.parseToJsonElement(selectedRecord.operationJson).jsonObject["taskId"] is kotlinx.serialization.json.JsonNull)
+        val projected = requireNotNull(database.timerDao().localState())
+        assertEquals(null, projected.selectedTaskId)
+        val projectedHistory = IrohJson.strict.decodeFromString<List<HistoryItem>>(projected.historyJson)
+        assertEquals(task.id, projectedHistory.single().taskId)
     }
 
     @Test

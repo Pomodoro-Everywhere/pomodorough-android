@@ -13,6 +13,7 @@ import me.egigoka.pomodorough.data.CommandType
 import me.egigoka.pomodorough.data.DurationOperation
 import me.egigoka.pomodorough.data.TaskOperation
 import me.egigoka.pomodorough.data.TaskOperationType
+import me.egigoka.pomodorough.data.SelectedTaskOperation
 import me.egigoka.pomodorough.data.TimerCommand
 import me.egigoka.pomodorough.data.TimerPhase
 import org.junit.After
@@ -130,6 +131,56 @@ class PomodoroughDatabaseTest {
 
         assertEquals(listOf(operation), dao.pendingAutoStartOperations().map { it.toModel() })
         assertEquals(next, dao.localState())
+    }
+
+    @Test
+    fun persistSelectedTaskOperationStoresNullableIntentAndClockTogether() = runBlocking {
+        val initial = state()
+        val operation = SelectedTaskOperation(
+            id = "selected-task-operation-1",
+            taskId = null,
+            occurredAt = "2026-01-01T00:00:00.101Z",
+            hlcWallMs = 101,
+            hlcCounter = 3,
+        )
+        val next = initial.copy(hlcWallMs = 101, hlcCounter = 3, selectedTaskId = null)
+        dao.insertState(initial)
+
+        dao.persistSelectedTaskOperation(PendingSelectedTaskOperationEntity.from(operation), next)
+
+        assertEquals(listOf(operation), dao.pendingSelectedTaskOperations().map { it.toModel() })
+        assertEquals(next, dao.localState())
+    }
+
+    @Test
+    fun migrationElevenToTwelveAddsSelectedTaskQueueAndBootstrapCompatibilityColumn() {
+        context.deleteDatabase(MigrationDatabaseName)
+        migrationHelper.createDatabase(MigrationDatabaseName, 11).close()
+
+        val migrated = migrationHelper.runMigrationsAndValidate(
+            MigrationDatabaseName,
+            12,
+            true,
+            PomodoroughDatabase.Migration11To12,
+        )
+
+        migrated.query("PRAGMA table_info(pending_selected_task_operations)").use { cursor ->
+            val columns = buildSet {
+                while (cursor.moveToNext()) add(cursor.getString(1))
+            }
+            assertEquals(
+                setOf("id", "taskId", "occurredAt", "hlcWallMs", "hlcCounter"),
+                columns,
+            )
+        }
+        migrated.query("PRAGMA table_info(pending_bootstrap_resolution)").use { cursor ->
+            var found = false
+            while (cursor.moveToNext()) {
+                if (cursor.getString(1) == "selectedTaskOperationsJson") found = true
+            }
+            assertTrue(found)
+        }
+        migrated.close()
     }
 
     @Test

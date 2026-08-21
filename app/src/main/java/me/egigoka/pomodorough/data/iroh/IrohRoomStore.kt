@@ -8,6 +8,7 @@ import kotlinx.serialization.json.jsonObject
 import me.egigoka.pomodorough.data.AutoStartOperation
 import me.egigoka.pomodorough.data.DurationOperation
 import me.egigoka.pomodorough.data.FocusTask
+import me.egigoka.pomodorough.data.SelectedTaskOperation
 import me.egigoka.pomodorough.data.TaskOperation
 import me.egigoka.pomodorough.data.TimerCommand
 import me.egigoka.pomodorough.data.TimerSettings
@@ -250,6 +251,9 @@ class IrohRoomStore(
             current.autoStartOperations.forEach {
                 add(IrohOperationRecord.autoStart(current.local.deviceId, it.toModel()))
             }
+            current.selectedTaskOperations.forEach {
+                add(IrohOperationRecord.selectedTask(current.local.deviceId, it.toModel()))
+            }
         }.onEach(IrohOperationRecord::validate)
         val capturedIds = pendingCommands.mapTo(mutableSetOf()) { it.id }
         val cleared = current.copy(
@@ -257,6 +261,7 @@ class IrohRoomStore(
             taskOperations = emptyList(),
             durationOperations = emptyList(),
             autoStartOperations = emptyList(),
+            selectedTaskOperations = emptyList(),
             bootstrapResolution = null,
         )
         val staged = records.map { it.toEntity(room.roomId) }
@@ -430,6 +435,7 @@ class IrohRoomStore(
             taskOperations = returned.taskOperations.takeIf { preserveReturnDomain }.orEmpty(),
             durationOperations = returned.durationOperations.takeIf { preserveReturnDomain }.orEmpty(),
             autoStartOperations = returned.autoStartOperations.takeIf { preserveReturnDomain }.orEmpty(),
+            selectedTaskOperations = returned.selectedTaskOperations.takeIf { preserveReturnDomain }.orEmpty(),
             bootstrapResolution = null,
         )
         dao.activateIrohWorkspace(
@@ -456,6 +462,7 @@ class IrohRoomStore(
         var timer = genesis.canonicalTimer
         var history = genesis.history
         var tasks = genesis.tasks
+        var selectedTaskId = genesis.selectedTaskId
         val base = baseSnapshot ?: WorkspaceCodec.decode(room.roomStateJson)
         var settings = IrohJson.strict.decodeFromString<TimerSettings>(base.local.settingsJson)
             .withDurations(genesis.durationsMs).copy(
@@ -508,6 +515,9 @@ class IrohRoomStore(
                         record.decodeAutoStart(),
                     ),
                 )
+                IrohDomain.selectedTask -> {
+                    selectedTaskId = record.decodeOperation<SelectedTaskOperation>().taskId
+                }
             }
         }
         TimerReducer.projectAt(timer, history, currentTimeMillis()).also { projection ->
@@ -517,7 +527,6 @@ class IrohRoomStore(
         val maximumClock = (operations.map { it.hlcWallMs to it.hlcCounter } +
             listOf(genesis.hlcWallMs to genesis.hlcCounter, base.local.hlcWallMs to base.local.hlcCounter))
             .maxWith(compareBy<Pair<Long, Long>>({ it.first }, { it.second }))
-        val selectedTask = base.local.selectedTaskId?.takeIf { id -> tasks.any { it.id == id } }
         val timerRecordIds = operations.asSequence()
             .filter { it.domain == IrohDomain.timer }
             .map { it.id }
@@ -547,7 +556,7 @@ class IrohRoomStore(
             settingsJson = IrohJson.strict.encodeToString(settings),
             tasksJson = IrohJson.strict.encodeToString(tasks),
             knownTasksJson = IrohJson.strict.encodeToString(knownTasks.values.toList()),
-            selectedTaskId = selectedTask,
+            selectedTaskId = selectedTaskId,
             canonicalAutoStartBreaks = settings.autoStartBreaks,
             serverClockOffsetMs = null,
             serverClockUncertaintyMs = null,
@@ -562,6 +571,7 @@ class IrohRoomStore(
                 taskOperations = emptyList(),
                 durationOperations = emptyList(),
                 autoStartOperations = emptyList(),
+                selectedTaskOperations = emptyList(),
                 bootstrapResolution = null,
             ),
             storedRecords.size,
@@ -600,12 +610,24 @@ class IrohRoomStore(
                 lastIntent = timer.lastIntent?.copy(deviceId = lastOrigin ?: timer.lastIntent.deviceId),
             )
         }
+        val latestSelectedTaskOperation = snapshot.selectedTaskOperations.maxWithOrNull(
+            compareBy(
+                me.egigoka.pomodorough.data.local.PendingSelectedTaskOperationEntity::hlcWallMs,
+                me.egigoka.pomodorough.data.local.PendingSelectedTaskOperationEntity::hlcCounter,
+                me.egigoka.pomodorough.data.local.PendingSelectedTaskOperationEntity::id,
+            ),
+        )
         return IrohGenesis(
             canonicalTimer = projectedTimer,
             history = canonicalRoomHistory(projection.history),
             tasks = projectedTasks,
             durationsMs = projectedSettings.effectiveDurationsMs(),
             autoStartBreaks = projectedSettings.autoStartBreaks,
+            selectedTaskId = if (latestSelectedTaskOperation == null) {
+                local.selectedTaskId
+            } else {
+                latestSelectedTaskOperation.taskId
+            },
             hlcWallMs = local.hlcWallMs,
             hlcCounter = local.hlcCounter,
         )
@@ -624,6 +646,7 @@ class IrohRoomStore(
         taskOperations = emptyList(),
         durationOperations = emptyList(),
         autoStartOperations = emptyList(),
+        selectedTaskOperations = emptyList(),
         bootstrapResolution = null,
     )
 
@@ -643,6 +666,7 @@ class IrohRoomStore(
                 knownTasksJson = IrohJson.strict.encodeToString(genesis.tasks),
                 settingsJson = IrohJson.strict.encodeToString(settings),
                 canonicalAutoStartBreaks = genesis.autoStartBreaks,
+                selectedTaskId = genesis.selectedTaskId,
                 hlcWallMs = genesis.hlcWallMs,
                 hlcCounter = genesis.hlcCounter,
             ),

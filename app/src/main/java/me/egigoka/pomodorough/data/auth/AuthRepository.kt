@@ -22,6 +22,9 @@ interface AuthSession {
     fun hasTokens(): Boolean
     suspend fun <T> authorized(block: suspend (String) -> T): T
     suspend fun logout()
+    suspend fun deleteAccount(confirmation: String) {
+        throw UnsupportedOperationException("Account deletion is not implemented")
+    }
     fun clear()
 }
 
@@ -83,18 +86,23 @@ class AuthRepository(
 
     override fun hasTokens(): Boolean = tokenVault.read() != null
 
-    override suspend fun <T> authorized(block: suspend (String) -> T): T {
+    override suspend fun <T> authorized(block: suspend (String) -> T): T =
+        authorizedWithSession(block).first
+
+    private suspend fun <T> authorizedWithSession(
+        block: suspend (String) -> T,
+    ): Pair<T, TokenPair> {
         val initial = validAccessToken()
         return try {
-            block(initial.accessToken)
+            block(initial.accessToken) to initial
         } catch (error: ApiException) {
             if (error.statusCode != 401) throw error
             val refreshed = refresh(initial.accessToken, force = true)
             try {
-                block(refreshed.accessToken)
+                block(refreshed.accessToken) to refreshed
             } catch (retryError: ApiException) {
                 if (retryError.statusCode != 401) throw retryError
-                tokenVault.clear()
+                if (tokenVault.read() == refreshed) tokenVault.clear()
                 throw AuthenticationRequired("Session expired")
             }
         }
@@ -117,6 +125,12 @@ class AuthRepository(
             }
             throw error
         }
+    }
+
+    override suspend fun deleteAccount(confirmation: String) {
+        require(confirmation == "DELETE") { "Type DELETE exactly" }
+        val (_, deletedSession) = authorizedWithSession { api.deleteAccount(it, confirmation) }
+        if (tokenVault.read() == deletedSession) tokenVault.clear()
     }
 
     override fun clear() = tokenVault.clear()

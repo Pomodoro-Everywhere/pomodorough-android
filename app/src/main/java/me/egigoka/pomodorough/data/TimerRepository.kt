@@ -34,6 +34,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import me.egigoka.pomodorough.R
 import me.egigoka.pomodorough.data.api.ApiException
 import me.egigoka.pomodorough.data.api.BootstrapConflictException
 import me.egigoka.pomodorough.data.api.BootstrapConflictKind
@@ -47,6 +48,7 @@ import me.egigoka.pomodorough.data.local.PendingAutoStartOperationEntity
 import me.egigoka.pomodorough.data.local.PendingBootstrapResolutionEntity
 import me.egigoka.pomodorough.data.local.PendingCommandEntity
 import me.egigoka.pomodorough.data.local.PendingDurationOperationEntity
+import me.egigoka.pomodorough.data.local.PendingSelectedTaskOperationEntity
 import me.egigoka.pomodorough.data.local.PendingTaskOperationEntity
 import me.egigoka.pomodorough.data.local.TimerDao
 import me.egigoka.pomodorough.data.iroh.IrohNetworkState
@@ -123,6 +125,7 @@ private data class RebasedMutationState(
     val taskOperations: List<TaskOperation>,
     val durationOperations: List<DurationOperation>,
     val autoStartOperations: List<AutoStartOperation>,
+    val selectedTaskOperations: List<SelectedTaskOperation> = emptyList(),
 )
 
 private data class ClockedMutation(
@@ -190,6 +193,7 @@ class TimerRepository(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val initializeMutex = Mutex()
     private val actionMutex = workspaceCoordinator
+    private val accountActionMutex = Mutex()
     private val streamMutex = Mutex()
     private val initialized = CompletableDeferred<Unit>()
     private val networkInitializationStarted = AtomicBoolean(false)
@@ -206,6 +210,7 @@ class TimerRepository(
     private var pendingDurationOperations = emptyList<DurationOperation>()
     private var pendingTaskOperations = emptyList<TaskOperation>()
     private var pendingAutoStartOperations = emptyList<AutoStartOperation>()
+    private var pendingSelectedTaskOperations = emptyList<SelectedTaskOperation>()
     private var pendingBootstrapResolution: PendingBootstrapResolutionEntity? = null
     private var canonicalTimer: CanonicalTimer? = null
     private var canonicalHistory = emptyList<HistoryItem>()
@@ -335,6 +340,8 @@ class TimerRepository(
             pendingTaskOperations = dao.pendingTaskOperations().map(PendingTaskOperationEntity::toModel)
             pendingAutoStartOperations = dao.pendingAutoStartOperations()
                 .map(PendingAutoStartOperationEntity::toModel)
+            pendingSelectedTaskOperations = dao.pendingSelectedTaskOperations()
+                .map(PendingSelectedTaskOperationEntity::toModel)
             pendingBootstrapResolution = dao.pendingBootstrapResolution()
             val decodedLocal = try {
                 val decodedUser = local.userJson?.let { raw ->
@@ -451,7 +458,10 @@ class TimerRepository(
         }
     }
 
-    override suspend fun signIn(credentialProvider: GoogleCredentialProvider) {
+    override suspend fun signIn(credentialProvider: GoogleCredentialProvider) =
+        accountActionMutex.withLock { signInInternal(credentialProvider) }
+
+    private suspend fun signInInternal(credentialProvider: GoogleCredentialProvider) {
         initialize()
         if (replicationMode() != ReplicationMode.CENTRALIZED) {
             replication?.setMode(ReplicationMode.CENTRALIZED)
@@ -531,7 +541,7 @@ class TimerRepository(
                 if (!isCurrent(attemptIdentity)) return@withLock
                 authStatus = AuthStatus.SignedOut
                 user = null
-                notice = error.message ?: "Google sign-in did not complete"
+                notice = error.message ?: appContext.getString(R.string.google_sign_in_did_not_complete)
                 restorePendingResolutionForSignedOut(
                     "Sign in again to retry the exact saved history choice.",
                 )
@@ -542,7 +552,9 @@ class TimerRepository(
         }
     }
 
-    override suspend fun logout() {
+    override suspend fun logout() = accountActionMutex.withLock { logoutInternal() }
+
+    private suspend fun logoutInternal() {
         initialize()
         if (replicationMode() == ReplicationMode.IROH) {
             runCatching { auth.logout() }
@@ -621,6 +633,7 @@ class TimerRepository(
                 pendingDurationOperations = emptyList()
                 pendingTaskOperations = emptyList()
                 pendingAutoStartOperations = emptyList()
+                pendingSelectedTaskOperations = emptyList()
                 settings = clearedSettings
                 canonicalAutoStartBreaks = false
                 user = null
@@ -637,7 +650,94 @@ class TimerRepository(
                 publish()
             }
         } catch (error: Exception) {
-            notice = error.message ?: "Sign out failed. Local timer data was kept."
+            notice = error.message ?: appContext.getString(R.string.sign_out_failed_local_timer_data_was_kept)
+            publish()
+        }
+    }
+
+    override suspend fun deleteAccount(confirmation: String) =
+        accountActionMutex.withLock { deleteAccountInternal(confirmation) }
+
+    private suspend fun deleteAccountInternal(confirmation: String) {
+        initialize()
+        require(confirmation == "DELETE") { "Type DELETE exactly" }
+        val deletionGeneration = actionMutex.withLock {
+            accountGeneration += 1
+            syncing = false
+            retrying = false
+            publish()
+            accountGeneration
+        }
+        closeRevisionStream()
+        try {
+            auth.deleteAccount(confirmation)
+            auth.clear()
+            scrubDeletedAccount(deletionGeneration)
+        } catch (error: Exception) {
+            actionMutex.withLock {
+                notice = error.message ?: appContext.getString(R.string.account_deletion_failed_no_local_data_was_removed)
+                publish()
+            }
+            if (foreground) streamLifecycleSignals.trySend(true)
+        }
+    }
+
+    private suspend fun scrubDeletedAccount(deletionGeneration: Long) {
+        actionMutex.withLock {
+            if (accountGeneration != deletionGeneration) return@withLock
+            val clearedSettings = runCatching {
+                json.decodeFromString<TimerSettings>(local.settingsJson)
+            }.getOrDefault(TimerSettings()).withDurations(DurationsMs()).copy(autoStartBreaks = false)
+            val nextLocal = local.copy(
+                revision = 0,
+                canonicalTimerJson = null,
+                historyJson = "[]",
+                tasksJson = "[]",
+                knownTasksJson = "[]",
+                selectedTaskId = null,
+                settingsJson = json.encodeToString(clearedSettings),
+                userJson = null,
+                ownerUserId = null,
+                canonicalAutoStartBreaks = false,
+                ownedTimerId = null,
+                serverClockOffsetMs = null,
+                serverClockUncertaintyMs = null,
+                serverClockSamplePhysicalMs = null,
+                serverClockSampleElapsedRealtimeMs = null,
+                serverClockBootId = null,
+            )
+            dao.clearAccount(nextLocal)
+            localMutationCorrupted = false
+            mutationFailure = null
+            trustedAnchorServerMs = null
+            trustedAnchorElapsedRealtimeMs = null
+            local = nextLocal
+            canonicalTimer = null
+            canonicalHistory = emptyList()
+            canonicalTasks = emptyList()
+            knownTasks = emptyMap()
+            tasks = emptyList()
+            projection = TimerProjection(null, emptyList())
+            pending = emptyList()
+            commandDependencies = emptyMap()
+            pendingDurationOperations = emptyList()
+            pendingTaskOperations = emptyList()
+            pendingAutoStartOperations = emptyList()
+            pendingSelectedTaskOperations = emptyList()
+            settings = clearedSettings
+            canonicalAutoStartBreaks = false
+            user = null
+            pendingBootstrapResolution = null
+            historyResolution = null
+            pendingAccountSwitch = null
+            accountSwitch = null
+            bootstrapSnapshot = null
+            bootstrapClockSample = null
+            conflict = null
+            terminalSyncError = null
+            notice = null
+            authStatus = AuthStatus.SignedOut
+            alarmScheduler.cancel()
             publish()
         }
     }
@@ -686,7 +786,7 @@ class TimerRepository(
                 if (pendingAccountSwitch !== candidate) return@withLock
                 accountSwitch = accountSwitch?.copy(
                     submitting = false,
-                    error = error.message ?: "Could not switch accounts without risking local data.",
+                    error = error.message ?: appContext.getString(R.string.could_not_switch_accounts_without_risking_local_data),
                 )
                 publish()
             }
@@ -939,29 +1039,47 @@ class TimerRepository(
         actionMutex.withLock {
             if (mutationsBlocked() || projection.timer?.status in activeStatuses) return@withLock
             if (taskId != null && tasks.none { it.id == taskId }) return@withLock
-            if (taskId == local.selectedTaskId) return@withLock
-            local = local.copy(selectedTaskId = taskId)
-            dao.updateState(local)
+            val projectedSelection = replaySelectedTask(local.selectedTaskId, pendingSelectedTaskOperations)
+            if (taskId == projectedSelection) return@withLock
+            val reservation = reserveMutation(count = 1, withDeviceSequences = false)
+                ?: return@withLock
+            val stamp = reservation.stamps.single()
+            val operation = SelectedTaskOperation(
+                id = reservation.uuids.single().toString(),
+                taskId = taskId,
+                occurredAt = stamp.occurredAt,
+                hlcWallMs = stamp.wallMs,
+                hlcCounter = stamp.counter,
+            )
+            val nextLocal = local.copy(
+                hlcWallMs = stamp.wallMs,
+                hlcCounter = stamp.counter,
+                selectedTaskId = taskId,
+                lastUuidV7 = reservation.lastUuidV7,
+            )
+            dao.persistSelectedTaskOperation(PendingSelectedTaskOperationEntity.from(operation), nextLocal)
+            local = nextLocal
+            pendingSelectedTaskOperations = pendingSelectedTaskOperations + operation
             publish()
             saved = true
         }
         if (saved) afterLocalMutation()
     }
 
-    override suspend fun addTask(title: String) {
+    override suspend fun addTask(title: String): Boolean {
         initialize()
         val task = TaskReducer.taskFromTitle(title)
         if (task == null) {
-            notice = "Task must contain printable text and fit within 512 bytes."
+            notice = appContext.getString(R.string.task_must_contain_printable_text_and_fit_within_512_bytes)
             publish()
-            return
+            return false
         }
         val existing = tasks.firstOrNull { it.id == task.id }
         if (existing != null) {
             selectTask(existing.id)
-            return
+            return true
         }
-        issueTaskOperation(TaskOperationType.Upsert, task, select = true)
+        return issueTaskOperation(TaskOperationType.Upsert, task, select = true)
     }
 
     override suspend fun deleteTask(taskId: String) {
@@ -997,7 +1115,7 @@ class TimerRepository(
                     }
                     completed
                 } catch (error: Exception) {
-                    conflict = error.message ?: "Iroh room projection could not be refreshed"
+                    conflict = error.message ?: appContext.getString(R.string.iroh_room_projection_could_not_be_refreshed)
                     publish()
                     false
                 }
@@ -1096,7 +1214,7 @@ class TimerRepository(
                     if (!isCurrent(refreshIdentity)) return@withLock
                     historyResolution = historyResolution?.copy(
                         submitting = false,
-                        error = error.message ?: "Could not refresh remote history.",
+                        error = error.message ?: appContext.getString(R.string.could_not_refresh_remote_history),
                     )
                     publish()
                 }
@@ -1156,7 +1274,7 @@ class TimerRepository(
                 return@withLock null
             }
             if (request.strategy != strategy) {
-                notice = "Retry the pending ${request.strategy.displayName()} choice before choosing another option."
+                notice = appContext.getString(R.string.retry_pending_choice_before_another_option, request.strategy.displayName())
                 publish()
                 return@withLock null
             }
@@ -1195,7 +1313,7 @@ class TimerRepository(
             accountGeneration += 1
             historyResolution = resolution.copy(
                 submitting = true,
-                error = "Refreshing account history without the corrupted saved request.",
+                error = appContext.getString(R.string.refreshing_account_history_without_corrupted_saved_request),
             )
             publish()
             profile to currentAttemptIdentity()
@@ -1239,7 +1357,7 @@ class TimerRepository(
                     remoteHistoryCount = 0,
                     corrupted = true,
                     recovery = ResolutionRecovery.Repreview,
-                    error = "Session expired. Sign in again to re-check account history.",
+                    error = appContext.getString(R.string.session_expired_sign_in_again_to_recheck_history),
                 )
                 publish()
                 shouldCloseStream = true
@@ -1250,7 +1368,7 @@ class TimerRepository(
                 if (!isCurrent(identity)) return@withLock
                 historyResolution = historyResolution?.copy(
                     submitting = false,
-                    error = error.message ?: "Could not refresh account history.",
+                    error = error.message ?: appContext.getString(R.string.could_not_refresh_account_history),
                 )
                 publish()
             }
@@ -1284,6 +1402,7 @@ class TimerRepository(
                 pendingTaskOperations,
                 pendingDurationOperations,
                 pendingAutoStartOperations,
+                pendingSelectedTaskOperations,
             )
         } else {
             RebasedMutationState(
@@ -1292,6 +1411,7 @@ class TimerRepository(
                 pendingTaskOperations,
                 pendingDurationOperations,
                 pendingAutoStartOperations,
+                pendingSelectedTaskOperations,
             )
         }
         val eligibleCommands = rebased.commands.filter { it.id !in commandDependencies }
@@ -1306,6 +1426,8 @@ class TimerRepository(
                 .map(::forTrustedWire),
             autoStartOperations = rebased.autoStartOperations.takeIf { includeLocal }.orEmpty()
                 .map(::forTrustedWire),
+            selectedTaskOperations = rebased.selectedTaskOperations.takeIf { includeLocal }.orEmpty()
+                .map(::forTrustedWire),
         )
         val validationError = runCatching { validateResolutionEnvelope(request) }.exceptionOrNull()
         if (validationError != null) {
@@ -1314,7 +1436,7 @@ class TimerRepository(
                 remoteHistoryCount = visibleHistoryCount(bootstrap.history),
                 corrupted = true,
                 recovery = ResolutionRecovery.KeepRemote.takeIf { includeLocal },
-                error = validationError.message ?: "Queued bootstrap resolution is invalid",
+                error = validationError.message ?: appContext.getString(R.string.queued_bootstrap_resolution_is_invalid),
             )
             publish()
             return null
@@ -1329,6 +1451,7 @@ class TimerRepository(
             rebased.durationOperations.map(PendingDurationOperationEntity::from),
             rebased.autoStartOperations.map(PendingAutoStartOperationEntity::from),
             resolution,
+            rebased.selectedTaskOperations.map(PendingSelectedTaskOperationEntity::from),
         )
         installTrustedAnchor(clockSample)
         local = rebased.local
@@ -1336,6 +1459,7 @@ class TimerRepository(
         pendingTaskOperations = rebased.taskOperations
         pendingDurationOperations = rebased.durationOperations
         pendingAutoStartOperations = rebased.autoStartOperations
+        pendingSelectedTaskOperations = rebased.selectedTaskOperations
         pendingBootstrapResolution = resolution
         rebuildProjections()
         historyResolution = HistoryResolutionState(
@@ -1370,6 +1494,7 @@ class TimerRepository(
                         taskAcknowledgements = response.taskAcknowledgements,
                         durationAcknowledgements = response.durationAcknowledgements,
                         autoStartAcknowledgements = response.autoStartAcknowledgements,
+                        selectedTaskAcknowledgements = response.selectedTaskAcknowledgements,
                     )
                     ?: response
                 validateCanonicalResponse(canonicalResponse, "Bootstrap resolution canonical state")
@@ -1407,6 +1532,11 @@ class TimerRepository(
                     response.autoStartAcknowledgements.map(AutoStartAcknowledgement::operationId),
                     "auto-start",
                 )
+                validateAcknowledgements(
+                    attempt.request.selectedTaskOperations.orEmpty().map(SelectedTaskOperation::id),
+                    response.selectedTaskAcknowledgements.map(SelectedTaskAcknowledgement::operationId),
+                    "selected-task",
+                )
                 applyBootstrapResolution(
                     attempt.request,
                     canonicalResponse,
@@ -1415,6 +1545,7 @@ class TimerRepository(
                 )
                 applied = true
                 shouldSyncRetainedOperations = pendingAutoStartOperations.isNotEmpty() ||
+                    pendingSelectedTaskOperations.isNotEmpty() ||
                     eligiblePendingCommands().isNotEmpty()
             }
             if (applied) {
@@ -1429,9 +1560,9 @@ class TimerRepository(
                 bootstrapSnapshot = null
                 bootstrapClockSample = null
                 val detail = when (error.kind) {
-                    BootstrapConflictKind.Revision -> "Remote history changed before this choice was applied. Choose again to refresh it."
-                    BootstrapConflictKind.RequestId -> "Server rejected the saved request identity. Choose again with a new request."
-                    BootstrapConflictKind.Unknown -> error.message ?: "History resolution conflicted. Choose again."
+                    BootstrapConflictKind.Revision -> appContext.getString(R.string.remote_history_changed_choose_again)
+                    BootstrapConflictKind.RequestId -> appContext.getString(R.string.server_rejected_saved_request_identity)
+                    BootstrapConflictKind.Unknown -> error.message ?: appContext.getString(R.string.history_resolution_conflicted_choose_again)
                 }
                 historyResolution = historyResolution?.copy(
                     pendingStrategy = null,
@@ -1461,7 +1592,7 @@ class TimerRepository(
                     bootstrapSnapshot = null
                     bootstrapClockSample = null
                     historyResolution = corruptedResolutionState().copy(
-                        error = "Server permanently rejected the saved history request (${error.statusCode}). Re-check account history without deleting local queues.",
+                        error = appContext.getString(R.string.server_permanently_rejected_saved_history_request, error.statusCode),
                     )
                 }
                 publish()
@@ -1471,7 +1602,7 @@ class TimerRepository(
                 if (!isCurrent(identity)) return@withLock
                 historyResolution = historyResolution?.copy(
                     submitting = false,
-                    error = error.message ?: "Could not finish history resolution. Retry uses the same saved request.",
+                    error = error.message ?: appContext.getString(R.string.could_not_finish_history_resolution_retry_same_request),
                 )
                 publish()
             }
@@ -1480,7 +1611,7 @@ class TimerRepository(
                 if (!isCurrent(identity)) return@withLock
                 historyResolution = historyResolution?.copy(
                     submitting = false,
-                    error = error.message ?: "History resolution failed without changing local data.",
+                    error = error.message ?: appContext.getString(R.string.history_resolution_failed_without_changing_local_data),
                 )
                 publish()
             }
@@ -1526,7 +1657,7 @@ class TimerRepository(
                 if (!isCurrent(identity)) return@withLock
                 authStatus = AuthStatus.SignedOut
                 user = null
-                notice = error.message ?: "Could not verify signed-in account"
+                notice = error.message ?: appContext.getString(R.string.could_not_verify_signed_in_account)
                 restorePendingResolutionForSignedOut(
                     "Sign in again to retry the exact saved history choice.",
                 )
@@ -1551,7 +1682,7 @@ class TimerRepository(
                 if (!isCurrent(identity)) return@withLock
                 authStatus = AuthStatus.SignedOut
                 user = null
-                notice = error.message ?: "Could not validate account bootstrap"
+                notice = error.message ?: appContext.getString(R.string.could_not_validate_account_bootstrap)
                 restorePendingResolutionForSignedOut(
                     "Sign in again to retry the exact saved history choice.",
                 )
@@ -1614,7 +1745,7 @@ class TimerRepository(
                             remoteHistoryCount = visibleHistoryCount(bootstrap.history),
                             pendingStrategy = request.strategy,
                             requestId = request.requestId,
-                            error = "Previous history choice still needs a response from the server.",
+                            error = appContext.getString(R.string.previous_history_choice_still_needs_server_response),
                         )
                     } catch (_: Exception) {
                         corruptedResolutionState()
@@ -1673,6 +1804,7 @@ class TimerRepository(
         val retainedDurationOperations = if (clearLocal) emptyList() else pendingDurationOperations
         val retainedTaskOperations = if (clearLocal) emptyList() else pendingTaskOperations
         val retainedAutoStartOperations = if (clearLocal) emptyList() else pendingAutoStartOperations
+        val retainedSelectedTaskOperations = if (clearLocal) emptyList() else pendingSelectedTaskOperations
         val retainedCommands = if (clearLocal) emptyList() else pending
         val (mergedWall, mergedCounter) = mergedClock(response, clockSample)
         val sampledLocal = local.copy(
@@ -1691,6 +1823,7 @@ class TimerRepository(
                 retainedTaskOperations,
                 retainedDurationOperations,
                 retainedAutoStartOperations,
+                retainedSelectedTaskOperations,
             )
         } else {
             rebaseMutationState(
@@ -1702,6 +1835,7 @@ class TimerRepository(
                 retainedTaskOperations,
                 retainedDurationOperations,
                 retainedAutoStartOperations,
+                retainedSelectedTaskOperations,
             )
         }
         val nextKnownTasks = if (clearLocal) {
@@ -1740,9 +1874,10 @@ class TimerRepository(
             historyJson = json.encodeToString(nextCanonicalHistory),
             tasksJson = json.encodeToString(response.tasks),
             knownTasksJson = json.encodeToString(nextKnownTasks.values.sortedBy(FocusTask::id)),
-            selectedTaskId = local.selectedTaskId?.takeIf { selected ->
-                nextTasks.any { it.id == selected }
-            },
+            selectedTaskId = replaySelectedTask(
+                response.selectedTaskId,
+                rebased.selectedTaskOperations,
+            ),
             settingsJson = json.encodeToString(nextSettings),
             userJson = json.encodeToString(profile),
             ownerUserId = profile.id,
@@ -1764,6 +1899,7 @@ class TimerRepository(
                 rebased.taskOperations.map(PendingTaskOperationEntity::from),
                 rebased.durationOperations.map(PendingDurationOperationEntity::from),
                 rebased.autoStartOperations.map(PendingAutoStartOperationEntity::from),
+                rebased.selectedTaskOperations.map(PendingSelectedTaskOperationEntity::from),
             )
         }
         installTrustedAnchor(clockSample)
@@ -1779,6 +1915,7 @@ class TimerRepository(
             pendingDurationOperations = emptyList()
             pendingTaskOperations = emptyList()
             pendingAutoStartOperations = emptyList()
+            pendingSelectedTaskOperations = emptyList()
             commandDependencies = emptyMap()
             pendingBootstrapResolution = null
         } else {
@@ -1786,6 +1923,7 @@ class TimerRepository(
             pendingDurationOperations = rebased.durationOperations
             pendingTaskOperations = rebased.taskOperations
             pendingAutoStartOperations = rebased.autoStartOperations
+            pendingSelectedTaskOperations = rebased.selectedTaskOperations
         }
         historyResolution = null
         rebuildProjections()
@@ -1963,15 +2101,20 @@ class TimerRepository(
         type: String,
         task: FocusTask,
         select: Boolean = false,
-    ) {
+    ): Boolean {
         var saved = false
         actionMutex.withLock {
             if (mutationsBlocked() || select && projection.timer?.status in activeStatuses) return@withLock
-            val reservation = reserveMutation(count = 1, withDeviceSequences = false)
-                ?: return@withLock
-            val stamp = reservation.stamps.single()
+            val clearsSelectedTask = type == TaskOperationType.Delete &&
+                replaySelectedTask(local.selectedTaskId, pendingSelectedTaskOperations) == task.id
+            val changesSelection = select || clearsSelectedTask
+            val reservation = reserveMutation(
+                count = if (changesSelection) 2 else 1,
+                withDeviceSequences = false,
+            ) ?: return@withLock
+            val stamp = reservation.stamps.first()
             val operation = TaskOperation(
-                id = "task-operation-${reservation.uuids.single()}",
+                id = "task-operation-${reservation.uuids.first()}",
                 taskId = task.id,
                 type = type,
                 title = task.title.takeIf { type == TaskOperationType.Upsert },
@@ -1979,27 +2122,44 @@ class TimerRepository(
                 hlcWallMs = stamp.wallMs,
                 hlcCounter = stamp.counter,
             )
+            val selectedOperation = if (changesSelection) {
+                val selectedStamp = reservation.stamps.last()
+                SelectedTaskOperation(
+                    id = reservation.uuids.last().toString(),
+                    taskId = task.id.takeIf { select },
+                    occurredAt = selectedStamp.occurredAt,
+                    hlcWallMs = selectedStamp.wallMs,
+                    hlcCounter = selectedStamp.counter,
+                )
+            } else null
+            val finalStamp = reservation.stamps.last()
             val nextKnownTasks = knownTasks + (task.id to task)
             val nextLocal = local.copy(
-                hlcWallMs = stamp.wallMs,
-                hlcCounter = stamp.counter,
-                selectedTaskId = when {
-                    select -> task.id
-                    type == TaskOperationType.Delete && local.selectedTaskId == task.id -> null
-                    else -> local.selectedTaskId
+                hlcWallMs = finalStamp.wallMs,
+                hlcCounter = finalStamp.counter,
+                selectedTaskId = if (selectedOperation != null) {
+                    selectedOperation.taskId
+                } else {
+                    local.selectedTaskId
                 },
                 knownTasksJson = json.encodeToString(nextKnownTasks.values.sortedBy(FocusTask::id)),
                 lastUuidV7 = reservation.lastUuidV7,
             )
-            dao.persistTaskOperation(PendingTaskOperationEntity.from(operation), nextLocal)
+            dao.persistTaskOperation(
+                PendingTaskOperationEntity.from(operation),
+                nextLocal,
+                selectedOperation?.let(PendingSelectedTaskOperationEntity::from),
+            )
             local = nextLocal
             knownTasks = nextKnownTasks
             pendingTaskOperations = pendingTaskOperations + operation
+            selectedOperation?.let { pendingSelectedTaskOperations = pendingSelectedTaskOperations + it }
             rebuildProjections()
             publish()
             saved = true
         }
         if (saved) afterLocalMutation()
+        return saved
     }
 
     private fun validTransition(type: String, timer: CanonicalTimer?): Boolean = when (type) {
@@ -2214,7 +2374,7 @@ class TimerRepository(
                 replication?.afterLocalMutation()
                 reloadWorkspace(ReplicationMode.IROH)
             } catch (error: Exception) {
-                conflict = error.message ?: "Iroh room operation could not be recorded"
+                conflict = error.message ?: appContext.getString(R.string.iroh_room_operation_could_not_be_recorded)
                 publish()
             }
         } else if (replicationMode() == ReplicationMode.CENTRALIZED) {
@@ -2239,6 +2399,8 @@ class TimerRepository(
                 .map(PendingDurationOperationEntity::toModel)
             pendingAutoStartOperations = dao.pendingAutoStartOperations()
                 .map(PendingAutoStartOperationEntity::toModel)
+            pendingSelectedTaskOperations = dao.pendingSelectedTaskOperations()
+                .map(PendingSelectedTaskOperationEntity::toModel)
             pendingBootstrapResolution = dao.pendingBootstrapResolution()
             settings = strictJson.decodeFromString(stored.settingsJson)
             canonicalTimer = stored.canonicalTimerJson?.let(strictJson::decodeFromString)
@@ -2296,7 +2458,8 @@ class TimerRepository(
                     pending.isEmpty() &&
                     pendingTaskOperations.isEmpty() &&
                     pendingDurationOperations.isEmpty() &&
-                    pendingAutoStartOperations.isEmpty()
+                    pendingAutoStartOperations.isEmpty() &&
+                    pendingSelectedTaskOperations.isEmpty()
                 ) {
                     retrying = false
                     publish()
@@ -2309,7 +2472,8 @@ class TimerRepository(
                     if (pending.isEmpty() &&
                         pendingTaskOperations.isEmpty() &&
                         pendingDurationOperations.isEmpty() &&
-                        pendingAutoStartOperations.isEmpty()
+                        pendingAutoStartOperations.isEmpty() &&
+                        pendingSelectedTaskOperations.isEmpty()
                     ) break
                 } catch (_: AuthenticationRequired) {
                     actionMutex.withLock {
@@ -2322,15 +2486,15 @@ class TimerRepository(
                     }
                     break
                 } catch (error: SyncProtocolException) {
-                    markTerminalSyncError(error.message ?: "Sync protocol validation failed")
+                    markTerminalSyncError(error.message ?: appContext.getString(R.string.sync_protocol_validation_failed))
                     break
                 } catch (error: SerializationException) {
-                    markTerminalSyncError(error.message ?: "Sync returned a malformed response")
+                    markTerminalSyncError(error.message ?: appContext.getString(R.string.sync_returned_a_malformed_response))
                     break
                 } catch (error: ApiException) {
                     syncing = false
                     if (!error.isRetryable()) {
-                        markTerminalSyncError(error.message ?: "Sync rejected (${error.statusCode})")
+                        markTerminalSyncError(error.message ?: appContext.getString(R.string.sync_rejected_status, error.statusCode))
                         break
                     }
                     retrying = true
@@ -2350,7 +2514,7 @@ class TimerRepository(
                 } catch (error: Exception) {
                     syncing = false
                     retrying = false
-                    notice = error.message ?: "Sync stopped after a local failure"
+                    notice = error.message ?: appContext.getString(R.string.sync_stopped_after_a_local_failure)
                     publish()
                     break
                 }
@@ -2366,6 +2530,7 @@ class TimerRepository(
                 pendingTaskOperations,
                 pendingDurationOperations,
                 pendingAutoStartOperations,
+                pendingSelectedTaskOperations,
             )
             val sent = eligiblePendingCommands().asSequence()
                 .take(MaxCommandsPerSync)
@@ -2377,6 +2542,9 @@ class TimerRepository(
             val sentAutoStartOperations = pendingAutoStartOperations
                 .sortedWith(autoStartOperationComparator)
                 .take(MaxAutoStartOperationsPerSync)
+            val sentSelectedTaskOperations = pendingSelectedTaskOperations
+                .sortedWith(selectedTaskOperationComparator)
+                .take(MaxSelectedTaskOperationsPerSync)
             syncing = true
             retrying = false
             publish()
@@ -2389,6 +2557,7 @@ class TimerRepository(
                     durationOperations = sentDurationOperations.map(::forTrustedWire),
                     taskOperations = sentTaskOperations.map(::forTrustedWire),
                     autoStartOperations = sentAutoStartOperations.map(::forTrustedWire),
+                    selectedTaskOperations = sentSelectedTaskOperations.map(::forTrustedWire),
                 ),
                 sentPhysicalMs = currentTimeMillis(),
                 sentElapsedRealtimeMs = elapsedRealtimeMillis(),
@@ -2427,6 +2596,11 @@ class TimerRepository(
                 response.autoStartAcknowledgements.map(AutoStartAcknowledgement::operationId),
                 "auto-start",
             )
+            val sentSelectedTaskOperationIds = validateAcknowledgements(
+                attempt.request.selectedTaskOperations.map(SelectedTaskOperation::id),
+                response.selectedTaskAcknowledgements.map(SelectedTaskAcknowledgement::operationId),
+                "selected-task",
+            )
             validateCanonicalResponse(response, "Sync")
             val clockSample = serverClockSample(
                 response,
@@ -2449,6 +2623,10 @@ class TimerRepository(
                 .map(PendingAutoStartOperationEntity::from)
             val nextPendingAutoStartOperations = pendingAutoStartOperations
                 .filterNot { it.id in sentAutoStartOperationIds }
+            val acknowledgedSelectedTaskEntities = attempt.request.selectedTaskOperations
+                .map(PendingSelectedTaskOperationEntity::from)
+            val nextPendingSelectedTaskOperations = pendingSelectedTaskOperations
+                .filterNot { it.id in sentSelectedTaskOperationIds }
             val responsePhysicalDeltaMs = responsePhysicalDelta(clockSample)
             val nextCanonicalTimer = localizedCanonicalTimer(
                 response.canonicalTimer,
@@ -2521,6 +2699,7 @@ class TimerRepository(
                 nextPendingTaskOperations,
                 nextPendingDurationOperations,
                 nextPendingAutoStartOperations,
+                nextPendingSelectedTaskOperations,
             )
             val nextLocal = rebased.local.copy(
                 revision = response.revision,
@@ -2528,9 +2707,10 @@ class TimerRepository(
                 historyJson = json.encodeToString(nextCanonicalHistory),
                 tasksJson = json.encodeToString(nextCanonicalTasks),
                 knownTasksJson = json.encodeToString(nextKnownTasks.values.sortedBy(FocusTask::id)),
-                selectedTaskId = local.selectedTaskId?.takeIf { selected ->
-                    nextTasks.any { it.id == selected }
-                },
+                selectedTaskId = replaySelectedTask(
+                    response.selectedTaskId,
+                    rebased.selectedTaskOperations,
+                ),
                 settingsJson = json.encodeToString(nextSettings),
                 canonicalAutoStartBreaks = response.autoStartBreaks,
                 ownedTimerId = nextOwnedTimerId,
@@ -2554,6 +2734,10 @@ class TimerRepository(
                 discardedCommands = generatedResolution.discarded.map { command ->
                     PendingCommandEntity.from(command, commandDependencies[command.id])
                 },
+                acknowledgedSelectedTaskOperations = acknowledgedSelectedTaskEntities,
+                updatedSelectedTaskOperations = rebased.selectedTaskOperations.map(
+                    PendingSelectedTaskOperationEntity::from,
+                ),
             )
             installTrustedAnchor(clockSample)
             pending = rebased.commands
@@ -2561,6 +2745,7 @@ class TimerRepository(
             pendingTaskOperations = rebased.taskOperations
             pendingDurationOperations = rebased.durationOperations
             pendingAutoStartOperations = rebased.autoStartOperations
+            pendingSelectedTaskOperations = rebased.selectedTaskOperations
             canonicalTimer = nextCanonicalTimer
             canonicalHistory = nextCanonicalHistory
             canonicalTasks = nextCanonicalTasks
@@ -2618,6 +2803,9 @@ class TimerRepository(
             response.autoStartAcknowledgements
                 .filter { it.outcome != "applied" }
                 .forEach { add(Triple("Auto-start", it.outcome, it.reason)) }
+            response.selectedTaskAcknowledgements
+                .filter { it.outcome != "applied" }
+                .forEach { add(Triple("Selected task", it.outcome, it.reason)) }
         }
         return when (outcomes.size) {
             0 -> null
@@ -2635,7 +2823,8 @@ class TimerRepository(
         val converged = pending.isEmpty() &&
             pendingTaskOperations.isEmpty() &&
             pendingDurationOperations.isEmpty() &&
-            pendingAutoStartOperations.isEmpty()
+            pendingAutoStartOperations.isEmpty() &&
+            pendingSelectedTaskOperations.isEmpty()
         if (outcomeConflict != null || converged) conflict = outcomeConflict
     }
 
@@ -2766,9 +2955,7 @@ class TimerRepository(
                 ?.let(TaskReducer::taskFromTitle)
         }
         knownTasks = (knownTasks.values + canonicalTasks + pendingUpserts).associateBy(FocusTask::id)
-        if (local.selectedTaskId != null && tasks.none { it.id == local.selectedTaskId }) {
-            local = local.copy(selectedTaskId = null)
-        }
+
     }
 
     private fun replayDurationOperations(
@@ -2783,6 +2970,14 @@ class TimerRepository(
         base,
         operations.filter { it.deviceId == local.deviceId },
     )
+
+    private fun replaySelectedTask(
+        base: String?,
+        operations: List<SelectedTaskOperation>,
+    ): String? {
+        val latest = operations.maxWithOrNull(selectedTaskOperationComparator)
+        return if (latest == null) base else latest.taskId
+    }
 
     private fun DurationOperation.isValidDurationOperation(): Boolean = SettingsReducer.isValid(this)
 
@@ -2953,6 +3148,18 @@ class TimerRepository(
         )
     }
 
+    private fun validateSelectedTaskOperation(operation: SelectedTaskOperation) {
+        require(operation.id.isNotBlank() && (operation.taskId == null || isUuid(operation.taskId))) {
+            "Saved selected-task operation is invalid"
+        }
+        SyncWireBounds.requireOperationClock(
+            operation.occurredAt,
+            operation.hlcWallMs,
+            operation.hlcCounter,
+            allowLegacySentinel = false,
+        )
+    }
+
     private suspend fun applyBootstrapResolution(
         request: BootstrapResolutionRequest,
         response: SyncResponse,
@@ -2962,6 +3169,11 @@ class TimerRepository(
         val profile = user ?: throw AuthenticationRequired()
         val retainedAutoStartOperations = if (request.autoStartOperations == null) {
             pendingAutoStartOperations
+        } else {
+            emptyList()
+        }
+        val retainedSelectedTaskOperations = if (request.selectedTaskOperations == null) {
+            pendingSelectedTaskOperations
         } else {
             emptyList()
         }
@@ -3017,6 +3229,7 @@ class TimerRepository(
             emptyList(),
             emptyList(),
             retainedAutoStartOperations,
+            retainedSelectedTaskOperations,
         )
         val rebasedProjection = TimerReducer.replay(
             nextCanonicalTimer,
@@ -3051,9 +3264,10 @@ class TimerRepository(
             historyJson = json.encodeToString(nextCanonicalHistory),
             tasksJson = json.encodeToString(response.tasks),
             knownTasksJson = json.encodeToString(nextKnownTasks.values.sortedBy(FocusTask::id)),
-            selectedTaskId = local.selectedTaskId?.takeIf { selected ->
-                response.tasks.any { it.id == selected }
-            },
+            selectedTaskId = replaySelectedTask(
+                response.selectedTaskId,
+                rebased.selectedTaskOperations,
+            ),
             settingsJson = json.encodeToString(nextSettings),
             userJson = json.encodeToString(profile),
             ownerUserId = profile.id,
@@ -3071,6 +3285,9 @@ class TimerRepository(
             retainedCommands = rebased.commands.map(PendingCommandEntity::from),
             retainedAutoStartOperations = rebased.autoStartOperations
                 .map(PendingAutoStartOperationEntity::from),
+            clearSelectedTaskOperations = request.selectedTaskOperations != null,
+            retainedSelectedTaskOperations = rebased.selectedTaskOperations
+                .map(PendingSelectedTaskOperationEntity::from),
         )
         installTrustedAnchor(clockSample)
         local = nextLocal
@@ -3079,6 +3296,7 @@ class TimerRepository(
         pendingTaskOperations = emptyList()
         pendingDurationOperations = emptyList()
         pendingAutoStartOperations = rebased.autoStartOperations
+        pendingSelectedTaskOperations = rebased.selectedTaskOperations
         pendingBootstrapResolution = null
         canonicalTimer = nextCanonicalTimer
         canonicalHistory = nextCanonicalHistory
@@ -3112,8 +3330,9 @@ class TimerRepository(
         if (requireEmptyAcknowledgements && (
                 response.acknowledgements.isNotEmpty() ||
                     response.taskAcknowledgements.isNotEmpty() ||
-                    response.durationAcknowledgements.isNotEmpty()
-                    || response.autoStartAcknowledgements.isNotEmpty()
+                    response.durationAcknowledgements.isNotEmpty() ||
+                    response.autoStartAcknowledgements.isNotEmpty() ||
+                    response.selectedTaskAcknowledgements.isNotEmpty()
                 )
         ) {
             throw SyncProtocolException("$source returned acknowledgements for a read-only request")
@@ -3220,6 +3439,7 @@ class TimerRepository(
                 "$source returned an invalid canonical task",
             )
         }
+        response.selectedTaskId?.let { validateCanonicalTaskId(it, source) }
         response.acknowledgements.forEach { acknowledgement ->
             validateAcknowledgement(
                 acknowledgement.commandId,
@@ -3250,6 +3470,14 @@ class TimerRepository(
                 acknowledgement.outcome,
                 source,
                 "auto-start",
+            )
+        }
+        response.selectedTaskAcknowledgements.forEach { acknowledgement ->
+            validateAcknowledgement(
+                acknowledgement.operationId,
+                acknowledgement.outcome,
+                source,
+                "selected-task",
             )
         }
     }
@@ -3333,7 +3561,8 @@ class TimerRepository(
             pending.map(TimerCommand::id) +
                 pendingTaskOperations.map(TaskOperation::id) +
                 pendingDurationOperations.map(DurationOperation::id) +
-                pendingAutoStartOperations.map(AutoStartOperation::id)
+                pendingAutoStartOperations.map(AutoStartOperation::id) +
+                pendingSelectedTaskOperations.map(SelectedTaskOperation::id)
             ).mapNotNull(UuidV7::payload)
             .maxWithOrNull(UuidV7::compare)
         require(stored == null || queued == null || UuidV7.compare(stored, queued) >= 0) {
@@ -3390,6 +3619,7 @@ class TimerRepository(
                 allowLegacySentinel = true,
             )
         }
+        pendingSelectedTaskOperations.forEach(::validateSelectedTaskOperation)
         require(pending.map(TimerCommand::id).toSet().size == pending.size) {
             "Persisted timer commands contain duplicate IDs"
         }
@@ -3407,6 +3637,10 @@ class TimerRepository(
             pendingAutoStartOperations.map(AutoStartOperation::id).toSet().size ==
                 pendingAutoStartOperations.size,
         ) { "Persisted auto-start operations contain duplicate IDs" }
+        require(
+            pendingSelectedTaskOperations.map(SelectedTaskOperation::id).toSet().size ==
+                pendingSelectedTaskOperations.size,
+        ) { "Persisted selected-task operations contain duplicate IDs" }
     }
 
     private suspend fun repairLegacyMutationQueues() {
@@ -3510,6 +3744,7 @@ class TimerRepository(
         taskOperations: List<TaskOperation>,
         durationOperations: List<DurationOperation>,
         autoStartOperations: List<AutoStartOperation>,
+        selectedTaskOperations: List<SelectedTaskOperation> = emptyList(),
     ): RebasedMutationState {
         val uncertaintyMs = baseLocal.serverClockUncertaintyMs
             ?.coerceIn(0L, SyncWireBounds.MaxClockSkewMs)
@@ -3569,11 +3804,15 @@ class TimerRepository(
         val autoStartClocks = autoStartOperations.filter { it.hlcWallMs > 0 }
             .sortedWith(compareBy(AutoStartOperation::hlcWallMs, AutoStartOperation::hlcCounter, AutoStartOperation::id))
             .map { ClockedMutation("auto:${it.id}", it.hlcWallMs, it.hlcCounter, it.id) }
-        val clocks = commandClocks + taskClocks + durationClocks + autoStartClocks
+        val selectedTaskClocks = selectedTaskOperations
+            .sortedWith(selectedTaskOperationComparator)
+            .map { ClockedMutation("selected:${it.id}", it.hlcWallMs, it.hlcCounter, it.id) }
+        val clocks = commandClocks + taskClocks + durationClocks + autoStartClocks + selectedTaskClocks
         rebaseDomain(commandClocks)
         rebaseDomain(taskClocks)
         rebaseDomain(durationClocks)
         rebaseDomain(autoStartClocks)
+        rebaseDomain(selectedTaskClocks)
         fun clock(key: String, original: Pair<Long, Long>) = replacements[key] ?: original
         fun occurrence(original: String, nextWallMs: Long): String {
             val originalMs = runCatching { Instant.parse(original).toEpochMilli() }.getOrNull()
@@ -3625,6 +3864,17 @@ class TimerRepository(
                 hlcCounter = nextCounter,
             )
         }
+        val rebasedSelectedTasks = selectedTaskOperations.map { operation ->
+            val (nextWall, nextCounter) = clock(
+                "selected:${operation.id}",
+                operation.hlcWallMs to operation.hlcCounter,
+            )
+            if (nextWall == operation.hlcWallMs && nextCounter == operation.hlcCounter) operation else operation.copy(
+                occurredAt = occurrence(operation.occurredAt, nextWall),
+                hlcWallMs = nextWall,
+                hlcCounter = nextCounter,
+            )
+        }
         val retained = (clocks.map { mutation ->
             clock(mutation.key, mutation.wallMs to mutation.counter)
         } + (baseLocal.hlcWallMs to baseLocal.hlcCounter))
@@ -3636,6 +3886,7 @@ class TimerRepository(
             rebasedTasks,
             rebasedDurations,
             rebasedAutoStart,
+            rebasedSelectedTasks,
         )
     }
 
@@ -3648,7 +3899,8 @@ class TimerRepository(
             pendingDurationOperations.filter { it.hlcWallMs > 0 }
                 .map { it.hlcWallMs to it.hlcCounter } +
             pendingAutoStartOperations.filter { it.hlcWallMs > 0 }
-                .map { it.hlcWallMs to it.hlcCounter }
+                .map { it.hlcWallMs to it.hlcCounter } +
+            pendingSelectedTaskOperations.map { it.hlcWallMs to it.hlcCounter }
         ).filter { latestTrustedWallMs == null || it.first <= latestTrustedWallMs }
             .maxWithOrNull(compareBy<Pair<Long, Long>>({ it.first }, { it.second }))
             ?: (0L to 0L)
@@ -3859,6 +4111,8 @@ class TimerRepository(
     private fun forTrustedWire(operation: DurationOperation): DurationOperation = operation
 
     private fun forTrustedWire(operation: AutoStartOperation): AutoStartOperation = operation
+
+    private fun forTrustedWire(operation: SelectedTaskOperation): SelectedTaskOperation = operation
 
     private fun localizedCanonicalTimer(
         timer: CanonicalTimer?,
@@ -4074,6 +4328,7 @@ class TimerRepository(
         taskOperations: List<TaskOperation>,
         durationOperations: List<DurationOperation>,
         autoStartOperations: List<AutoStartOperation>,
+        selectedTaskOperations: List<SelectedTaskOperation>,
     ) {
         try {
             commands.forEach(::validateTimerCommand)
@@ -4095,6 +4350,11 @@ class TimerRepository(
         } catch (_: Exception) {
             throw SyncProtocolException("Queued auto-start operation is invalid")
         }
+        try {
+            selectedTaskOperations.forEach(::validateSelectedTaskOperation)
+        } catch (_: Exception) {
+            throw SyncProtocolException("Queued selected-task operation is invalid")
+        }
     }
 
     private fun visibleHistoryCount(history: List<HistoryItem>): Int =
@@ -4108,6 +4368,8 @@ class TimerRepository(
             pendingTaskOperations.isNotEmpty() ||
             pendingDurationOperations.isNotEmpty() ||
             pendingAutoStartOperations.isNotEmpty() ||
+            pendingSelectedTaskOperations.isNotEmpty() ||
+            local.selectedTaskId != null ||
             settings.effectiveDurationsMs() != DurationsMs() ||
             settings.autoStartBreaks
 
@@ -4115,6 +4377,7 @@ class TimerRepository(
         response.canonicalTimer != null ||
             response.history.isNotEmpty() ||
             response.tasks.isNotEmpty() ||
+            response.selectedTaskId != null ||
             response.durationsMs != DurationsMs() ||
             response.autoStartBreaks
 
@@ -4143,6 +4406,9 @@ class TimerRepository(
             autoStartOperations = autoStartOperationsJson?.let {
                 strictJson.decodeFromString<List<AutoStartOperation>>(it)
             },
+            selectedTaskOperations = selectedTaskOperationsJson?.let {
+                strictJson.decodeFromString<List<SelectedTaskOperation>>(it)
+            },
         )
         validateResolutionEnvelope(request)
         validateResolutionQueues(
@@ -4161,7 +4427,8 @@ class TimerRepository(
                 request.commands.isEmpty() &&
                     request.taskOperations.isEmpty() &&
                     request.durationOperations.isEmpty() &&
-                    request.autoStartOperations.orEmpty().isEmpty(),
+                    request.autoStartOperations.orEmpty().isEmpty() &&
+                    request.selectedTaskOperations.orEmpty().isEmpty(),
             ) { "Saved Keep Remote request contains local operations" }
             return
         }
@@ -4184,6 +4451,11 @@ class TimerRepository(
                 pendingAutoStartOperations.map(::forTrustedWire).sortedWith(autoStartOperationComparator)
             ) { "Saved bootstrap auto-start operations do not match local queues" }
         }
+        if (request.selectedTaskOperations != null) {
+            require(request.selectedTaskOperations.sortedWith(selectedTaskOperationComparator) ==
+                pendingSelectedTaskOperations.map(::forTrustedWire).sortedWith(selectedTaskOperationComparator)
+            ) { "Saved bootstrap selected-task operations do not match local queues" }
+        }
     }
 
     private fun BootstrapResolutionRequest.toEntity(profile: User) = PendingBootstrapResolutionEntity(
@@ -4195,6 +4467,7 @@ class TimerRepository(
         taskOperationsJson = json.encodeToString(taskOperations),
         durationOperationsJson = json.encodeToString(durationOperations),
         autoStartOperationsJson = autoStartOperations?.let(json::encodeToString),
+        selectedTaskOperationsJson = selectedTaskOperations?.let(json::encodeToString),
         ownerUserId = profile.id,
         userJson = json.encodeToString(profile),
     )
@@ -4241,7 +4514,7 @@ class TimerRepository(
         remoteHistoryCount = visibleHistoryCount(bootstrapSnapshot?.history.orEmpty()),
         corrupted = true,
         recovery = ResolutionRecovery.Repreview,
-        error = "Saved history resolution is corrupted. Local data and queues were preserved.",
+        error = appContext.getString(R.string.saved_history_resolution_corrupted_local_data_preserved),
     )
 
     private fun restorePendingResolutionForSignedOut(message: String) {
@@ -4272,7 +4545,8 @@ class TimerRepository(
             pending.isNotEmpty() ||
                 pendingTaskOperations.isNotEmpty() ||
                 pendingDurationOperations.isNotEmpty() ||
-                pendingAutoStartOperations.isNotEmpty() -> SyncStatus.Queued
+                pendingAutoStartOperations.isNotEmpty() ||
+                pendingSelectedTaskOperations.isNotEmpty() -> SyncStatus.Queued
             !initialized.isCompleted -> SyncStatus.Checking
             else -> SyncStatus.Synced
         }
@@ -4288,7 +4562,7 @@ class TimerRepository(
             selectedTaskId = if (::local.isInitialized) local.selectedTaskId else null,
             settings = settings,
             pendingCount = pending.size + pendingTaskOperations.size + pendingDurationOperations.size +
-                pendingAutoStartOperations.size,
+                pendingAutoStartOperations.size + pendingSelectedTaskOperations.size,
             syncStatus = syncStatus,
             historyResolution = historyResolution,
             accountSwitch = accountSwitch,
@@ -4304,6 +4578,7 @@ class TimerRepository(
         const val MaxTaskOperationsPerSync = 256
         const val MaxDurationOperationsPerSync = 256
         const val MaxAutoStartOperationsPerSync = 256
+        const val MaxSelectedTaskOperationsPerSync = 256
         const val MaxBootstrapOperations = 4096
         const val MaxTimerDurationMs = 14_400_000L
         const val MaxServerClockUncertaintyMs = 30_000L
@@ -4325,6 +4600,11 @@ class TimerRepository(
             TaskOperation::id,
         )
         val autoStartOperationComparator = SettingsReducer.autoStartComparator
+        val selectedTaskOperationComparator = compareBy<SelectedTaskOperation>(
+            SelectedTaskOperation::hlcWallMs,
+            SelectedTaskOperation::hlcCounter,
+            SelectedTaskOperation::id,
+        )
         val activeStatuses = setOf(TimerStatus.Running, TimerStatus.Paused)
         val timerStatuses = activeStatuses + setOf(
             TimerStatus.Completed,

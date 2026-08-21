@@ -52,7 +52,7 @@ class PomodoroughViewModelTest {
         viewModel.changeDuration("focus", 5)
         viewModel.setAutoStart(true)
         viewModel.selectTask("task-1")
-        viewModel.addTask("Write tests")
+        viewModel.addTask("Write tests") {}
         viewModel.deleteTask("task-1")
         viewModel.resolveHistory(BootstrapStrategy.Merge)
         viewModel.recoverHistoryResolution()
@@ -206,6 +206,7 @@ private class RecordingTimerRepository : TimerRepositoryContract {
         record("signIn")
     }
     override suspend fun logout() = record("logout")
+    override suspend fun deleteAccount(confirmation: String) = record("deleteAccount:$confirmation")
     override fun refresh() = record("refresh")
     override suspend fun toggleTimer() = record("toggleTimer")
     override suspend fun finishTimer() = record("finishTimer")
@@ -216,7 +217,10 @@ private class RecordingTimerRepository : TimerRepositoryContract {
         record("changeDuration:$phase:$delta")
     override suspend fun setAutoStart(enabled: Boolean) = record("setAutoStart:$enabled")
     override suspend fun selectTask(taskId: String?) = record("selectTask:$taskId")
-    override suspend fun addTask(title: String) = record("addTask:$title")
+    override suspend fun addTask(title: String): Boolean {
+        record("addTask:$title")
+        return true
+    }
     override suspend fun deleteTask(taskId: String) = record("deleteTask:$taskId")
     override suspend fun finishExpiredTimer(): Boolean {
         record("finishExpiredTimer")

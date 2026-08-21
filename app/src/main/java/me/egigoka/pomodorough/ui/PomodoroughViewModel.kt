@@ -30,6 +30,7 @@ class PomodoroughViewModel(
         repository.signIn(credentialProvider)
     }
     fun logout() = launch { repository.logout() }
+    fun deleteAccount(confirmation: String) = launch { repository.deleteAccount(confirmation) }
     fun refresh() = repository.refresh()
     fun toggleTimer() = launch { repository.toggleTimer() }
     fun finishTimer() = launch { repository.finishTimer() }
@@ -41,7 +42,9 @@ class PomodoroughViewModel(
     }
     fun setAutoStart(enabled: Boolean) = launch { repository.setAutoStart(enabled) }
     fun selectTask(taskId: String?) = launch { repository.selectTask(taskId) }
-    fun addTask(title: String) = launch { repository.addTask(title) }
+    fun addTask(title: String, onResult: (Boolean) -> Unit) = launch {
+        onResult(repository.addTask(title))
+    }
     fun deleteTask(taskId: String) = launch { repository.deleteTask(taskId) }
     fun resolveHistory(strategy: BootstrapStrategy) = launch { repository.resolveHistory(strategy) }
     fun recoverHistoryResolution() = launch { repository.recoverCorruptedResolution() }

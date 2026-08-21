@@ -34,6 +34,9 @@ interface TimerDao {
     @Query("SELECT * FROM pending_auto_start_operations ORDER BY hlcWallMs, hlcCounter, deviceId, id")
     suspend fun pendingAutoStartOperations(): List<PendingAutoStartOperationEntity>
 
+    @Query("SELECT * FROM pending_selected_task_operations ORDER BY hlcWallMs, hlcCounter, id")
+    suspend fun pendingSelectedTaskOperations(): List<PendingSelectedTaskOperationEntity>
+
     @Query("SELECT * FROM pending_bootstrap_resolution WHERE id = 0")
     suspend fun pendingBootstrapResolution(): PendingBootstrapResolutionEntity?
 
@@ -46,6 +49,7 @@ interface TimerDao {
             taskOperations = pendingTaskOperations(),
             durationOperations = pendingDurationOperations(),
             autoStartOperations = pendingAutoStartOperations(),
+            selectedTaskOperations = pendingSelectedTaskOperations(),
             bootstrapResolution = pendingBootstrapResolution(),
         )
     }
@@ -136,6 +140,9 @@ interface TimerDao {
     @Update
     suspend fun updateAutoStartOperations(operations: List<PendingAutoStartOperationEntity>)
 
+    @Update
+    suspend fun updateSelectedTaskOperations(operations: List<PendingSelectedTaskOperationEntity>)
+
     @Insert
     suspend fun insertTaskOperation(operation: PendingTaskOperationEntity)
 
@@ -147,6 +154,9 @@ interface TimerDao {
 
     @Insert
     suspend fun insertAutoStartOperation(operation: PendingAutoStartOperationEntity)
+
+    @Insert
+    suspend fun insertSelectedTaskOperation(operation: PendingSelectedTaskOperationEntity)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertReplicationSettings(settings: ReplicationSettingsEntity)
@@ -203,6 +213,12 @@ interface TimerDao {
     @Query("DELETE FROM pending_auto_start_operations")
     suspend fun deleteAllAutoStartOperations()
 
+    @Query("DELETE FROM pending_selected_task_operations")
+    suspend fun deleteAllSelectedTaskOperations()
+
+    @Delete
+    suspend fun deleteSelectedTaskOperations(operations: List<PendingSelectedTaskOperationEntity>)
+
     @Query("DELETE FROM pending_bootstrap_resolution")
     suspend fun deleteBootstrapResolution()
 
@@ -222,8 +238,10 @@ interface TimerDao {
     suspend fun persistTaskOperation(
         operation: PendingTaskOperationEntity,
         state: LocalStateEntity,
+        selectedTaskOperation: PendingSelectedTaskOperationEntity? = null,
     ) {
         insertTaskOperation(operation)
+        selectedTaskOperation?.let { insertSelectedTaskOperation(it) }
         updateState(state)
     }
 
@@ -246,17 +264,28 @@ interface TimerDao {
     }
 
     @Transaction
+    suspend fun persistSelectedTaskOperation(
+        operation: PendingSelectedTaskOperationEntity,
+        state: LocalStateEntity,
+    ) {
+        insertSelectedTaskOperation(operation)
+        updateState(state)
+    }
+
+    @Transaction
     suspend fun updateMutationState(
         state: LocalStateEntity,
         commands: List<PendingCommandEntity>,
         taskOperations: List<PendingTaskOperationEntity>,
         durationOperations: List<PendingDurationOperationEntity>,
         autoStartOperations: List<PendingAutoStartOperationEntity>,
+        selectedTaskOperations: List<PendingSelectedTaskOperationEntity> = emptyList(),
     ) {
         if (commands.isNotEmpty()) updateCommands(commands)
         if (taskOperations.isNotEmpty()) updateTaskOperations(taskOperations)
         if (durationOperations.isNotEmpty()) updateDurationOperations(durationOperations)
         if (autoStartOperations.isNotEmpty()) updateAutoStartOperations(autoStartOperations)
+        if (selectedTaskOperations.isNotEmpty()) updateSelectedTaskOperations(selectedTaskOperations)
         updateState(state)
     }
 
@@ -268,6 +297,7 @@ interface TimerDao {
         durationOperations: List<PendingDurationOperationEntity>,
         autoStartOperations: List<PendingAutoStartOperationEntity>,
         resolution: PendingBootstrapResolutionEntity,
+        selectedTaskOperations: List<PendingSelectedTaskOperationEntity> = emptyList(),
     ) {
         updateMutationState(
             state,
@@ -275,6 +305,7 @@ interface TimerDao {
             taskOperations,
             durationOperations,
             autoStartOperations,
+            selectedTaskOperations,
         )
         upsertBootstrapResolution(resolution)
     }
@@ -300,6 +331,8 @@ interface TimerDao {
         updatedDurationOperations: List<PendingDurationOperationEntity> = emptyList(),
         updatedAutoStartOperations: List<PendingAutoStartOperationEntity> = emptyList(),
         discardedCommands: List<PendingCommandEntity> = emptyList(),
+        acknowledgedSelectedTaskOperations: List<PendingSelectedTaskOperationEntity> = emptyList(),
+        updatedSelectedTaskOperations: List<PendingSelectedTaskOperationEntity> = emptyList(),
     ) {
         if (acknowledgedCommands.isNotEmpty()) deleteCommands(acknowledgedCommands)
         if (acknowledgedTaskOperations.isNotEmpty()) deleteTaskOperations(acknowledgedTaskOperations)
@@ -309,12 +342,18 @@ interface TimerDao {
         if (acknowledgedAutoStartOperations.isNotEmpty()) {
             deleteAutoStartOperations(acknowledgedAutoStartOperations)
         }
+        if (acknowledgedSelectedTaskOperations.isNotEmpty()) {
+            deleteSelectedTaskOperations(acknowledgedSelectedTaskOperations)
+        }
         if (discardedCommands.isNotEmpty()) deleteCommands(discardedCommands)
         if (updatedCommands.isNotEmpty()) updateCommands(updatedCommands)
         if (updatedTaskOperations.isNotEmpty()) updateTaskOperations(updatedTaskOperations)
         if (updatedDurationOperations.isNotEmpty()) updateDurationOperations(updatedDurationOperations)
         if (updatedAutoStartOperations.isNotEmpty()) {
             updateAutoStartOperations(updatedAutoStartOperations)
+        }
+        if (updatedSelectedTaskOperations.isNotEmpty()) {
+            updateSelectedTaskOperations(updatedSelectedTaskOperations)
         }
         updateState(state)
     }
@@ -325,6 +364,7 @@ interface TimerDao {
         deleteAllTaskOperations()
         deleteAllDurationOperations()
         deleteAllAutoStartOperations()
+        deleteAllSelectedTaskOperations()
         deleteBootstrapResolution()
         updateState(state)
     }
@@ -335,6 +375,8 @@ interface TimerDao {
         clearAutoStartOperations: Boolean = true,
         retainedCommands: List<PendingCommandEntity> = emptyList(),
         retainedAutoStartOperations: List<PendingAutoStartOperationEntity> = emptyList(),
+        clearSelectedTaskOperations: Boolean = true,
+        retainedSelectedTaskOperations: List<PendingSelectedTaskOperationEntity> = emptyList(),
     ) {
         deleteAllCommands()
         if (retainedCommands.isNotEmpty()) insertCommands(retainedCommands)
@@ -344,6 +386,11 @@ interface TimerDao {
             deleteAllAutoStartOperations()
         } else if (retainedAutoStartOperations.isNotEmpty()) {
             updateAutoStartOperations(retainedAutoStartOperations)
+        }
+        if (clearSelectedTaskOperations) {
+            deleteAllSelectedTaskOperations()
+        } else if (retainedSelectedTaskOperations.isNotEmpty()) {
+            updateSelectedTaskOperations(retainedSelectedTaskOperations)
         }
         deleteBootstrapResolution()
         updateState(state)
@@ -414,7 +461,8 @@ interface TimerDao {
         snapshot: LocalWorkspaceSnapshot,
     ): List<Long> {
         check(pendingCommands().isEmpty() && pendingTaskOperations().isEmpty() &&
-            pendingDurationOperations().isEmpty() && pendingAutoStartOperations().isEmpty()
+            pendingDurationOperations().isEmpty() && pendingAutoStartOperations().isEmpty() &&
+            pendingSelectedTaskOperations().isEmpty()
         ) { "Local Iroh operations must be captured before applying remote records" }
         return insertIrohRecordsAndActivate(room, operations, snapshot)
     }
@@ -443,6 +491,8 @@ interface TimerDao {
         if (snapshot.autoStartOperations.isNotEmpty()) {
             insertAutoStartOperations(snapshot.autoStartOperations)
         }
+        deleteAllSelectedTaskOperations()
+        snapshot.selectedTaskOperations.forEach { insertSelectedTaskOperation(it) }
         deleteBootstrapResolution()
         snapshot.bootstrapResolution?.let { upsertBootstrapResolution(it) }
     }
@@ -487,13 +537,14 @@ interface TimerDao {
         PendingDurationOperationEntity::class,
         PendingBootstrapResolutionEntity::class,
         PendingAutoStartOperationEntity::class,
+        PendingSelectedTaskOperationEntity::class,
         ReplicationSettingsEntity::class,
         IrohRoomEntity::class,
         IrohPeerEntity::class,
         IrohOperationEntity::class,
         IrohConflictEntity::class,
     ],
-    version = 11,
+    version = 12,
     exportSchema = true,
 )
 abstract class PomodoroughDatabase : RoomDatabase() {
@@ -516,6 +567,7 @@ abstract class PomodoroughDatabase : RoomDatabase() {
                 Migration8To9,
                 Migration9To10,
                 Migration10To11,
+                Migration11To12,
             ).build()
 
         val Migration1To2 = object : Migration(1, 2) {
@@ -790,6 +842,24 @@ abstract class PomodoroughDatabase : RoomDatabase() {
                         detectedAtMs INTEGER NOT NULL,
                         FOREIGN KEY(roomId) REFERENCES iroh_rooms(roomId)
                             ON UPDATE NO ACTION ON DELETE CASCADE
+                    )""".trimIndent(),
+                )
+            }
+        }
+
+        val Migration11To12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE pending_bootstrap_resolution " +
+                        "ADD COLUMN selectedTaskOperationsJson TEXT",
+                )
+                db.execSQL(
+                    """CREATE TABLE IF NOT EXISTS pending_selected_task_operations (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        taskId TEXT,
+                        occurredAt TEXT NOT NULL,
+                        hlcWallMs INTEGER NOT NULL,
+                        hlcCounter INTEGER NOT NULL
                     )""".trimIndent(),
                 )
             }

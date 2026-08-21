@@ -1,20 +1,30 @@
 package me.egigoka.pomodorough
 
 import android.Manifest
+import android.app.AlarmManager
 import android.content.pm.PackageManager
 import android.content.ClipData
 import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.PersistableBundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.res.stringResource
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -29,6 +39,9 @@ import me.egigoka.pomodorough.data.auth.SystemGoogleCredentialProvider
 import me.egigoka.pomodorough.timer.SystemTimerCompletionNotifier
 
 class MainActivity : ComponentActivity() {
+    private var showNotificationIntro by mutableStateOf(false)
+    private var showNotificationRecovery by mutableStateOf(false)
+    private var showExactAlarmFallback by mutableStateOf(false)
     private val viewModel by viewModels<PomodoroughViewModel> {
         PomodoroughViewModel.Factory(
             (application as PomodoroughApplication).timerRepository,
@@ -36,7 +49,9 @@ class MainActivity : ComponentActivity() {
     }
     private val notificationPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
-    ) { viewModel.toggleTimer() }
+    ) { granted ->
+        if (granted) toggleWithAlarmDisclosure() else showNotificationRecovery = true
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -80,7 +95,10 @@ class MainActivity : ComponentActivity() {
                     onSyncIrohNow = viewModel::syncIrohNow,
                     onCopyIrohInvite = ::copyIrohInvite,
                     onShareIrohInvite = ::shareIrohInvite,
+                    onDeleteAccount = viewModel::deleteAccount,
+                    onOpenPrivacy = ::openPrivacyPolicy,
                 )
+                PermissionDialogs()
             }
         }
     }
@@ -101,9 +119,98 @@ class MainActivity : ComponentActivity() {
             timerStatus = viewModel.state.value.timer?.status,
         )
         when (decision) {
-            TimerNotificationPermissionAction.RequestPermission ->
-                notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-            TimerNotificationPermissionAction.ToggleTimer -> viewModel.toggleTimer()
+            TimerNotificationPermissionAction.RequestPermission -> showNotificationIntro = true
+            TimerNotificationPermissionAction.ToggleTimer -> toggleWithAlarmDisclosure()
+        }
+    }
+
+    private fun requestNotificationPermission() {
+        showNotificationIntro = false
+        notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+
+    private fun toggleWithAlarmDisclosure() {
+        val exact = Build.VERSION.SDK_INT < 31 ||
+            getSystemService(AlarmManager::class.java).canScheduleExactAlarms()
+        if (me.egigoka.pomodorough.timer.ExactAlarmDisclosurePolicy.usesInexactFallback(
+                sdkInt = Build.VERSION.SDK_INT,
+                canScheduleExactAlarms = exact,
+                timerStatus = viewModel.state.value.timer?.status,
+            )
+        ) {
+            showExactAlarmFallback = true
+        } else {
+            viewModel.toggleTimer()
+        }
+    }
+
+    private fun openNotificationSettings() {
+        showNotificationRecovery = false
+        startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+    }
+
+    private fun openExactAlarmSettings() {
+        showExactAlarmFallback = false
+        if (Build.VERSION.SDK_INT >= 31) {
+            startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:$packageName")))
+        }
+    }
+
+    @Composable
+    private fun PermissionDialogs() {
+        if (showNotificationIntro) {
+            AlertDialog(
+                onDismissRequest = { showNotificationIntro = false },
+                title = { Text(stringResource(R.string.notification_intro_title)) },
+                text = { Text(stringResource(R.string.notification_intro_body)) },
+                confirmButton = {
+                    TextButton(onClick = ::requestNotificationPermission) {
+                        Text(stringResource(R.string.continue_label))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        showNotificationIntro = false
+                        showNotificationRecovery = true
+                    }) { Text(stringResource(R.string.not_now)) }
+                },
+            )
+        }
+        if (showNotificationRecovery) {
+            AlertDialog(
+                onDismissRequest = { showNotificationRecovery = false },
+                title = { Text(stringResource(R.string.notification_denied_title)) },
+                text = { Text(stringResource(R.string.notification_denied_body)) },
+                confirmButton = {
+                    TextButton(onClick = ::openNotificationSettings) {
+                        Text(stringResource(R.string.open_settings))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        showNotificationRecovery = false
+                        toggleWithAlarmDisclosure()
+                    }) { Text(stringResource(R.string.continue_without_notifications)) }
+                },
+            )
+        }
+        if (showExactAlarmFallback) {
+            AlertDialog(
+                onDismissRequest = { showExactAlarmFallback = false },
+                title = { Text(stringResource(R.string.exact_alarm_title)) },
+                text = { Text(stringResource(R.string.exact_alarm_body)) },
+                confirmButton = {
+                    TextButton(onClick = ::openExactAlarmSettings) {
+                        Text(stringResource(R.string.open_settings))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        showExactAlarmFallback = false
+                        viewModel.toggleTimer()
+                    }) { Text(stringResource(R.string.use_inexact_alarm)) }
+                },
+            )
         }
     }
 
@@ -114,7 +221,7 @@ class MainActivity : ComponentActivity() {
 
     private fun copyIrohInvite(invite: String) {
         val clipboard = getSystemService(ClipboardManager::class.java)
-        val clip = ClipData.newPlainText("Pomodorough Iroh room invite", invite)
+        val clip = ClipData.newPlainText(getString(R.string.pomodorough_iroh_room_invite), invite)
         if (Build.VERSION.SDK_INT >= 33) {
             clip.description.extras = PersistableBundle().apply {
                 putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
@@ -139,11 +246,15 @@ class MainActivity : ComponentActivity() {
             Intent.createChooser(
                 Intent(Intent.ACTION_SEND).apply {
                     type = "text/plain"
-                    putExtra(Intent.EXTRA_SUBJECT, "Pomodorough Iroh room")
+                    putExtra(Intent.EXTRA_SUBJECT, getString(R.string.pomodorough_iroh_room))
                     putExtra(Intent.EXTRA_TEXT, invite)
                 },
-                "Share room invite",
+                getString(R.string.share_room_invite),
             ),
         )
+    }
+
+    private fun openPrivacyPolicy() {
+        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://pomodoro-everywhere.github.io/pomodorough-server/privacy/")))
     }
 }
