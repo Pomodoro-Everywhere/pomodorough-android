@@ -348,7 +348,7 @@ class TimerRepositoryPositiveTest {
     @Test
     fun fourthExpiredFocusTimerAutoStartsLongBreak() = runBlocking {
         val completedFocus = (1..3).map { testHistory("history-$it") }
-        val expired = testTimer(elapsedMs = 1_500_000, anchorAt = "2000-01-01T00:00:00Z")
+        val expired = testTimer(elapsedMs = 1_500_000)
         database.timerDao().insertState(
             testState(
                 timer = expired,

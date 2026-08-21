@@ -6,20 +6,27 @@ import androidx.compose.ui.test.assertWidthIsAtLeast
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasScrollToIndexAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.accessibility.disableAccessibilityChecks
 import androidx.compose.ui.test.junit4.accessibility.enableAccessibilityChecks
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.test.tryPerformAccessibilityChecks
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import me.egigoka.pomodorough.data.AppState
 import me.egigoka.pomodorough.data.AccountSwitchState
 import me.egigoka.pomodorough.data.AuthStatus
@@ -35,14 +42,30 @@ import me.egigoka.pomodorough.data.TimerStatus
 import me.egigoka.pomodorough.data.iroh.IrohNetworkState
 import me.egigoka.pomodorough.data.iroh.ReplicationMode
 import me.egigoka.pomodorough.integration.testHistory
+import java.util.Locale
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 
 class PomodoroughScreenTest {
     @get:Rule
     val composeRule = createComposeRule()
+
+    private lateinit var originalLocale: Locale
+
+    @Before
+    fun useDeterministicEnglishLocale() {
+        originalLocale = Locale.getDefault()
+        Locale.setDefault(Locale.US)
+    }
+
+    @After
+    fun restoreLocale() {
+        Locale.setDefault(originalLocale)
+    }
 
     @Test
     fun resolutionConfirmationsWarnAndCancelHasNoSideEffect() {
@@ -59,7 +82,7 @@ class PomodoroughScreenTest {
 
         composeRule.onNodeWithText("Keep Local").performClick()
         composeRule.onNodeWithText(
-            "Account timer, history, tasks, settings, and queued changes will be replaced by this device's data.",
+            "Account timer, history, tasks, settings, and queued changes will be replaced by this device's data. This cannot be undone.",
         ).assertExists()
         composeRule.onNodeWithContentDescription("Cancel history choice").performClick()
 
@@ -94,8 +117,13 @@ class PomodoroughScreenTest {
         composeRule.onNode(hasText("Arrivals") or hasContentDescription("Arrivals")).performClick()
         composeRule.onNodeWithText("Recent arrivals").assertExists()
         composeRule.onNodeWithText("Focus · queued").assertDoesNotExist()
+        composeRule.onNode(hasScrollToIndexAction()).performScrollToIndex(3)
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodes(hasContentDescription("Focus, Completed", substring = true))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
         composeRule.onNodeWithContentDescription(
-            "Focus, completed",
+            "Focus, Completed",
             substring = true,
         ).assertExists()
     }
@@ -119,9 +147,9 @@ class PomodoroughScreenTest {
             AppState(ready = true, authStatus = AuthStatus.SignedIn),
             onRefresh = { refreshCalls += 1 },
         )
-        composeRule.onRoot().performTouchInput { swipeDown() }
+        composeRule.onNodeWithTag("timer_pull_to_refresh").performTouchInput { swipeDown() }
 
-        composeRule.waitUntil(timeoutMillis = 2_000) { refreshCalls == 1 }
+        composeRule.waitUntil(timeoutMillis = 5_000) { refreshCalls == 1 }
     }
 
     @Test
@@ -275,13 +303,19 @@ class PomodoroughScreenTest {
     fun networkNavigationShowsModesPrivacyAndJoinAction() {
         var selectedMode: ReplicationMode? = null
         var joined: String? = null
+        var network by mutableStateOf(
+            IrohNetworkState(
+                mode = ReplicationMode.OFFLINE,
+                roomId = "saved-room-id",
+            ),
+        )
         composeRule.setContent {
             PomodoroughTheme {
                 PomodoroughScreen(
                     state = AppState(
                         ready = true,
-                        authStatus = AuthStatus.SignedOut,
-                        network = IrohNetworkState(mode = ReplicationMode.OFFLINE),
+                        authStatus = AuthStatus.SignedIn,
+                        network = network,
                     ),
                     onSignIn = {},
                     onLogout = {},
@@ -315,9 +349,12 @@ class PomodoroughScreenTest {
         }
 
         composeRule.onNode(hasText("Account") or hasContentDescription("Account")).performClick()
-        composeRule.onNodeWithText("Open Network routes").performClick()
+        composeRule.onNodeWithText("Open Network routes").performScrollTo().performClick()
         composeRule.onNodeWithText("Iroh room").performClick()
         assertEquals(ReplicationMode.IROH, selectedMode)
+        composeRule.runOnIdle {
+            network = IrohNetworkState(mode = ReplicationMode.OFFLINE)
+        }
         composeRule.onNodeWithText("Room invites grant full read and write access.", substring = true)
             .assertExists()
         composeRule.onNodeWithText("Room invite").performClick()

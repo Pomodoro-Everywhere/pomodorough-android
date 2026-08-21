@@ -462,8 +462,12 @@ class IrohRoomStore(
         var timer = genesis.canonicalTimer
         var history = genesis.history
         var tasks = genesis.tasks
-        var selectedTaskId = genesis.selectedTaskId
         val base = baseSnapshot ?: WorkspaceCodec.decode(room.roomStateJson)
+        var selectedTaskId = if (baseSnapshot != null || room.activated) {
+            base.local.selectedTaskId
+        } else {
+            genesis.selectedTaskId
+        }
         var settings = IrohJson.strict.decodeFromString<TimerSettings>(base.local.settingsJson)
             .withDurations(genesis.durationsMs).copy(
             autoStartBreaks = genesis.autoStartBreaks,

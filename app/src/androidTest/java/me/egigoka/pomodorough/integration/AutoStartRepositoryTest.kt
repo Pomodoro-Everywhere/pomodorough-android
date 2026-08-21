@@ -22,6 +22,7 @@ import me.egigoka.pomodorough.data.HistoryItem
 import me.egigoka.pomodorough.data.MeResponse
 import me.egigoka.pomodorough.data.NativeChallenge
 import me.egigoka.pomodorough.data.NativeExchangeRequest
+import me.egigoka.pomodorough.data.SelectedTaskAcknowledgement
 import me.egigoka.pomodorough.data.SyncRequest
 import me.egigoka.pomodorough.data.SyncResponse
 import me.egigoka.pomodorough.data.SyncStatus
@@ -612,6 +613,7 @@ class AutoStartRepositoryTest {
         private var durations = DurationsMs()
         private var autoStartBreaks = false
         private var autoWinner: AutoStartOperation? = null
+        private val selectedTasksByDevice = mutableMapOf<String, String?>()
 
         override suspend fun me(accessToken: String) = MeResponse(profile, "csrf")
 
@@ -640,8 +642,12 @@ class AutoStartRepositoryTest {
                     autoStartBreaks = operation.enabled
                 }
             }
+            request.selectedTaskOperations.lastOrNull()?.let { operation ->
+                selectedTasksByDevice[request.deviceId] = operation.taskId
+            }
             if (request.commands.isNotEmpty() || request.taskOperations.isNotEmpty() ||
-                request.durationOperations.isNotEmpty() || request.autoStartOperations.isNotEmpty()
+                request.durationOperations.isNotEmpty() || request.autoStartOperations.isNotEmpty() ||
+                request.selectedTaskOperations.isNotEmpty()
             ) revision += 1
             response(
                 acknowledgements = request.commands.map { Acknowledgement(it.id, "applied", "") },
@@ -654,6 +660,10 @@ class AutoStartRepositoryTest {
                 autoStartAcknowledgements = request.autoStartOperations.map {
                     AutoStartAcknowledgement(it.id, "applied", "")
                 },
+                selectedTaskAcknowledgements = request.selectedTaskOperations.map {
+                    SelectedTaskAcknowledgement(it.id, "applied", "")
+                },
+                selectedTaskId = selectedTasksByDevice[request.deviceId],
             )
         }
 
@@ -662,6 +672,8 @@ class AutoStartRepositoryTest {
             taskAcknowledgements: List<TaskAcknowledgement> = emptyList(),
             durationAcknowledgements: List<DurationAcknowledgement> = emptyList(),
             autoStartAcknowledgements: List<AutoStartAcknowledgement> = emptyList(),
+            selectedTaskAcknowledgements: List<SelectedTaskAcknowledgement> = emptyList(),
+            selectedTaskId: String? = null,
         ) = SyncResponse(
             acknowledgements = acknowledgements,
             revision = revision,
@@ -676,6 +688,8 @@ class AutoStartRepositoryTest {
             tasks = tasks,
             autoStartAcknowledgements = autoStartAcknowledgements,
             autoStartBreaks = autoStartBreaks,
+            selectedTaskAcknowledgements = selectedTaskAcknowledgements,
+            selectedTaskId = selectedTaskId,
         )
 
         private fun autoKey(operation: AutoStartOperation) = listOf(

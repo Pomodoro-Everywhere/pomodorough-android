@@ -12,6 +12,7 @@ import me.egigoka.pomodorough.data.DurationsMs
 import me.egigoka.pomodorough.data.FocusTask
 import me.egigoka.pomodorough.data.HistoryItem
 import me.egigoka.pomodorough.data.SyncResponse
+import me.egigoka.pomodorough.data.SelectedTaskAcknowledgement
 import me.egigoka.pomodorough.data.TaskAcknowledgement
 import me.egigoka.pomodorough.data.SyncWireBounds
 import me.egigoka.pomodorough.data.TimerPhase
@@ -419,7 +420,13 @@ class TrustedTimeContractTest {
                     taskAcks = request.taskOperations.map {
                         TaskAcknowledgement(it.id, "applied", "")
                     },
-                ).copy(tasks = me.egigoka.pomodorough.domain.TaskReducer.replay(emptyList(), request.taskOperations))
+                ).copy(
+                    tasks = me.egigoka.pomodorough.domain.TaskReducer.replay(emptyList(), request.taskOperations),
+                    selectedTaskId = request.selectedTaskOperations.lastOrNull()?.taskId,
+                    selectedTaskAcknowledgements = request.selectedTaskOperations.map {
+                        SelectedTaskAcknowledgement(it.id, "applied", "")
+                    },
+                )
             }
         }
         val repository = testRepository(

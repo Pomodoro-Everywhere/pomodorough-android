@@ -958,6 +958,7 @@ class GeneratedAutoBreakDependencyTest {
             PomodoroughDatabase.Migration8To9,
             PomodoroughDatabase.Migration9To10,
             PomodoroughDatabase.Migration10To11,
+            PomodoroughDatabase.Migration11To12,
         ).build()
         val service = TestRepositoryService(profile).apply {
             bootstrapResponse = response(revision = 5)

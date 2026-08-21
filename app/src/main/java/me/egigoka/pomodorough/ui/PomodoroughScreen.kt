@@ -82,6 +82,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalAccessibilityManager
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
@@ -429,6 +430,7 @@ private fun TimerScreen(
                             isRefreshing = state.syncStatus == SyncStatus.Syncing,
                             onRefresh = onRefresh,
                             modifier = Modifier
+                                .testTag("timer_pull_to_refresh")
                                 .fillMaxSize()
                                 .padding(scaffoldPadding),
                         ) {
@@ -633,7 +635,10 @@ private fun TimerScreen(
             onDismissRequest = { showAccountDialog = false },
             title = { Text(stringResource(R.string.account_sync)) },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                     Text(state.user?.email.orEmpty(), style = MaterialTheme.typography.titleMedium)
                     Text(stringResource(R.string.cloud_sync_value, syncLabel(state)))
                     Text(stringResource(R.string.peer_route_value, networkStatusTitle(state.network.status)))
