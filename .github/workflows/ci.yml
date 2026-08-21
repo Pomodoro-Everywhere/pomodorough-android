@@ -24,6 +24,8 @@ env:
   JAVA_VERSION: "17"
   ANDROID_API_LEVEL: "36"
   ANDROID_BUILD_TOOLS_VERSION: "36.0.0"
+  CORE_COMMIT: "a78a312314dd9466557c3dbdd12184b698c3d156"
+  CORE_SHA256: "89fb6300324042b61d62070242cccad10e30f125885bb1b7a05af67b077bac83"
   TZ: Etc/UTC
 
 jobs:
@@ -48,6 +50,31 @@ jobs:
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Check out pinned shared core
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: Pomodoro-Everywhere/pomodorough-core
+          ref: ${{ env.CORE_COMMIT }}
+          path: pomodorough-core-source
+          persist-credentials: false
+
+      - name: Rebuild and verify pinned shared core
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C pomodorough-core-source rev-parse HEAD)" = "$CORE_COMMIT"
+          rustup toolchain install 1.97.1 --profile minimal
+          rustup target add wasm32-unknown-unknown --toolchain 1.97.1
+          (
+            cd pomodorough-core-source
+            cargo +1.97.1 build --release --target wasm32-unknown-unknown --locked
+          )
+          printf '%s  %s\n' "$CORE_SHA256" app/src/main/assets/pomodorough_core.wasm \
+            | sha256sum --check --strict
+          grep -Fx "CORE_COMMIT=$CORE_COMMIT" app/src/main/assets/shared_core.properties
+          grep -Fx "CORE_SHA256=$CORE_SHA256" app/src/main/assets/shared_core.properties
+          cmp pomodorough-core-source/target/wasm32-unknown-unknown/release/pomodorough_core.wasm app/src/main/assets/pomodorough_core.wasm
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3

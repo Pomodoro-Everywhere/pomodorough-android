@@ -1,0 +1,130 @@
+package me.egigoka.pomodorough.core
+
+import java.io.ByteArrayInputStream
+import java.util.Properties
+import java.util.concurrent.Callable
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
+import org.junit.Test
+
+class SharedCoreTest {
+    private val core by lazy {
+        SharedCore.load(
+            requireNotNull(javaClass.classLoader?.getResourceAsStream("pomodorough_core.wasm")) {
+                "pomodorough_core.wasm must be available to JVM tests"
+            },
+        )
+    }
+
+    @Test
+    fun coreVersionRunsThroughRealWasmAbi() {
+        assertEquals(
+            buildJsonObject {
+                put("schemaVersion", JsonPrimitive(1))
+                put("coreVersion", JsonPrimitive("0.1.0"))
+            },
+            core.dispatch("core.version", "{}"),
+        )
+    }
+
+    @Test
+    fun selectedTaskClassifyPreservesOmissionNullAndValue() {
+        assertEquals(
+            JsonPrimitive("omitted"),
+            core.dispatch("selectedTask.classify", "{}"),
+        )
+        assertEquals(
+            JsonPrimitive("deselected"),
+            core.dispatch("selectedTask.classify", """{"selectedTaskId":null}"""),
+        )
+        assertEquals(
+            JsonPrimitive("selected:33f9d32c-a7ee-8aa9-897a-13e19bc4e5d4"),
+            core.dispatch(
+                "selectedTask.classify",
+                """{"selectedTaskId":"33f9d32c-a7ee-8aa9-897a-13e19bc4e5d4"}""",
+            ),
+        )
+    }
+
+    @Test
+    fun rejectsEmptyOperationAndInputBeforeEnteringAbi() {
+        for ((operation, input) in listOf("" to "{}", "core.version" to "")) {
+            try {
+                core.dispatch(operation, input)
+                fail("empty ABI input must fail")
+            } catch (_: IllegalArgumentException) {
+                // Expected before any allocation or raw ABI call.
+            }
+        }
+    }
+
+    @Test
+    fun oneInstanceSafelyServesConcurrentDispatches() {
+        val executor = Executors.newFixedThreadPool(4)
+        try {
+            val results = (0 until 32).map { index ->
+                executor.submit(Callable {
+                    core.dispatch(
+                        "selectedTask.classify",
+                        """{"selectedTaskId":"task-$index"}""",
+                    )
+                })
+            }
+
+            results.forEachIndexed { index, result ->
+                assertEquals(JsonPrimitive("selected:task-$index"), result.get(10, TimeUnit.SECONDS))
+            }
+        } finally {
+            executor.shutdownNow()
+            assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS))
+        }
+    }
+
+    @Test
+    fun coreErrorsBecomeTypedHostErrors() {
+        try {
+            core.dispatch("missing.operation", "{}")
+            fail("missing operation must fail")
+        } catch (error: SharedCoreException.Operation) {
+            assertEquals("missing.operation", error.operation)
+            assertEquals(
+                "shared-core operation missing.operation failed: " +
+                    "unsupported shared-core operation: missing.operation",
+                error.message,
+            )
+        }
+    }
+
+    @Test
+    fun moduleHashIsVerifiedBeforeInstantiation() {
+        val bytes = requireNotNull(javaClass.classLoader?.getResourceAsStream("pomodorough_core.wasm"))
+            .use { it.readBytes() }
+        bytes[bytes.lastIndex] = (bytes.last().toInt() xor 1).toByte()
+
+        try {
+            SharedCore.load(ByteArrayInputStream(bytes))
+            fail("modified module must fail hash verification")
+        } catch (error: SharedCoreException.Load) {
+            assertTrue(error.message.orEmpty().startsWith("shared-core SHA-256 mismatch:"))
+        }
+    }
+
+    @Test
+    fun packagedPinMetadataMatchesAdapter() {
+        val properties = Properties().apply {
+            requireNotNull(
+                this@SharedCoreTest.javaClass.classLoader
+                    ?.getResourceAsStream("shared_core.properties"),
+            )
+                .use(::load)
+        }
+
+        assertEquals(SharedCore.CORE_COMMIT, properties.getProperty("CORE_COMMIT"))
+        assertEquals(SharedCore.CORE_SHA256, properties.getProperty("CORE_SHA256"))
+    }
+}

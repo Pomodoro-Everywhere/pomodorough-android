@@ -9,6 +9,40 @@ SMOKE_SCRIPT = ROOT / ".github" / "scripts" / "smoke-packaged-release.sh"
 
 
 class CIWorkflowTests(unittest.TestCase):
+    def test_pinned_shared_core_is_rebuilt_and_byte_compared(self) -> None:
+        workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+
+        self.assertIn(
+            'CORE_COMMIT: "a78a312314dd9466557c3dbdd12184b698c3d156"',
+            workflow,
+        )
+        self.assertIn(
+            'CORE_SHA256: "89fb6300324042b61d62070242cccad10e30f125885bb1b7a05af67b077bac83"',
+            workflow,
+        )
+        self.assertIn("repository: Pomodoro-Everywhere/pomodorough-core", workflow)
+        self.assertIn("ref: ${{ env.CORE_COMMIT }}", workflow)
+        self.assertIn(
+            "cargo +1.97.1 build --release --target wasm32-unknown-unknown --locked",
+            workflow,
+        )
+        self.assertIn(
+            'printf \'%s  %s\\n\' "$CORE_SHA256" app/src/main/assets/pomodorough_core.wasm',
+            workflow,
+        )
+        self.assertIn(
+            'grep -Fx "CORE_COMMIT=$CORE_COMMIT" app/src/main/assets/shared_core.properties',
+            workflow,
+        )
+        self.assertIn(
+            'grep -Fx "CORE_SHA256=$CORE_SHA256" app/src/main/assets/shared_core.properties',
+            workflow,
+        )
+        self.assertIn(
+            "cmp pomodorough-core-source/target/wasm32-unknown-unknown/release/pomodorough_core.wasm app/src/main/assets/pomodorough_core.wasm",
+            workflow,
+        )
+
     def test_emulator_runner_invokes_checked_in_release_smoke_script_once(self) -> None:
         workflow = CI_WORKFLOW.read_text(encoding="utf-8")
         release_job = workflow.split("  release-smoke:", 1)[1].split(
