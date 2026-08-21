@@ -184,6 +184,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
       - name: Download unsigned release bundle
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -217,28 +222,7 @@ jobs:
           arch: x86_64
           profile: pixel_6
           disable-animations: true
-          script: |
-            set -eu
-            set -- dist/*-release-unsigned.apk
-            if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
-              echo "Expected exactly one unsigned release APK" >&2
-              exit 1
-            fi
-            unsigned_apk="$1"
-            smoke_apk="$RUNNER_TEMP/pomodorough-release-smoke.apk"
-            smoke_keystore="$RUNNER_TEMP/pomodorough-release-smoke.jks"
-            cp "$unsigned_apk" "$smoke_apk"
-            keytool -genkeypair -noprompt -keystore "$smoke_keystore" -storepass smoke-only \
-              -keypass smoke-only -alias smoke -keyalg RSA -keysize 2048 -validity 1 \
-              -dname 'CN=Ephemeral CI release smoke'
-            "$ANDROID_HOME/build-tools/$ANDROID_BUILD_TOOLS_VERSION/apksigner" sign \
-              --ks "$smoke_keystore" --ks-pass pass:smoke-only \
-              --key-pass pass:smoke-only "$smoke_apk"
-            adb uninstall me.egigoka.pomodorough >/dev/null 2>&1 || true
-            adb install "$smoke_apk"
-            launch_output="$(adb shell am start -W -n me.egigoka.pomodorough/.MainActivity)"
-            printf '%s\n' "$launch_output"
-            printf '%s\n' "$launch_output" | grep -Fq 'Status: ok'
+          script: bash .github/scripts/smoke-packaged-release.sh
 
   dependency-review:
     name: Dependency review
