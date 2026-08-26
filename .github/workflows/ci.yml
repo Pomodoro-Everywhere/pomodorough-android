@@ -42,7 +42,7 @@ jobs:
           python3 scripts/check_docs.py
           python3 scripts/check_protocol_fixture.py
           python3 scripts/check_workflow_pins.py
-          python3 -m unittest scripts/test_check_localization.py scripts/test_ci_workflow.py -v
+          python3 -m unittest scripts/test_check_localization.py scripts/test_ci_workflow.py scripts/test_release_workflow.py -v
           python3 scripts/check_localization.py
 
       - name: Set up JDK
@@ -183,7 +183,7 @@ jobs:
           python3 scripts/check_docs.py
           python3 scripts/check_protocol_fixture.py
           python3 scripts/check_workflow_pins.py
-          python3 -m unittest scripts/test_check_localization.py scripts/test_ci_workflow.py -v
+          python3 -m unittest scripts/test_check_localization.py scripts/test_ci_workflow.py scripts/test_release_workflow.py -v
           python3 scripts/check_localization.py
 
       - name: Set up JDK

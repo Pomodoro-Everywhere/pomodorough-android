@@ -239,9 +239,9 @@ jobs:
             --jq '.assets[].name')
           gh release upload "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY"
+          verify_release_assets
           gh release edit "$GITHUB_REF_NAME" \
             --repo "$GITHUB_REPOSITORY" \
             --title "Pomodorough Android $GITHUB_REF_NAME" \
             --notes-file "$notes_file" \
             --draft=false
-          verify_release_assets
