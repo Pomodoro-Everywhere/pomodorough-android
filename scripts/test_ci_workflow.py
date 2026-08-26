@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import hashlib
+import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 SMOKE_SCRIPT = ROOT / ".github" / "scripts" / "smoke-packaged-release.sh"
+PROVENANCE_SCRIPT = ROOT / "scripts" / "verify_shared_core_provenance.py"
+VALID_WASM = b"\0asm\x01\0\0\0"
+DIFFERENT_VALID_WASM = VALID_WASM + b"\0\x01\0"
 
 
 DEPENDENCY_LOCK = ROOT / "app" / "gradle.lockfile"
@@ -21,11 +28,11 @@ class CIWorkflowTests(unittest.TestCase):
         workflow = CI_WORKFLOW.read_text(encoding="utf-8")
 
         self.assertIn(
-            'CORE_COMMIT: "9a01dc8da0f1612e7a301c19cf42f3b522e61684"',
+            'CORE_COMMIT: "49efee8c5ac390d5dd7bd5c1a3537fb889fa6f10"',
             workflow,
         )
         self.assertIn(
-            'CORE_SHA256: "89fb6300324042b61d62070242cccad10e30f125885bb1b7a05af67b077bac83"',
+            'CORE_SHA256: "50519a0c12b0e38d3281d2205f5597f03bb5e8cdd7e9e57f86bb4458fd0dad64"',
             workflow,
         )
         self.assertIn("repository: Pomodoro-Everywhere/pomodorough-core", workflow)
@@ -36,6 +43,8 @@ class CIWorkflowTests(unittest.TestCase):
         )
         self.assertIn("verify_wasm_artifact.py", workflow)
         self.assertIn('--sha256 "$CORE_SHA256"', workflow)
+        self.assertIn("scripts/verify_shared_core_provenance.py", workflow)
+        self.assertIn('"$rebuilt"', workflow)
         self.assertIn(
             'grep -Fx "CORE_COMMIT=$CORE_COMMIT" app/src/main/assets/shared_core.properties',
             workflow,
@@ -44,6 +53,29 @@ class CIWorkflowTests(unittest.TestCase):
             'grep -Fx "CORE_SHA256=$CORE_SHA256" app/src/main/assets/shared_core.properties',
             workflow,
         )
+
+    def test_provenance_rejects_different_valid_wasm(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rebuilt = root / "rebuilt.wasm"
+            embedded = root / "embedded.wasm"
+            rebuilt.write_bytes(VALID_WASM)
+            embedded.write_bytes(DIFFERENT_VALID_WASM)
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(PROVENANCE_SCRIPT),
+                    "--sha256",
+                    hashlib.sha256(VALID_WASM).hexdigest(),
+                    str(rebuilt),
+                    str(embedded),
+                ],
+                capture_output=True,
+                check=False,
+                text=True,
+            )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("differs from rebuild", result.stderr)
 
 
     def test_release_packages_contain_exact_shared_core(self) -> None:

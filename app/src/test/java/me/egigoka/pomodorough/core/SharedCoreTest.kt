@@ -26,9 +26,23 @@ class SharedCoreTest {
         assertEquals(
             buildJsonObject {
                 put("schemaVersion", JsonPrimitive(1))
-                put("coreVersion", JsonPrimitive("0.1.0"))
+                put("coreVersion", JsonPrimitive("0.1.4"))
             },
             core.dispatch("core.version", "{}"),
+        )
+    }
+
+    @Test
+    fun hlcHeadRunsThroughRealWasmAbi() {
+        assertEquals(
+            buildJsonObject {
+                put("wallMs", JsonPrimitive(101))
+                put("counter", JsonPrimitive(7))
+            },
+            core.dispatch(
+                "hlc.head.v1",
+                """{"physicalNowMs":100,"observed":[{"wallMs":101,"counter":2},{"wallMs":101,"counter":7},{"wallMs":99,"counter":99}]}""",
+            ),
         )
     }
 

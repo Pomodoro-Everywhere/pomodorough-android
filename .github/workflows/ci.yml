@@ -24,8 +24,8 @@ env:
   JAVA_VERSION: "17"
   ANDROID_API_LEVEL: "36"
   ANDROID_BUILD_TOOLS_VERSION: "36.0.0"
-  CORE_COMMIT: "9a01dc8da0f1612e7a301c19cf42f3b522e61684"
-  CORE_SHA256: "89fb6300324042b61d62070242cccad10e30f125885bb1b7a05af67b077bac83"
+  CORE_COMMIT: "49efee8c5ac390d5dd7bd5c1a3537fb889fa6f10"
+  CORE_SHA256: "50519a0c12b0e38d3281d2205f5597f03bb5e8cdd7e9e57f86bb4458fd0dad64"
   TZ: Etc/UTC
 
 jobs:
@@ -70,11 +70,16 @@ jobs:
             cd pomodorough-core-source
             cargo +1.97.1 build --release --target wasm32-unknown-unknown --locked
           )
+          rebuilt=pomodorough-core-source/target/wasm32-unknown-unknown/release/pomodorough_core.wasm
           python3 pomodorough-core-source/scripts/verify_wasm_artifact.py \
-            pomodorough-core-source/target/wasm32-unknown-unknown/release/pomodorough_core.wasm
+            "$rebuilt"
           python3 pomodorough-core-source/scripts/verify_wasm_artifact.py \
             app/src/main/assets/pomodorough_core.wasm \
             --sha256 "$CORE_SHA256"
+          python3 scripts/verify_shared_core_provenance.py \
+            --sha256 "$CORE_SHA256" \
+            "$rebuilt" \
+            app/src/main/assets/pomodorough_core.wasm
           grep -Fx "CORE_COMMIT=$CORE_COMMIT" app/src/main/assets/shared_core.properties
           grep -Fx "CORE_SHA256=$CORE_SHA256" app/src/main/assets/shared_core.properties
 
