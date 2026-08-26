@@ -28,11 +28,11 @@ class CIWorkflowTests(unittest.TestCase):
         workflow = CI_WORKFLOW.read_text(encoding="utf-8")
 
         self.assertIn(
-            'CORE_COMMIT: "49efee8c5ac390d5dd7bd5c1a3537fb889fa6f10"',
+            'CORE_COMMIT: "8dc24486b38d87eb2c717e80b4315b31dd6a671d"',
             workflow,
         )
         self.assertIn(
-            'CORE_SHA256: "50519a0c12b0e38d3281d2205f5597f03bb5e8cdd7e9e57f86bb4458fd0dad64"',
+            'CORE_SHA256: "1e67043a8a652c5f9c6d36b28fe280b4bb5677e0c0279faaccdceb407181face"',
             workflow,
         )
         self.assertIn("repository: Pomodoro-Everywhere/pomodorough-core", workflow)
@@ -40,6 +40,11 @@ class CIWorkflowTests(unittest.TestCase):
         self.assertIn(
             "cargo +1.97.1 build --release --target wasm32-unknown-unknown --locked",
             workflow,
+        )
+        self.assertIn("scripts/canonicalize_wasm_artifact.py", workflow)
+        self.assertLess(
+            workflow.index("scripts/canonicalize_wasm_artifact.py"),
+            workflow.index("scripts/verify_shared_core_provenance.py"),
         )
         self.assertIn("verify_wasm_artifact.py", workflow)
         self.assertIn('--sha256 "$CORE_SHA256"', workflow)
