@@ -3727,8 +3727,6 @@ class TimerRepository(
             elapsedRealtimeMillis() >= persistedElapsedMs
         ) return
         local = local.copy(
-            serverClockOffsetMs = null,
-            serverClockUncertaintyMs = null,
             serverClockSamplePhysicalMs = null,
             serverClockSampleElapsedRealtimeMs = null,
             serverClockBootId = null,
@@ -4088,10 +4086,33 @@ class TimerRepository(
         require(restartedServerMs in 1..SyncWireBounds.MaxSafeInteger) {
             "Trusted time is outside supported range"
         }
-        trustedAnchorServerMs = restartedServerMs
+        val boundedServerMs = boundedRebootRecoveryTime(restartedServerMs)
+        trustedAnchorServerMs = boundedServerMs
         trustedAnchorElapsedRealtimeMs = elapsedNowMs
-        return restartedServerMs
+        return boundedServerMs
     }
+
+    private fun boundedRebootRecoveryTime(candidateMs: Long): Long {
+        val retainedWallMs = latestPersistedMutationWallMs()
+        val uncertaintyMs = checkNotNull(local.serverClockUncertaintyMs)
+        val maximumMs = Math.addExact(
+            retainedWallMs,
+            SyncWireBounds.MaxClockSkewMs - uncertaintyMs,
+        ).coerceAtMost(SyncWireBounds.MaxSafeInteger)
+        require(candidateMs <= maximumMs) {
+            "Trusted time requires a fresh server sample"
+        }
+        return maxOf(candidateMs, retainedWallMs)
+    }
+
+    private fun latestPersistedMutationWallMs(): Long = (
+        listOf(local.hlcWallMs) +
+            pending.map(TimerCommand::hlcWallMs) +
+            pendingTaskOperations.map(TaskOperation::hlcWallMs) +
+            pendingDurationOperations.map(DurationOperation::hlcWallMs) +
+            pendingAutoStartOperations.map(AutoStartOperation::hlcWallMs) +
+            pendingSelectedTaskOperations.map(SelectedTaskOperation::hlcWallMs)
+        ).maxOrNull() ?: local.hlcWallMs
 
     private fun installTrustedAnchor(sample: ServerClockSample) {
         trustedAnchorServerMs = sample.serverTimeMs
@@ -4257,15 +4278,9 @@ class TimerRepository(
     }
 
     private fun validateStoredClockSample() {
-        val sampleValues = listOf(
-            local.serverClockOffsetMs,
-            local.serverClockUncertaintyMs,
-            local.serverClockSamplePhysicalMs,
-            local.serverClockSampleElapsedRealtimeMs,
-        )
-        require(sampleValues.all { it == null } || sampleValues.all { it != null }) {
-            "Persisted server clock sample is incomplete"
-        }
+        require(
+            (local.serverClockOffsetMs == null) == (local.serverClockUncertaintyMs == null),
+        ) { "Persisted server clock offset is incomplete" }
         local.serverClockOffsetMs?.let { offsetMs ->
             require(offsetMs in -SyncWireBounds.MaxSafeInteger..SyncWireBounds.MaxSafeInteger) {
                 "Persisted server clock offset is invalid"

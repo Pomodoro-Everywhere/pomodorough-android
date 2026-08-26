@@ -718,7 +718,7 @@ class TrustedTimeContractTest {
     }
 
     @Test
-    fun restartUsesElapsedContinuityAndInvalidatesAnchorAfterReboot() = runBlocking {
+    fun restartUsesElapsedContinuityAndRecoversOffsetAfterReboot() = runBlocking {
         database.timerDao().insertState(
             testState().copy(
                 serverClockOffsetMs = -60 * 60_000L,
@@ -736,27 +736,139 @@ class TrustedTimeContractTest {
         )
         repository.initialize()
         repository.setAutoStart(true)
+        val preRebootOperation = database.timerDao().pendingAutoStartOperations().single().toModel()
         assertEquals(
             NowMs + 1_000L,
-            java.time.Instant.parse(
-                database.timerDao().pendingAutoStartOperations().single().occurredAt,
-            ).toEpochMilli(),
+            java.time.Instant.parse(preRebootOperation.occurredAt).toEpochMilli(),
         )
 
-        database.timerDao().deleteAllAutoStartOperations()
+        val expectedRecoveredMs = NowMs + 1_000L + SyncWireBounds.MaxClockSkewMs - 3L
         repository = testRepository(
             context,
             database.timerDao(),
-            currentTimeMillis = { NowMs + 2 * 60 * 60_000L },
+            currentTimeMillis = { expectedRecoveredMs + 60 * 60_000L },
             elapsedRealtimeMillis = { 100L },
             bootId = { "new-boot" },
         )
         repository.initialize()
+        repository.addTask("Recovered after reboot")
+        val recoveredOperation = database.timerDao().pendingTaskOperations().single().toModel()
         val stored = requireNotNull(database.timerDao().localState())
-        assertNull(stored.serverClockOffsetMs)
-        assertNull(stored.serverClockUncertaintyMs)
+        assertEquals(-60 * 60_000L, stored.serverClockOffsetMs)
+        assertEquals(3L, stored.serverClockUncertaintyMs)
         assertNull(stored.serverClockSamplePhysicalMs)
         assertNull(stored.serverClockSampleElapsedRealtimeMs)
+        assertNull(stored.serverClockBootId)
+        assertEquals(
+            preRebootOperation,
+            database.timerDao().pendingAutoStartOperations().single().toModel(),
+        )
+        assertTrue(
+            recoveredOperation.hlcWallMs > preRebootOperation.hlcWallMs ||
+                recoveredOperation.hlcWallMs == preRebootOperation.hlcWallMs &&
+                recoveredOperation.hlcCounter > preRebootOperation.hlcCounter,
+        )
+        assertEquals(
+            expectedRecoveredMs,
+            java.time.Instant.parse(recoveredOperation.occurredAt).toEpochMilli(),
+        )
+
+        repository = testRepository(
+            context,
+            database.timerDao(),
+            currentTimeMillis = { expectedRecoveredMs + 60 * 60_000L + 1_000L },
+            elapsedRealtimeMillis = { 200L },
+            bootId = { "another-boot" },
+        )
+        repository.initialize()
+        repository.addTask("Recovered after another restart")
+        assertEquals(2, database.timerDao().pendingTaskOperations().size)
+        assertEquals(-60 * 60_000L, database.timerDao().localState()?.serverClockOffsetMs)
+    }
+
+    @Test
+    fun rebootRecoveryBeyondForwardSkewPreservesStateAndQueues() = runBlocking {
+        val profile = testUser()
+        val service = TestRepositoryService(profile).apply {
+            syncHandler = { request -> trustedResponse(revision = request.lastRevision + 1) }
+        }
+        val auth = TestAuthSession(tokensAvailable = false)
+        database.timerDao().insertState(
+            testState(profile).copy(
+                hlcWallMs = NowMs,
+                serverClockOffsetMs = 0L,
+                serverClockUncertaintyMs = 3L,
+                serverClockSamplePhysicalMs = NowMs,
+                serverClockSampleElapsedRealtimeMs = 10_000L,
+                serverClockBootId = "test-boot",
+            ),
+        )
+        var repository = testRepository(context, database.timerDao(), service, auth)
+        repository.initialize()
+        repository.setAutoStart(true)
+        val queuedBeforeReboot = database.timerDao().pendingAutoStartOperations()
+
+        repository = testRepository(
+            context,
+            database.timerDao(),
+            service,
+            auth,
+            currentTimeMillis = { NowMs + SyncWireBounds.MaxClockSkewMs - 2L },
+            elapsedRealtimeMillis = { 100L },
+            bootId = { "new-boot" },
+        )
+        repository.initialize()
+        val localBeforeRejectedMutation = requireNotNull(database.timerDao().localState())
+        repository.addTask("Must remain rejected")
+
+        assertTrue(database.timerDao().pendingTaskOperations().isEmpty())
+        assertEquals(queuedBeforeReboot, database.timerDao().pendingAutoStartOperations())
+        assertEquals(localBeforeRejectedMutation, database.timerDao().localState())
+
+        repository = testRepository(
+            context,
+            database.timerDao(),
+            service,
+            TestAuthSession(tokensAvailable = true),
+            currentTimeMillis = { NowMs + SyncWireBounds.MaxClockSkewMs - 2L },
+            elapsedRealtimeMillis = { 200L },
+            bootId = { "new-boot" },
+        )
+        repository.initialize()
+        awaitState { service.syncCalls == 1 }
+        repository.addTask("Accepted after fresh sample")
+        assertEquals(1, database.timerDao().pendingTaskOperations().size)
+        assertEquals(queuedBeforeReboot, database.timerDao().pendingAutoStartOperations())
+    }
+
+    @Test
+    fun rebootRecoveryClampsBackwardWallJumpToPersistedClock() = runBlocking {
+        database.timerDao().insertState(
+            testState().copy(
+                hlcWallMs = NowMs,
+                hlcCounter = 4L,
+                serverClockOffsetMs = 0L,
+                serverClockUncertaintyMs = 0L,
+                serverClockSamplePhysicalMs = NowMs,
+                serverClockSampleElapsedRealtimeMs = 10_000L,
+                serverClockBootId = "test-boot",
+            ),
+        )
+        val repository = testRepository(
+            context,
+            database.timerDao(),
+            currentTimeMillis = { NowMs - 8 * 60 * 60_000L },
+            elapsedRealtimeMillis = { 100L },
+            bootId = { "new-boot" },
+        )
+        repository.initialize()
+        repository.addTask("Clamped after reboot")
+
+        val operation = database.timerDao().pendingTaskOperations().single().toModel()
+        assertEquals(NowMs, java.time.Instant.parse(operation.occurredAt).toEpochMilli())
+        assertEquals(NowMs, operation.hlcWallMs)
+        assertTrue(operation.hlcCounter > 4L)
+        assertEquals(0L, database.timerDao().localState()?.serverClockOffsetMs)
     }
 
     @Test

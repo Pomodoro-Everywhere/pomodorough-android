@@ -215,6 +215,63 @@ class TimerRepositoryNegativeTest {
     }
 
     @Test
+    fun malformedPersistedClockIsQuarantinedWithoutChangingRawState() = runBlocking {
+        val variants = listOf<(LocalStateEntity) -> LocalStateEntity>(
+            { it.copy(serverClockOffsetMs = 1L) },
+            { it.copy(serverClockUncertaintyMs = 1L) },
+            {
+                it.copy(
+                    serverClockSamplePhysicalMs = 1L,
+                    serverClockSampleElapsedRealtimeMs = 1L,
+                )
+            },
+            {
+                it.copy(
+                    serverClockOffsetMs = 0L,
+                    serverClockUncertaintyMs = 0L,
+                    serverClockSamplePhysicalMs = 1L,
+                )
+            },
+            { it.copy(serverClockBootId = "orphaned-boot") },
+            { it.copy(serverClockOffsetMs = Long.MAX_VALUE, serverClockUncertaintyMs = 0L) },
+            { it.copy(serverClockOffsetMs = 0L, serverClockUncertaintyMs = Long.MAX_VALUE) },
+        )
+        variants.forEachIndexed { index, mutate ->
+            val caseDatabase = Room.inMemoryDatabaseBuilder(
+                context,
+                PomodoroughDatabase::class.java,
+            ).build()
+            try {
+                val initial = mutate(testState())
+                caseDatabase.timerDao().insertState(initial)
+                val service = TestRepositoryService()
+                val repository = testRepository(
+                    context,
+                    caseDatabase.timerDao(),
+                    service,
+                    TestAuthSession(tokensAvailable = true),
+                )
+
+                repository.initialize()
+                repository.toggleTimer()
+                repository.addTask("Blocked")
+
+                val state = repository.state.value
+                assertTrue("variant $index", state.ready)
+                assertEquals("variant $index", AuthStatus.SignedOut, state.authStatus)
+                assertTrue("variant $index", state.conflict?.contains("clock", ignoreCase = true) == true)
+                assertEquals("variant $index", initial, caseDatabase.timerDao().localState())
+                assertTrue("variant $index", caseDatabase.timerDao().pendingCommands().isEmpty())
+                assertTrue("variant $index", caseDatabase.timerDao().pendingTaskOperations().isEmpty())
+                assertEquals("variant $index", 0, service.bootstrapCalls)
+                assertEquals("variant $index", 0, service.syncCalls)
+            } finally {
+                caseDatabase.close()
+            }
+        }
+    }
+
+    @Test
     fun rejectedSyncKeepsQueueAndSurfacesConflict() = runBlocking {
         val profile = testUser()
         val command = testCommand("command-1", sequence = 1)
