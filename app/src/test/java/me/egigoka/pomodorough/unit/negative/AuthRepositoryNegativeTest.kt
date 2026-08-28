@@ -66,17 +66,18 @@ class AuthRepositoryNegativeTest {
     }
 
     @Test
-    fun logoutRefreshNetworkFailurePreservesExpiredTokens() = runTest {
+    fun logoutNetworkFailureRetainsExpiredTokensForRevocationRetry() = runTest {
         val tokens = expiredTokens()
         val failure = IOException("network unavailable")
-        val service = TestAuthService().apply { refreshFailure = failure }
+        val service = TestAuthService().apply { logoutFailure = failure }
         val store = TestTokenStore(tokens)
 
         val error = capture<IOException> { repository(service, store).logout() }
 
         assertSame(failure, error)
-        assertTrue(service.logoutTokens.isEmpty())
+        assertEquals(listOf(tokens.accessToken), service.logoutTokens)
         assertEquals(tokens, store.tokens)
+        assertEquals(tokens, store.pendingLogout)
         assertEquals(0, store.clearCalls)
     }
 

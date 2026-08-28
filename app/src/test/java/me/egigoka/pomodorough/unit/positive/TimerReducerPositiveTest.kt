@@ -5,14 +5,14 @@ import me.egigoka.pomodorough.data.TimerCommand
 import me.egigoka.pomodorough.data.TimerIntent
 import me.egigoka.pomodorough.data.TimerPhase
 import me.egigoka.pomodorough.data.TimerStatus
-import me.egigoka.pomodorough.domain.TimerReducer
+import me.egigoka.pomodorough.domain.LegacyTimerReducer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TimerReducerPositiveTest {
     @Test
-    fun replayCompletesLifecycleInDeviceSequenceOrder() {
+    fun replayCompletesLifecycleInHybridClockOrder() {
         val start = command(
             sequence = 1,
             type = CommandType.Start,
@@ -37,7 +37,7 @@ class TimerReducerPositiveTest {
             observedElapsedMs = 300_000,
         )
 
-        val projection = TimerReducer.replay(
+        val projection = LegacyTimerReducer.replay(
             canonicalTimer = null,
             canonicalHistory = emptyList(),
             commands = listOf(finish, resume, pause, start),
@@ -50,7 +50,7 @@ class TimerReducerPositiveTest {
             projection.timer?.lastIntent,
         )
         assertEquals(1, projection.history.size)
-        assertEquals("timer-1:command-4", projection.history.single().id)
+        assertEquals("timer-1", projection.history.single().id)
         assertEquals("command-4", projection.history.single().commandId)
         assertTrue(projection.history.single().pending)
     }

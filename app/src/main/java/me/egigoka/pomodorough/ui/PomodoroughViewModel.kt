@@ -30,6 +30,7 @@ class PomodoroughViewModel(
         repository.signIn(credentialProvider)
     }
     fun logout() = launch { repository.logout() }
+    fun resetLocalAccount() = launch { repository.resetLocalAccount() }
     fun deleteAccount(confirmation: String) = launch { repository.deleteAccount(confirmation) }
     fun refresh() = repository.refresh()
     fun toggleTimer() = launch { repository.toggleTimer() }

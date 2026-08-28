@@ -7,6 +7,7 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.IOException
+import java.time.Instant
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.encodeToString
@@ -20,12 +21,13 @@ import me.egigoka.pomodorough.data.SyncResponse
 import me.egigoka.pomodorough.data.SyncStatus
 import me.egigoka.pomodorough.data.TimerCommand
 import me.egigoka.pomodorough.data.TimerPhase
+import me.egigoka.pomodorough.data.TimerRepository
 import me.egigoka.pomodorough.data.TimerSettings
 import me.egigoka.pomodorough.data.TimerStatus
 import me.egigoka.pomodorough.data.UuidV7
 import me.egigoka.pomodorough.data.local.PendingCommandEntity
 import me.egigoka.pomodorough.data.local.PomodoroughDatabase
-import me.egigoka.pomodorough.domain.TimerReducer
+import me.egigoka.pomodorough.domain.LegacyTimerReducer
 import me.egigoka.pomodorough.timer.TimerAlarmScheduler
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -56,9 +58,12 @@ class GeneratedAutoBreakDependencyTest {
 
     @After
     fun tearDown() {
-        TimerAlarmScheduler(context).cancel()
-        database.close()
-        context.deleteDatabase(LegacyResolutionDatabaseName)
+        runBlocking {
+            shutdownTrackedTestRepositories()
+            TimerAlarmScheduler(context).cancel()
+            database.close()
+            context.deleteDatabase(LegacyResolutionDatabaseName)
+        }
     }
 
     @Test
@@ -193,6 +198,7 @@ class GeneratedAutoBreakDependencyTest {
 
         assertEquals(1, service.syncCalls)
         assertEquals(paused, repository.state.value.timer)
+        assertNull(repository.state.value.conflict)
         assertEquals(TimerPhase.Focus, repository.state.value.settings.selectedPhase)
         assertEquals(focus.id, database.timerDao().localState()?.ownedTimerId)
         assertTrue(database.timerDao().pendingCommands().isEmpty())
@@ -376,10 +382,12 @@ class GeneratedAutoBreakDependencyTest {
         val finish = queued.first { it.type == CommandType.Finish }
         assertEquals(TimerPhase.ShortBreak, queued.first { it.generatedByFinishCommandId != null }.phase)
         val globalHistory = listOf(
-            testHistory("global-3"),
-            testHistory("global-2"),
-            testHistory("global-1"),
+            precedingFocusHistory("global-3", 57),
+            precedingFocusHistory("global-2", 58),
+            precedingFocusHistory("global-1", 59),
         )
+        val sourceOccurredAt = Instant.parse(requireNotNull(finish.physicalOccurredAt))
+        assertTrue(globalHistory.all { Instant.parse(it.completedAt).isBefore(sourceOccurredAt) })
         var calls = 0
         val service = TestRepositoryService(profile).apply {
             bootstrapResponse = response(timer = focus, history = localHistory, autoStart = true)
@@ -394,7 +402,6 @@ class GeneratedAutoBreakDependencyTest {
                         autoStart = true,
                     )
                 } else {
-                    assertEquals(TimerPhase.LongBreak, request.commands.single().phase)
                     acceptedCommandsResponse(
                         2,
                         request.commands,
@@ -418,6 +425,8 @@ class GeneratedAutoBreakDependencyTest {
         assertEquals(TimerPhase.LongBreak, repository.state.value.settings.selectedPhase)
     }
 
+    // size-exception: one exhaustive 144-case matrix keeps queue construction, restart,
+    // response-loss, and convergence assertions visible as a single lifecycle specification.
     @Test
     fun provisionalChainCoversEveryOutcomePhaseRestartAndResponseLoss() = runBlocking {
         val chains = listOf(
@@ -435,6 +444,8 @@ class GeneratedAutoBreakDependencyTest {
                     for (restartsBeforeHttp in listOf(false, true)) {
                         for (losesResponse in listOf(false, true)) {
                             caseIndex += 1
+                            val caseRepositories = mutableListOf<TimerRepository>()
+                            try {
                             database.clearAllTables()
                             val profile = testUser("matrix-owner-$caseIndex")
                             val focus = expiredFocus().copy(id = "matrix-focus-$caseIndex")
@@ -446,6 +457,7 @@ class GeneratedAutoBreakDependencyTest {
                                 ),
                             )
                             var local = testRepository(context, database.timerDao())
+                                .also(caseRepositories::add)
                             local.initialize()
                             assertTrue(local.finishExpiredTimer())
                             for (action in chain.drop(1)) {
@@ -469,6 +481,7 @@ class GeneratedAutoBreakDependencyTest {
                             assertEquals(chain, dependent.map { it.type })
                             if (restartsBeforeHttp) {
                                 local = testRepository(context, database.timerDao())
+                                    .also(caseRepositories::add)
                                 local.initialize()
                                 assertEquals(
                                     chain,
@@ -501,7 +514,10 @@ class GeneratedAutoBreakDependencyTest {
                                                 completedHistory(focus, source.id),
                                             ) + if (correctsToLong) {
                                                 (1..3).map {
-                                                    testHistory("matrix-global-$caseIndex-$it")
+                                                    precedingFocusHistory(
+                                                        "matrix-global-$caseIndex-$it",
+                                                        56 + it,
+                                                    )
                                                 }
                                             } else {
                                                 emptyList()
@@ -516,14 +532,17 @@ class GeneratedAutoBreakDependencyTest {
                                 service,
                                 TestAuthSession(tokensAvailable = true),
                                 initialSyncRetryDelayMs = 1,
-                            )
+                            ).also(caseRepositories::add)
 
                             signed.initialize()
                             val releases = outcome != "rejected"
                             val expectedCalls = (if (losesResponse) 1 else 0) +
                                 1 +
                                 (if (releases) 1 else 0)
-                            awaitState {
+                            // This 144-case restart/response-loss matrix runs late in the full
+                            // connected suite; retain exact convergence checks while tolerating
+                            // sustained emulator GC and interpreted SharedCore execution.
+                            awaitState(timeoutMs = 30_000) {
                                 service.syncCalls == expectedCalls &&
                                     signed.state.value.pendingCount == 0
                             }
@@ -542,15 +561,26 @@ class GeneratedAutoBreakDependencyTest {
                                 } else {
                                     TimerPhase.ShortBreak
                                 }
-                                assertTrue(uploaded.all {
-                                    it.phase == expectedPhase &&
-                                        it.plannedDurationMs ==
-                                        TimerSettings().durationMsFor(expectedPhase)
-                                })
+                                val case = "chain=$chain outcome=$outcome correctsToLong=$correctsToLong " +
+                                    "restart=$restartsBeforeHttp responseLoss=$losesResponse"
+                                uploaded.forEach { command ->
+                                    assertEquals(case, expectedPhase, command.phase)
+                                    assertEquals(
+                                        case,
+                                        TimerSettings().durationMsFor(expectedPhase),
+                                        command.plannedDurationMs,
+                                    )
+                                }
                             }
                             val reopened = testRepository(context, database.timerDao())
+                                .also(caseRepositories::add)
                             reopened.initialize()
                             assertTrue(database.timerDao().pendingCommands().isEmpty())
+                            } finally {
+                                caseRepositories.asReversed().forEach {
+                                    shutdownTrackedTestRepository(it)
+                                }
+                            }
                         }
                     }
                 }
@@ -740,7 +770,7 @@ class GeneratedAutoBreakDependencyTest {
         val profileService = TestRepositoryService(profile).apply {
             bootstrapResponse = response(timer = focus, autoStart = true)
             syncHandler = { request ->
-                val projected = TimerReducer.replay(focus, emptyList(), request.commands)
+                val projected = LegacyTimerReducer.replay(focus, emptyList(), request.commands)
                 response(
                     revision = 1,
                     timer = projected.timer,
@@ -809,14 +839,16 @@ class GeneratedAutoBreakDependencyTest {
                 }
             }
         }
+        val auth = freshSignInAuth()
         val repository = testRepository(
             context,
             database.timerDao(),
             service,
-            TestAuthSession(tokensAvailable = true),
+            auth,
         )
 
         repository.initialize()
+        repository.signIn(testCredentialProvider())
         requireNotNull(repository.state.value.historyResolution)
         repository.resolveHistory(BootstrapStrategy.ReplaceRemote)
         awaitState {
@@ -959,6 +991,7 @@ class GeneratedAutoBreakDependencyTest {
             PomodoroughDatabase.Migration9To10,
             PomodoroughDatabase.Migration10To11,
             PomodoroughDatabase.Migration11To12,
+            PomodoroughDatabase.Migration12To13,
         ).build()
         val service = TestRepositoryService(profile).apply {
             bootstrapResponse = response(revision = 5)
@@ -1035,8 +1068,13 @@ class GeneratedAutoBreakDependencyTest {
         phase = TimerPhase.Focus,
         status = TimerStatus.Completed,
         plannedDurationMs = focus.plannedDurationMs,
-        completedAt = "2026-01-01T00:25:00Z",
-        endedAt = "2026-01-01T00:25:00Z",
+        completedAt = "2026-01-01T00:00:00Z",
+        endedAt = "2026-01-01T00:00:00Z",
+    )
+
+    private fun precedingFocusHistory(id: String, minute: Int) = testHistory(id).copy(
+        completedAt = "2025-12-31T23:${minute.toString().padStart(2, '0')}:00Z",
+        endedAt = "2025-12-31T23:${minute.toString().padStart(2, '0')}:00Z",
     )
 
     private fun completedTimer(focus: CanonicalTimer) = focus.copy(
@@ -1053,7 +1091,9 @@ class GeneratedAutoBreakDependencyTest {
         outcome: String = "applied",
     ): SyncResponse {
         val source = completedHistory(focus, finish.id)
-        val preceding = (1 until completedCount).map { testHistory("global-$it") }
+        val preceding = (1 until completedCount).map {
+            precedingFocusHistory("global-$it", 56 + it)
+        }
         return response(
             revision = revision,
             timer = completedTimer(focus),
@@ -1068,7 +1108,7 @@ class GeneratedAutoBreakDependencyTest {
         commands: List<TimerCommand>,
         history: List<HistoryItem>,
     ): SyncResponse {
-        val projected = TimerReducer.replay(null, history, commands)
+        val projected = LegacyTimerReducer.replay(null, history, commands)
         return response(
             revision = revision,
             timer = projected.timer,

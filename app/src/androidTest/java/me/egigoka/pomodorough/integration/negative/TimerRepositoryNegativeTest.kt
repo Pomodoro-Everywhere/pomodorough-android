@@ -25,6 +25,7 @@ import me.egigoka.pomodorough.data.UuidV7
 import me.egigoka.pomodorough.data.api.ApiException
 import me.egigoka.pomodorough.data.auth.AuthenticationRequired
 import me.egigoka.pomodorough.data.local.LocalStateEntity
+import me.egigoka.pomodorough.data.local.PendingAutoStartOperationEntity
 import me.egigoka.pomodorough.data.local.PendingCommandEntity
 import me.egigoka.pomodorough.data.local.PendingDurationOperationEntity
 import me.egigoka.pomodorough.data.local.PendingSelectedTaskOperationEntity
@@ -34,6 +35,7 @@ import me.egigoka.pomodorough.integration.TestAuthSession
 import me.egigoka.pomodorough.integration.TestRepositoryService
 import me.egigoka.pomodorough.integration.awaitState
 import me.egigoka.pomodorough.integration.repositoryJson
+import me.egigoka.pomodorough.integration.testAutoStartOperation
 import me.egigoka.pomodorough.integration.testCommand
 import me.egigoka.pomodorough.integration.testDurationOperation
 import me.egigoka.pomodorough.integration.testHistory
@@ -158,12 +160,12 @@ class TimerRepositoryNegativeTest {
 
         assertEquals(original, repository.state.value.settings)
         assertEquals(1, repository.state.value.pendingCount)
-        assertEquals(
-            original,
-            repositoryJson.decodeFromString<TimerSettings>(
-                requireNotNull(database.timerDao().localState()).settingsJson,
-            ),
+        val persisted = repositoryJson.decodeFromString<TimerSettings>(
+            requireNotNull(database.timerDao().localState()).settingsJson,
         )
+        assertEquals(original.selectedPhase, persisted.selectedPhase)
+        assertEquals(original.autoStartBreaks, persisted.autoStartBreaks)
+        assertEquals(original.effectiveDurationsMs(), persisted.effectiveDurationsMs())
     }
 
     @Test
@@ -751,13 +753,24 @@ class TimerRepositoryNegativeTest {
     }
 
     @Test
-    fun failedLogoutPreservesAccountDataAndReportsNotice() = runBlocking {
+    fun networkLogoutFailureClearsAccountQueuesAndSurvivesRestart() = runBlocking {
+        assertFailedRevocationClearsAccount(IOException("logout unavailable"), populateQueues = true)
+    }
+
+    @Test
+    fun http5xxLogoutFailureClearsAccountAndSurvivesRestart() = runBlocking {
+        assertFailedRevocationClearsAccount(ApiException(503, "logout unavailable"))
+    }
+
+    @Test
+    fun tokenClearFailureCannotRestoreOldAccountAfterRestart() = runBlocking {
         val profile = testUser()
         val timer = testTimer()
-        val persisted = testState(user = profile, timer = timer, history = listOf(testHistory("history-1")))
-        database.timerDao().insertState(persisted)
+        database.timerDao().insertState(
+            testState(user = profile, timer = timer, history = listOf(testHistory("history-1"))),
+        )
         val auth = TestAuthSession(tokensAvailable = true).apply {
-            logoutFailure = IOException("logout unavailable")
+            tokenClearFailuresRemaining = 1
         }
         val service = TestRepositoryService(profile).apply {
             bootstrapResponse = syncResponse.copy(
@@ -773,16 +786,137 @@ class TimerRepositoryNegativeTest {
             online = false,
         )
         repository.initialize()
-        val beforeLogout = database.timerDao().localState()
+        val profileCallsBeforeLogout = service.callOrder.count { it == "me" }
 
         repository.logout()
 
         assertEquals(1, auth.logoutCalls)
-        assertEquals(AuthStatus.SignedIn, repository.state.value.authStatus)
-        assertEquals(profile, repository.state.value.user)
-        assertEquals(timer, repository.state.value.timer)
-        assertEquals("logout unavailable", repository.state.value.notice)
-        assertEquals(beforeLogout, database.timerDao().localState())
+        assertTrue(auth.tokensAvailable)
+        assertEquals(AuthStatus.SignedOut, repository.state.value.authStatus)
+        assertNull(database.timerDao().localState()?.ownerUserId)
+
+        val restarted = testRepository(
+            context,
+            database.timerDao(),
+            service,
+            auth,
+            online = false,
+        )
+        restarted.initialize()
+
+        assertEquals(profileCallsBeforeLogout, service.callOrder.count { it == "me" })
+        assertEquals(1, auth.clearCalls)
+        assertTrue(!auth.tokensAvailable)
+        assertEquals(AuthStatus.SignedOut, restarted.state.value.authStatus)
+        assertNull(restarted.state.value.user)
+        assertNull(restarted.state.value.timer)
+    }
+
+    private suspend fun assertFailedRevocationClearsAccount(
+        failure: Throwable,
+        populateQueues: Boolean = false,
+    ) {
+        val profile = testUser()
+        val timer = testTimer()
+        val state = testState(
+            user = profile,
+            timer = timer,
+            history = listOf(testHistory("history-1")),
+            deviceSequence = 1,
+        )
+        database.timerDao().insertState(state)
+        if (populateQueues) {
+            val task = requireNotNull(TaskReducer.taskFromTitle("Queued task"))
+            database.timerDao().insertCommand(
+                PendingCommandEntity.from(testCommand("queued-command", sequence = 1)),
+            )
+            database.timerDao().insertTaskOperation(
+                PendingTaskOperationEntity.from(
+                    TaskOperation(
+                        id = "queued-task",
+                        taskId = task.id,
+                        type = TaskOperationType.Upsert,
+                        title = task.title,
+                        occurredAt = "2026-01-01T00:00:00Z",
+                        hlcWallMs = 1_767_225_600_001,
+                        hlcCounter = 0,
+                    ),
+                ),
+            )
+            database.timerDao().upsertDurationOperation(
+                PendingDurationOperationEntity.from(
+                    testDurationOperation(
+                        id = "queued-duration",
+                        phase = TimerPhase.Focus,
+                        durationMs = 1_800_000,
+                    ),
+                ),
+            )
+            database.timerDao().insertAutoStartOperation(
+                PendingAutoStartOperationEntity.from(
+                    testAutoStartOperation("queued-auto-start", enabled = true),
+                ),
+            )
+            database.timerDao().insertSelectedTaskOperation(
+                PendingSelectedTaskOperationEntity.from(
+                    SelectedTaskOperation(
+                        id = "queued-selected-task",
+                        taskId = task.id,
+                        occurredAt = "2026-01-01T00:00:00Z",
+                        hlcWallMs = 1_767_225_600_002,
+                        hlcCounter = 0,
+                    ),
+                ),
+            )
+        }
+        val auth = TestAuthSession(tokensAvailable = true).apply {
+            logoutFailure = failure
+        }
+        val service = TestRepositoryService(profile).apply {
+            bootstrapResponse = syncResponse.copy(
+                canonicalTimer = timer,
+                history = listOf(testHistory("history-1")),
+            )
+        }
+        val repository = testRepository(
+            context,
+            database.timerDao(),
+            service,
+            auth,
+            online = false,
+        )
+        repository.initialize()
+        val profileCallsBeforeLogout = service.callOrder.count { it == "me" }
+
+        repository.logout()
+
+        assertEquals(1, auth.logoutCalls)
+        assertTrue(!auth.tokensAvailable)
+        assertEquals(AuthStatus.SignedOut, repository.state.value.authStatus)
+        assertNull(repository.state.value.user)
+        assertNull(repository.state.value.timer)
+        assertEquals(0, repository.state.value.pendingCount)
+        assertNull(database.timerDao().localState()?.ownerUserId)
+        assertNull(database.timerDao().localState()?.userJson)
+        assertTrue(database.timerDao().pendingCommands().isEmpty())
+        assertTrue(database.timerDao().pendingTaskOperations().isEmpty())
+        assertTrue(database.timerDao().pendingDurationOperations().isEmpty())
+        assertTrue(database.timerDao().pendingAutoStartOperations().isEmpty())
+        assertTrue(database.timerDao().pendingSelectedTaskOperations().isEmpty())
+
+        val restarted = testRepository(
+            context,
+            database.timerDao(),
+            service,
+            auth,
+            online = false,
+        )
+        restarted.initialize()
+
+        assertEquals(profileCallsBeforeLogout, service.callOrder.count { it == "me" })
+        assertEquals(AuthStatus.SignedOut, restarted.state.value.authStatus)
+        assertNull(restarted.state.value.user)
+        assertNull(restarted.state.value.timer)
     }
 
     @Test

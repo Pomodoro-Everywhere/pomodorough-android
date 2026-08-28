@@ -184,6 +184,28 @@ class PomodoroughDatabaseTest {
     }
 
     @Test
+    fun migrationTwelveToThirteenAddsDurableAccountDeletionState() {
+        context.deleteDatabase(MigrationDatabaseName)
+        migrationHelper.createDatabase(MigrationDatabaseName, 12).close()
+
+        val migrated = migrationHelper.runMigrationsAndValidate(
+            MigrationDatabaseName,
+            13,
+            true,
+            PomodoroughDatabase.Migration12To13,
+        )
+
+        migrated.query("PRAGMA table_info(local_state)").use { cursor ->
+            var found = false
+            while (cursor.moveToNext()) {
+                if (cursor.getString(1) == "accountDeletionState") found = true
+            }
+            assertTrue(found)
+        }
+        migrated.close()
+    }
+
+    @Test
     fun clearAccountRemovesQueueAndPersistsClearedOwner() = runBlocking {
         val initial = state().copy(ownerUserId = "old-user", userJson = "{\"id\":\"old-user\"}")
         dao.insertState(initial)

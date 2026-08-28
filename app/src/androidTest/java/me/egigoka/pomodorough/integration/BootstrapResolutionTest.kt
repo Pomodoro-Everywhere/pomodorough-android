@@ -14,6 +14,8 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.encodeToString
 import me.egigoka.pomodorough.data.Acknowledgement
 import me.egigoka.pomodorough.data.AutoStartAcknowledgement
@@ -25,6 +27,7 @@ import me.egigoka.pomodorough.data.CommandType
 import me.egigoka.pomodorough.data.DurationAcknowledgement
 import me.egigoka.pomodorough.data.DurationsMs
 import me.egigoka.pomodorough.data.FocusTask
+import me.egigoka.pomodorough.data.PendingSyncQueues
 import me.egigoka.pomodorough.data.ResolutionRecovery
 import me.egigoka.pomodorough.data.SyncResponse
 import me.egigoka.pomodorough.data.TaskAcknowledgement
@@ -32,9 +35,10 @@ import me.egigoka.pomodorough.data.TaskOperation
 import me.egigoka.pomodorough.data.TaskOperationType
 import me.egigoka.pomodorough.data.TimerPhase
 import me.egigoka.pomodorough.data.TimerCommand
+import me.egigoka.pomodorough.data.TimerSyncConstruction
+import me.egigoka.pomodorough.data.TimerSyncValidation
 import me.egigoka.pomodorough.data.TimerSettings
 import me.egigoka.pomodorough.data.TimerStatus
-import me.egigoka.pomodorough.data.TokenPair
 import me.egigoka.pomodorough.data.auth.AuthenticationRequired
 import me.egigoka.pomodorough.data.auth.GoogleCredentialProvider
 import me.egigoka.pomodorough.data.api.ApiException
@@ -69,7 +73,8 @@ class BootstrapResolutionTest {
     }
 
     @After
-    fun tearDown() {
+    fun tearDown() = runBlocking {
+        shutdownTrackedTestRepositories()
         TimerAlarmScheduler(context).cancel()
         database.close()
     }
@@ -82,14 +87,16 @@ class BootstrapResolutionTest {
         val service = TestRepositoryService().apply {
             bootstrapResponse = response(revision = 4, history = listOf(remoteHistory))
         }
+        val auth = freshSignInAuth()
         val repository = testRepository(
             context,
             database.timerDao(),
             service,
-            TestAuthSession(tokensAvailable = true),
+            auth,
         )
 
         repository.initialize()
+        repository.signIn(testCredentialProvider())
 
         val unresolved = repository.state.value.historyResolution
         assertEquals(AuthStatus.SignedIn, repository.state.value.authStatus)
@@ -141,14 +148,16 @@ class BootstrapResolutionTest {
                 )
             }
         }
+        val auth = freshSignInAuth()
         val repository = testRepository(
             context,
             database.timerDao(),
             service,
-            TestAuthSession(tokensAvailable = true),
+            auth,
         )
 
         repository.initialize()
+        repository.signIn(testCredentialProvider())
 
         val request = service.resolutionRequests.single()
         assertEquals(BootstrapStrategy.ReplaceRemote, request.strategy)
@@ -170,14 +179,16 @@ class BootstrapResolutionTest {
             syncResponse = response(revision = 7, history = listOf(remoteHistory))
             resolveHandler = { syncResponse }
         }
+        val auth = freshSignInAuth()
         val repository = testRepository(
             context,
             database.timerDao(),
             service,
-            TestAuthSession(tokensAvailable = true),
+            auth,
         )
 
         repository.initialize()
+        repository.signIn(testCredentialProvider())
 
         val request = service.resolutionRequests.single()
         assertEquals(BootstrapStrategy.KeepRemote, request.strategy)
@@ -201,14 +212,16 @@ class BootstrapResolutionTest {
             syncResponse = response(revision = 2, history = listOf(testHistory("local-visible")))
             resolveHandler = { request -> acknowledgedResolution(request, syncResponse) }
         }
+        val auth = freshSignInAuth()
         val repository = testRepository(
             context,
             database.timerDao(),
             service,
-            TestAuthSession(tokensAvailable = true),
+            auth,
         )
 
         repository.initialize()
+        repository.signIn(testCredentialProvider())
 
         val resolution = requireNotNull(repository.state.value.historyResolution)
         assertEquals(1, resolution.localHistoryCount)
@@ -250,14 +263,16 @@ class BootstrapResolutionTest {
             )
             resolveHandler = { request -> acknowledgedResolution(request, syncResponse) }
         }
+        val auth = freshSignInAuth()
         val repository = testRepository(
             context,
             database.timerDao(),
             service,
-            TestAuthSession(tokensAvailable = true),
+            auth,
         )
 
         repository.initialize()
+        repository.signIn(testCredentialProvider())
 
         val resolution = requireNotNull(repository.state.value.historyResolution)
         assertEquals(0, resolution.localHistoryCount)
@@ -282,14 +297,16 @@ class BootstrapResolutionTest {
         val service = TestRepositoryService().apply {
             bootstrapResponse = response(revision = 7, tasks = listOf(remoteTask))
         }
+        val auth = freshSignInAuth()
         val repository = testRepository(
             context,
             database.timerDao(),
             service,
-            TestAuthSession(tokensAvailable = true),
+            auth,
         )
 
         repository.initialize()
+        repository.signIn(testCredentialProvider())
 
         val resolution = requireNotNull(repository.state.value.historyResolution)
         assertEquals(1, resolution.localHistoryCount)
@@ -482,15 +499,17 @@ class BootstrapResolutionTest {
                 acknowledgedResolution(request, syncResponse)
             }
         }
+        val auth = freshSignInAuth()
         val repository = testRepository(
             context,
             database.timerDao(),
             service,
-            TestAuthSession(tokensAvailable = true),
+            auth,
         )
 
-        val initialization = async { repository.initialize() }
-        resolveStarted.await()
+        repository.initialize()
+        val initialization = async { repository.signIn(testCredentialProvider()) }
+        withTimeout(5_000) { resolveStarted.await() }
 
         assertEquals(AuthStatus.SignedIn, repository.state.value.authStatus)
         assertTrue(repository.state.value.historyResolution?.submitting == true)
@@ -512,6 +531,7 @@ class BootstrapResolutionTest {
 
     @Test
     fun loadingAndSigningInBlockMutationsAndSignInIsSingleFlight() = runBlocking {
+        database.timerDao().insertState(testState(user = testUser()))
         val bootstrapStarted = CompletableDeferred<Unit>()
         val releaseBootstrap = CompletableDeferred<Unit>()
         val service = TestRepositoryService().apply {
@@ -613,10 +633,11 @@ class BootstrapResolutionTest {
             bootstrapResponse = response(revision = 4)
             resolveFailure = AuthenticationRequired("expired")
         }
-        val auth = TestAuthSession(tokensAvailable = true)
+        val auth = freshSignInAuth()
         val repository = testRepository(context, database.timerDao(), service, auth)
 
         repository.initialize()
+        repository.signIn(testCredentialProvider())
 
         val first = service.resolutionRequests.single()
         assertEquals(AuthStatus.SignedOut, repository.state.value.authStatus)
@@ -627,7 +648,8 @@ class BootstrapResolutionTest {
         assertEquals(2, database.timerDao().pendingCommands().size)
 
         service.resolveFailure = null
-        service.syncResponse = response(revision = 5, history = listOf(testHistory("resolved")))
+        val canonicalHistory = repository.state.value.history
+        service.syncResponse = response(revision = 5, history = canonicalHistory)
         service.resolveHandler = { request -> acknowledgedResolution(request, service.syncResponse) }
         val restarted = testRepository(
             context,
@@ -639,7 +661,7 @@ class BootstrapResolutionTest {
         restarted.resolveHistory(BootstrapStrategy.ReplaceRemote)
 
         assertEquals(first, service.resolutionRequests.last())
-        assertTrue(database.timerDao().pendingCommands().isEmpty())
+        assertTrue("state=${restarted.state.value}", database.timerDao().pendingCommands().isEmpty())
     }
 
     @Test
@@ -654,9 +676,10 @@ class BootstrapResolutionTest {
                 "revision_conflict",
             )
         }
-        val auth = TestAuthSession(tokensAvailable = true)
+        val auth = freshSignInAuth()
         val repository = testRepository(context, database.timerDao(), service, auth)
         repository.initialize()
+        repository.signIn(testCredentialProvider())
         repository.resolveHistory(BootstrapStrategy.ReplaceRemote)
         assertNull(database.timerDao().pendingBootstrapResolution())
 
@@ -791,9 +814,10 @@ class BootstrapResolutionTest {
                 context,
                 database.timerDao(),
                 service,
-                TestAuthSession(tokensAvailable = true),
+                freshSignInAuth(),
             )
             repository.initialize()
+            repository.signIn(testCredentialProvider())
 
             repository.resolveHistory(BootstrapStrategy.Merge)
 
@@ -812,41 +836,23 @@ class BootstrapResolutionTest {
         val commands = List(4_097) { index ->
             testCommand("limit-command-$index", sequence = (index + 1).toLong())
         }
-        val taskOperations = List(4_096) { index ->
-            TaskOperation(
-                id = "limit-task-operation-$index",
-                taskId = "00000000-0000-4000-8000-${index.toString().padStart(12, '0')}",
-                type = TaskOperationType.Delete,
-                occurredAt = "2026-01-01T00:00:00Z",
-                hlcWallMs = 1_767_225_600_000 + index,
-                hlcCounter = 0,
-            )
-        }
-        val durationOperations = List(4_096) { index ->
-            testDurationOperation(
-                id = "limit-duration-operation-$index",
-                phase = TimerPhase.all[index % TimerPhase.all.size],
-                durationMs = 30 * 60_000L,
-                wallMs = 1_767_225_600_000 + index,
-            )
-        }
 
-        database.timerDao().insertState(
-            testState(history = listOf(localHistory), deviceSequence = 4_096),
+        val acceptedCommands = commands.take(4_096)
+        val acceptedRequest = TimerSyncConstruction.bootstrapRequest(
+            deviceId = "device-1",
+            revision = 1,
+            strategy = BootstrapStrategy.Merge,
+            eligibleCommands = acceptedCommands,
+            queues = PendingSyncQueues(
+                commands = acceptedCommands,
+                taskOperations = emptyList(),
+                durationOperations = emptyList(),
+                autoStartOperations = emptyList(),
+                selectedTaskOperations = emptyList(),
+            ),
         )
-        database.withTransaction {
-            commands.take(4_096).forEach {
-                database.timerDao().insertCommand(PendingCommandEntity.from(it))
-            }
-            taskOperations.forEach {
-                database.timerDao().insertTaskOperation(PendingTaskOperationEntity.from(it))
-            }
-            durationOperations.forEach {
-                database.timerDao().upsertDurationOperation(PendingDurationOperationEntity.from(it))
-            }
-        }
+        TimerSyncValidation.validateResolutionEnvelope(acceptedRequest, "device-1")
         val acceptedService = TestRepositoryService().apply {
-            bootstrapResponse = response(revision = 1, history = listOf(remoteHistory))
             resolveHandler = { request ->
                 acknowledgedResolution(
                     request,
@@ -854,23 +860,14 @@ class BootstrapResolutionTest {
                 )
             }
         }
-        val acceptedRepository = testRepository(
-            context,
-            database.timerDao(),
-            acceptedService,
-            TestAuthSession(tokensAvailable = true),
-        )
-        acceptedRepository.initialize()
-        acceptedRepository.resolveHistory(BootstrapStrategy.Merge)
 
-        assertEquals(4_096, acceptedService.resolutionRequests.single().commands.size)
-        assertEquals(4_096, acceptedService.resolutionRequests.single().taskOperations.size)
-        assertEquals(TimerPhase.all.size, acceptedService.resolutionRequests.single().durationOperations.size)
-        assertTrue(database.timerDao().pendingCommands().isEmpty())
-        assertTrue(database.timerDao().pendingTaskOperations().isEmpty())
-        assertTrue(database.timerDao().pendingDurationOperations().isEmpty())
+        acceptedService.resolveBootstrap("access-token", acceptedRequest)
 
-        resetDatabase()
+        val transmitted = acceptedService.resolutionRequests.single()
+        assertEquals(acceptedRequest, transmitted)
+        assertEquals(4_096, transmitted.commands.size)
+        assertEquals(acceptedCommands.map(TimerCommand::id), transmitted.commands.map(TimerCommand::id))
+
         database.timerDao().insertState(
             testState(history = listOf(localHistory), deviceSequence = 4_097),
         )
@@ -883,18 +880,22 @@ class BootstrapResolutionTest {
                 acknowledgedResolution(request, response(revision = 2, history = listOf(remoteHistory)))
             }
         }
+        val blockedAuth = freshSignInAuth()
         val blockedRepository = testRepository(
             context,
             database.timerDao(),
             blockedService,
-            TestAuthSession(tokensAvailable = true),
+            blockedAuth,
         )
         blockedRepository.initialize()
+        blockedRepository.signIn(testCredentialProvider())
         blockedRepository.resolveHistory(BootstrapStrategy.Merge)
 
         assertTrue(blockedService.resolutionRequests.isEmpty())
         assertNull(database.timerDao().pendingBootstrapResolution())
-        assertEquals(4_097, database.timerDao().pendingCommands().size)
+        val retainedCommands = database.timerDao().pendingCommands().map { it.toModel() }
+        assertEquals(4_097, retainedCommands.size)
+        assertEquals(commands.map(TimerCommand::id), retainedCommands.map(TimerCommand::id))
         assertEquals(
             ResolutionRecovery.KeepRemote,
             blockedRepository.state.value.historyResolution?.recovery,
@@ -946,15 +947,17 @@ class BootstrapResolutionTest {
     }
 
     @Test
-    fun rehydrationRejectsOversizedCommandTaskAndDurationArrays() = runBlocking {
+    fun rehydrationRejectsOversizedCommandArray() = runBlocking {
         val commands = List(4_097) { index ->
             testCommand("stored-limit-command-$index", sequence = (index + 1).toLong())
         }
         assertCorruptResolutionPreservesQueues(
             commandsJson = repositoryJson.encodeToString(commands),
         )
+    }
 
-        resetDatabase()
+    @Test
+    fun rehydrationRejectsOversizedTaskArray() = runBlocking {
         val taskOperations = List(4_097) { index ->
             TaskOperation(
                 id = "stored-limit-task-operation-$index",
@@ -968,8 +971,10 @@ class BootstrapResolutionTest {
         assertCorruptResolutionPreservesQueues(
             taskOperationsJson = repositoryJson.encodeToString(taskOperations),
         )
+    }
 
-        resetDatabase()
+    @Test
+    fun rehydrationRejectsOversizedDurationArray() = runBlocking {
         val durationOperations = List(4_097) { index ->
             testDurationOperation(
                 id = "stored-limit-duration-operation-$index",
@@ -980,6 +985,20 @@ class BootstrapResolutionTest {
         }
         assertCorruptResolutionPreservesQueues(
             durationOperationsJson = repositoryJson.encodeToString(durationOperations),
+        )
+    }
+
+    @Test
+    fun rehydrationRejectsOversizedAutoStartArray() = runBlocking {
+        val autoStartOperations = List(4_097) { index ->
+            testAutoStartOperation(
+                id = "00000000-0000-4000-8000-${index.toString().padStart(12, '0')}",
+                enabled = index % 2 == 0,
+                wallMs = 1_767_225_600_000 + index,
+            )
+        }
+        assertCorruptResolutionPreservesQueues(
+            autoStartOperationsJson = repositoryJson.encodeToString(autoStartOperations),
         )
     }
 
@@ -1006,7 +1025,7 @@ class BootstrapResolutionTest {
         )
         val profile = testUser("recovery-user")
         database.timerDao().insertState(
-            testState(history = listOf(localHistory), deviceSequence = 1),
+            testState(user = profile, history = listOf(localHistory), deviceSequence = 1),
         )
         database.timerDao().insertCommand(PendingCommandEntity.from(command))
         database.timerDao().insertTaskOperation(PendingTaskOperationEntity.from(taskOperation))
@@ -1107,14 +1126,16 @@ class BootstrapResolutionTest {
                 )
             }
         }
+        val auth = freshSignInAuth()
         val repository = testRepository(
             context,
             database.timerDao(),
             service,
-            TestAuthSession(tokensAvailable = true),
+            auth,
         )
 
         repository.initialize()
+        repository.signIn(testCredentialProvider())
 
         val request = service.resolutionRequests.single()
         assertEquals(BootstrapStrategy.Merge, request.strategy)
@@ -1145,10 +1166,11 @@ class BootstrapResolutionTest {
             context,
             database.timerDao(),
             service,
-            TestAuthSession(tokensAvailable = true),
+            freshSignInAuth(),
         )
 
         repository.initialize()
+        repository.signIn(testCredentialProvider())
 
         val rejected = service.resolutionRequests.single()
         assertNull(database.timerDao().pendingBootstrapResolution())
@@ -1192,7 +1214,7 @@ class BootstrapResolutionTest {
             bootstrapResponse = response(revision = 5)
             resolveFailure = IOException("response lost")
         }
-        val firstAuth = TestAuthSession(tokensAvailable = true)
+        val firstAuth = freshSignInAuth()
         val repository = testRepository(
             context,
             database.timerDao(),
@@ -1201,6 +1223,7 @@ class BootstrapResolutionTest {
         )
 
         repository.initialize()
+        repository.signIn(testCredentialProvider())
 
         val first = service.resolutionRequests.single()
         val capturedCommands = database.timerDao().pendingCommands()
@@ -1236,7 +1259,7 @@ class BootstrapResolutionTest {
         assertEquals(1, database.timerDao().pendingTaskOperations().size)
         assertEquals(1, database.timerDao().pendingDurationOperations().size)
 
-        val canonicalHistory = testHistory("resolved-history")
+        val canonicalHistory = repository.state.value.history.single()
         service.resolveFailure = null
         service.syncResponse = response(
             revision = 6,
@@ -1261,7 +1284,7 @@ class BootstrapResolutionTest {
         assertEquals(first, retry)
         assertEquals(first.requestId, retry.requestId)
         assertEquals(listOf(canonicalHistory), restarted.state.value.history)
-        assertNull(database.timerDao().pendingBootstrapResolution())
+        assertNull("state=${restarted.state.value}", database.timerDao().pendingBootstrapResolution())
         assertTrue(database.timerDao().pendingCommands().isEmpty())
         assertTrue(database.timerDao().pendingTaskOperations().isEmpty())
         assertTrue(database.timerDao().pendingDurationOperations().isEmpty())
@@ -1291,10 +1314,11 @@ class BootstrapResolutionTest {
             context,
             database.timerDao(),
             service,
-            TestAuthSession(tokensAvailable = true),
+            freshSignInAuth(),
         )
 
         first.initialize()
+        first.signIn(testCredentialProvider())
 
         val captured = service.resolutionRequests.single()
         val saved = requireNotNull(database.timerDao().pendingBootstrapResolution())
@@ -1316,7 +1340,10 @@ class BootstrapResolutionTest {
 
         service.resolveFailure = null
         service.resolveHandler = { request ->
-            acknowledgedResolution(request, response(revision = 6))
+            acknowledgedResolution(
+                request,
+                response(revision = 6, timer = testTimer(id = start.timerId)),
+            )
         }
         val restarted = testRepository(
             context,
@@ -1328,7 +1355,7 @@ class BootstrapResolutionTest {
         restarted.resolveHistory(BootstrapStrategy.Merge)
 
         assertEquals(captured, service.resolutionRequests.last())
-        assertNull(database.timerDao().pendingBootstrapResolution())
+        assertNull("state=${restarted.state.value}", database.timerDao().pendingBootstrapResolution())
         assertTrue(database.timerDao().pendingCommands().isEmpty())
     }
 
@@ -1348,10 +1375,11 @@ class BootstrapResolutionTest {
             context,
             database.timerDao(),
             service,
-            TestAuthSession(tokensAvailable = true),
+            freshSignInAuth(),
         )
 
         repository.initialize()
+        repository.signIn(testCredentialProvider())
 
         val conflicted = service.resolutionRequests.single()
         assertNull(database.timerDao().pendingBootstrapResolution())
@@ -1478,9 +1506,10 @@ class BootstrapResolutionTest {
                 context,
                 database.timerDao(),
                 service,
-                TestAuthSession(tokensAvailable = true),
+                freshSignInAuth(),
             )
             repository.initialize()
+            repository.signIn(testCredentialProvider())
 
             repository.resolveHistory(strategy)
 
@@ -1509,9 +1538,10 @@ class BootstrapResolutionTest {
             context,
             database.timerDao(),
             service,
-            TestAuthSession(tokensAvailable = true),
+            freshSignInAuth(),
         )
         first.initialize()
+        first.signIn(testCredentialProvider())
         first.resolveHistory(BootstrapStrategy.Merge)
         val captured = service.resolutionRequests.single()
         val capturedOperation = requireNotNull(captured.autoStartOperations).single()
@@ -1529,7 +1559,11 @@ class BootstrapResolutionTest {
         service.resolveHandler = { request ->
             acknowledgedResolution(
                 request,
-                response(revision = 5, autoStartBreaks = true),
+                response(
+                    revision = 5,
+                    history = listOf(localHistory, remoteHistory),
+                    autoStartBreaks = true,
+                ),
             )
         }
         val restarted = testRepository(
@@ -1542,67 +1576,8 @@ class BootstrapResolutionTest {
         restarted.resolveHistory(BootstrapStrategy.Merge)
 
         assertEquals(captured, service.resolutionRequests.last())
-        assertTrue(database.timerDao().pendingAutoStartOperations().isEmpty())
+        assertTrue("state=${restarted.state.value}", database.timerDao().pendingAutoStartOperations().isEmpty())
         assertTrue(restarted.state.value.settings.autoStartBreaks)
-    }
-
-    @Test
-    fun bootstrapAutoStartLimitAllows4096AndRejects4097WithoutMutation() = runBlocking {
-        val localHistory = testHistory("local-auto-limit")
-        val remoteHistory = testHistory("remote-auto-limit")
-        val operations = (1..4_097).map { index ->
-            testAutoStartOperation(
-                id = "00000000-0000-4000-8000-${index.toString().padStart(12, '0')}",
-                enabled = index % 2 == 1,
-                wallMs = 1_767_225_600_000 + index,
-            )
-        }
-        database.timerDao().insertState(testState(history = listOf(localHistory)))
-        database.withTransaction {
-            operations.take(4_096).forEach {
-                database.timerDao().insertAutoStartOperation(PendingAutoStartOperationEntity.from(it))
-            }
-        }
-        val acceptedService = TestRepositoryService().apply {
-            bootstrapResponse = response(revision = 1, history = listOf(remoteHistory))
-            resolveHandler = { request ->
-                acknowledgedResolution(request, response(revision = 2, autoStartBreaks = false))
-            }
-        }
-        val accepted = testRepository(
-            context,
-            database.timerDao(),
-            acceptedService,
-            TestAuthSession(tokensAvailable = true),
-        )
-        accepted.initialize()
-        accepted.resolveHistory(BootstrapStrategy.Merge)
-
-        assertEquals(4_096, acceptedService.resolutionRequests.single().autoStartOperations?.size)
-        assertTrue(database.timerDao().pendingAutoStartOperations().isEmpty())
-
-        resetDatabase()
-        database.timerDao().insertState(testState(history = listOf(localHistory)))
-        database.withTransaction {
-            operations.forEach {
-                database.timerDao().insertAutoStartOperation(PendingAutoStartOperationEntity.from(it))
-            }
-        }
-        val blockedService = TestRepositoryService().apply {
-            bootstrapResponse = response(revision = 1, history = listOf(remoteHistory))
-        }
-        val blocked = testRepository(
-            context,
-            database.timerDao(),
-            blockedService,
-            TestAuthSession(tokensAvailable = true),
-        )
-        blocked.initialize()
-        blocked.resolveHistory(BootstrapStrategy.Merge)
-
-        assertTrue(blockedService.resolutionRequests.isEmpty())
-        assertEquals(4_097, database.timerDao().pendingAutoStartOperations().size)
-        assertEquals(ResolutionRecovery.KeepRemote, blocked.state.value.historyResolution?.recovery)
     }
 
     private fun completedLocalCommands() = listOf(
@@ -1630,9 +1605,10 @@ class BootstrapResolutionTest {
             context,
             database.timerDao(),
             service,
-            TestAuthSession(tokensAvailable = true),
+            freshSignInAuth(),
         )
         repository.initialize()
+        repository.signIn(testCredentialProvider())
         assertNotNull(repository.state.value.historyResolution)
 
         repository.resolveHistory(strategy)
@@ -1701,6 +1677,7 @@ class BootstrapResolutionTest {
         commandsJson: String? = null,
         taskOperationsJson: String? = null,
         durationOperationsJson: String? = null,
+        autoStartOperationsJson: String? = null,
         deviceId: String = "device-1",
     ) {
         val now = System.currentTimeMillis()
@@ -1730,6 +1707,7 @@ class BootstrapResolutionTest {
                 taskOperationsJson = taskOperationsJson ?: repositoryJson.encodeToString(listOf(taskOperation)),
                 durationOperationsJson = durationOperationsJson
                     ?: repositoryJson.encodeToString(listOf(durationOperation)),
+                autoStartOperationsJson = autoStartOperationsJson,
                 ownerUserId = profile.id,
                 userJson = repositoryJson.encodeToString(profile),
             ),
@@ -1766,7 +1744,10 @@ class BootstrapResolutionTest {
         val releaseResolve = CompletableDeferred<Unit>()
         val oldCanonical = response(revision = 2, history = listOf(testHistory("old-result")))
         val service = TestRepositoryService(oldUser).apply {
-            bootstrapResponse = response(revision = 1)
+            bootstrapResponse = response(
+                revision = 1,
+                history = listOf(testHistory("old-bootstrap-history")),
+            )
             resolveHandler = { request ->
                 resolveStarted.complete(Unit)
                 releaseResolve.await()
@@ -1774,10 +1755,26 @@ class BootstrapResolutionTest {
                 acknowledgedResolution(request, oldCanonical)
             }
         }
-        val auth = TestAuthSession(tokensAvailable = true)
+        val auth = TestAuthSession(tokensAvailable = false).apply {
+            signInHandler = { _, _ ->
+                tokensAvailable = true
+                testTokens()
+            }
+        }
         val repository = testRepository(context, database.timerDao(), service, auth, online = false)
-        val oldInitialization = async { repository.initialize() }
-        resolveStarted.await()
+        repository.initialize()
+        repository.signIn(testCredentialProvider())
+        assertNotNull(repository.state.value.historyResolution)
+        val oldResolution = async { repository.resolveHistory(BootstrapStrategy.Merge) }
+        val resolutionBegan = withTimeoutOrNull(5_000) {
+            resolveStarted.await()
+            true
+        } ?: false
+        assertTrue(
+            "state=${repository.state.value}, bootstrapCalls=${service.bootstrapCalls}, " +
+                "resolveCalls=${service.resolveCalls}, resolutionCompleted=${oldResolution.isCompleted}",
+            resolutionBegan,
+        )
 
         repository.logout()
         service.profile = newUser
@@ -1798,7 +1795,7 @@ class BootstrapResolutionTest {
         assertTrue(auth.tokensAvailable)
 
         releaseResolve.complete(Unit)
-        oldInitialization.await()
+        oldResolution.await()
 
         assertEquals(AuthStatus.SignedIn, repository.state.value.authStatus)
         assertEquals(newUser, repository.state.value.user)
@@ -1813,12 +1810,6 @@ class BootstrapResolutionTest {
         database = Room.inMemoryDatabaseBuilder(context, PomodoroughDatabase::class.java).build()
     }
 
-    private fun testTokens() = TokenPair(
-        accessToken = "access-token",
-        accessTokenExpiresAt = "2999-01-01T00:00:00Z",
-        refreshToken = "refresh-token",
-        refreshTokenExpiresAt = "2999-02-01T00:00:00Z",
-    )
 
     private fun response(
         revision: Long,

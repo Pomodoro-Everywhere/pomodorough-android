@@ -1,5 +1,6 @@
 package me.egigoka.pomodorough.data.iroh
 
+import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -22,6 +23,7 @@ import me.egigoka.pomodorough.data.local.PendingSelectedTaskOperationEntity
 import me.egigoka.pomodorough.data.local.PendingTaskOperationEntity
 import me.egigoka.pomodorough.data.local.PendingCommandEntity
 import me.egigoka.pomodorough.data.local.PomodoroughDatabase
+import me.egigoka.pomodorough.core.SharedCore
 import me.egigoka.pomodorough.domain.TaskReducer
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -35,23 +37,26 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class IrohRoomStoreTest {
+    private lateinit var context: Context
     private lateinit var database: PomodoroughDatabase
     private lateinit var store: IrohRoomStore
+    private lateinit var core: SharedCore
+    private var failProjection = false
+    private var persistentDatabaseName: String? = null
 
     @Before
     fun setUp() {
-        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        context = ApplicationProvider.getApplicationContext()
         database = Room.inMemoryDatabaseBuilder(context, PomodoroughDatabase::class.java).build()
-        store = IrohRoomStore(
-            database.timerDao(),
-            IrohSecretVault(context),
-            currentTimeMillis = { NowMs },
-        )
+        core = SharedCore.fromAssets(context.assets)
+        failProjection = false
+        store = newStore()
     }
 
     @After
     fun tearDown() {
         database.close()
+        persistentDatabaseName?.let(context::deleteDatabase)
     }
 
     @Test
@@ -60,7 +65,13 @@ class IrohRoomStoreTest {
         val central = state().copy(
             revision = 9,
             historyJson = IrohJson.strict.encodeToString(
-                listOf(history("central-history", "2026-01-01T00:00:10Z")),
+                listOf(
+                    history(
+                        "history-central01",
+                        "timer-central01",
+                        "2026-01-01T00:00:10Z",
+                    ),
+                ),
             ),
             tasksJson = IrohJson.strict.encodeToString(listOf(task)),
             knownTasksJson = IrohJson.strict.encodeToString(listOf(task)),
@@ -90,9 +101,9 @@ class IrohRoomStoreTest {
     }
 
     @Test
-    fun roomGenesisProjectsDeadlineAndSortsHistoryCanonically() = runBlocking {
-        val older = history("timer-old", "2026-01-01T00:00:10Z")
-        val newer = history("timer-new", "2026-01-01T00:00:20Z")
+    fun roomCreationPreservesDistinctHistoryIdsAndSortsHistoryCanonically() = runBlocking {
+        val older = history("history-old01", "timer-old", "2026-01-01T00:00:10Z")
+        val newer = history("history-new01", "timer-new", "2026-01-01T00:00:20Z")
         database.timerDao().insertState(
             state().copy(
                 canonicalTimerJson = IrohJson.strict.encodeToString(
@@ -116,7 +127,186 @@ class IrohRoomStoreTest {
         val history = IrohJson.strict.decodeFromString<List<HistoryItem>>(local.historyJson)
         assertEquals(TimerStatus.Completed, timer.status)
         assertEquals(listOf("timer-live", "timer-new", "timer-old"), history.map { it.timerId })
+        assertEquals(newer.id, history.single { it.timerId == newer.timerId }.id)
+        assertEquals(older.id, history.single { it.timerId == older.timerId }.id)
+        assertTrue(history.none { it.pending })
         assertEquals(null, history.first().commandId)
+    }
+
+    @Test
+    fun roomPersistencePreservesDistinctHistoryIdInGenesisAndRoomSnapshot() = runBlocking {
+        val seeded = history(
+            "history-persist01",
+            "timer-persist01",
+            "2026-01-01T00:00:20Z",
+        )
+        database.timerDao().insertState(
+            state().copy(historyJson = IrohJson.strict.encodeToString(listOf(seeded))),
+        )
+
+        val room = store.createRoom("Persistent history").first
+
+        val genesisEntity = database.timerDao().irohOperations(room.roomId)
+            .single { it.domain == IrohDomain.genesis.name }
+        val genesis = IrohJson.strict.decodeFromString<IrohGenesis>(genesisEntity.operationJson)
+        val roomSnapshot = WorkspaceCodec.decode(
+            requireNotNull(database.timerDao().irohRoom(room.roomId)).roomStateJson,
+        )
+        val persistedHistory = IrohJson.strict.decodeFromString<List<HistoryItem>>(
+            roomSnapshot.local.historyJson,
+        )
+        assertEquals(seeded.id, genesis.history.single().id)
+        assertEquals(seeded.timerId, genesis.history.single().timerId)
+        assertEquals(seeded.id, persistedHistory.single().id)
+        assertEquals(seeded.timerId, persistedHistory.single().timerId)
+    }
+
+    @Test
+    fun roomProjectionPreservesHistoryIdWhenDisplacedTimerReactivatesAndIsDisplacedAgain() =
+        runBlocking {
+            database.timerDao().insertState(state())
+            val secret = ByteArray(32) { it.toByte() }
+            val invite = IrohRoomInvite(
+                roomId = IrohProtocolV1.roomId(secret),
+                roomName = "History projection",
+                endpointTicket = "endpoint-ticket-placeholder",
+                roomSecret = secret,
+            )
+            store.prepareJoinedRoom(invite, "endpoint-1")
+            val current = CanonicalTimer(
+                id = "timer-current01",
+                phase = TimerPhase.Focus,
+                status = TimerStatus.Paused,
+                plannedDurationMs = 60_000,
+                elapsedAtAnchorMs = 10_000,
+                anchorAt = "2026-01-01T00:00:30Z",
+            )
+            val displaced = history(
+                "history-reactivated01",
+                "timer-reactivated01",
+                "2026-01-01T00:00:20Z",
+            ).copy(status = TimerStatus.Superseded, completedAt = null)
+            val genesis = IrohOperationRecord.genesis(
+                "device-genesis1",
+                IrohGenesis(
+                    current,
+                    listOf(displaced),
+                    emptyList(),
+                    DurationsMs(),
+                    false,
+                    null,
+                    0,
+                    0,
+                ),
+            )
+            val resume = IrohOperationRecord.timer(
+                "device-remote01",
+                command(
+                    "command-reactivate01",
+                    1,
+                    displaced.timerId,
+                    CommandType.Resume,
+                ).copy(
+                    occurredAt = "2026-01-01T00:01:20Z",
+                    observedElapsedMs = 5_000,
+                ),
+            )
+
+            store.insertRemoteRecords(invite.roomId, listOf(genesis, resume))
+            store.activateJoinedRoom(invite.roomId)
+
+            val reactivated = IrohJson.strict.decodeFromString<CanonicalTimer>(
+                requireNotNull(database.timerDao().localState()).canonicalTimerJson!!,
+            )
+            assertEquals(displaced.timerId, reactivated.id)
+            val replacement = IrohOperationRecord.timer(
+                "device-remote01",
+                command(
+                    "command-replacement01",
+                    2,
+                    "timer-replacement01",
+                    CommandType.Start,
+                ).copy(
+                    occurredAt = "2026-01-01T00:01:30Z",
+                    observedElapsedMs = 0,
+                ),
+            )
+
+            store.insertRemoteRecords(invite.roomId, listOf(replacement))
+
+            val local = requireNotNull(database.timerDao().localState())
+            val projectedTimer = IrohJson.strict.decodeFromString<CanonicalTimer>(
+                local.canonicalTimerJson!!,
+            )
+            val projectedHistory = IrohJson.strict.decodeFromString<List<HistoryItem>>(
+                local.historyJson,
+            )
+            val displacedAgain = projectedHistory.single { it.timerId == displaced.timerId }
+            assertEquals("timer-replacement01", projectedTimer.id)
+            assertEquals(displaced.id, displacedAgain.id)
+            assertEquals(TimerStatus.Superseded, displacedAgain.status)
+            assertEquals(1, projectedHistory.count { it.timerId == displaced.timerId })
+        }
+
+    @Test
+    fun leaveAndRejoinPreserveDistinctHistoryId() = runBlocking {
+        val seeded = history(
+            "history-rejoin01",
+            "timer-rejoin01",
+            "2026-01-01T00:00:20Z",
+        )
+        database.timerDao().insertState(
+            state().copy(historyJson = IrohJson.strict.encodeToString(listOf(seeded))),
+        )
+        val room = store.createRoom("Rejoin history").first
+
+        store.leaveActiveRoom()
+        store.setMode(ReplicationMode.IROH)
+
+        val rejoined = IrohJson.strict.decodeFromString<List<HistoryItem>>(
+            requireNotNull(database.timerDao().localState()).historyJson,
+        ).single()
+        val persisted = IrohJson.strict.decodeFromString<List<HistoryItem>>(
+            WorkspaceCodec.decode(
+                requireNotNull(database.timerDao().irohRoom(room.roomId)).roomStateJson,
+            ).local.historyJson,
+        ).single()
+        assertEquals(seeded.id, rejoined.id)
+        assertEquals(seeded.timerId, rejoined.timerId)
+        assertEquals(seeded.id, persisted.id)
+        assertEquals(seeded.timerId, persisted.timerId)
+    }
+
+    @Test
+    fun processRestartPreservesDistinctHistoryIdAcrossRoomReactivation() = runBlocking {
+        usePersistentDatabase(PersistentDatabaseName)
+        val seeded = history(
+            "history-restart01",
+            "timer-restart01",
+            "2026-01-01T00:00:20Z",
+        )
+        database.timerDao().insertState(
+            state().copy(historyJson = IrohJson.strict.encodeToString(listOf(seeded))),
+        )
+        val room = store.createRoom("Restart history").first
+        store.setMode(ReplicationMode.OFFLINE)
+
+        restartPersistentDatabase()
+        store.setMode(ReplicationMode.IROH)
+
+        assertEquals(room.roomId, store.activeRoom()?.roomId)
+        val restarted = IrohJson.strict.decodeFromString<List<HistoryItem>>(
+            requireNotNull(database.timerDao().localState()).historyJson,
+        ).single()
+        val persisted = IrohJson.strict.decodeFromString<List<HistoryItem>>(
+            WorkspaceCodec.decode(
+                requireNotNull(database.timerDao().irohRoom(room.roomId)).roomStateJson,
+            ).local.historyJson,
+        ).single()
+        assertEquals(seeded.id, restarted.id)
+        assertEquals(seeded.timerId, restarted.timerId)
+        assertEquals(seeded.id, persisted.id)
+        assertEquals(seeded.timerId, persisted.timerId)
     }
 
     @Test
@@ -292,6 +482,34 @@ class IrohRoomStoreTest {
     }
 
     @Test
+    fun coreProjectionFailureRollsBackLocalCapture() = runBlocking {
+        database.timerDao().insertState(state())
+        val room = store.createRoom(null).first
+        val pending = PendingCommandEntity.from(
+            command("command-rollback", 1, "timer-rollback", CommandType.Start),
+        )
+        database.timerDao().insertCommand(pending)
+        val localBefore = requireNotNull(database.timerDao().localState())
+        val roomBefore = requireNotNull(database.timerDao().irohRoom(room.roomId))
+        val operationsBefore = database.timerDao().irohOperations(room.roomId)
+        failProjection = true
+
+        assertThrows(IllegalStateException::class.java) {
+            runBlocking { store.captureLocalOperations() }
+        }
+
+        assertEquals(localBefore, database.timerDao().localState())
+        assertEquals(listOf(pending), database.timerDao().pendingCommands())
+        val roomAfter = requireNotNull(database.timerDao().irohRoom(room.roomId))
+        assertTrue(roomBefore.encryptedRoomSecret.contentEquals(roomAfter.encryptedRoomSecret))
+        assertEquals(
+            roomBefore.copy(encryptedRoomSecret = roomAfter.encryptedRoomSecret),
+            roomAfter,
+        )
+        assertEquals(operationsBefore, database.timerDao().irohOperations(room.roomId))
+    }
+
+    @Test
     fun genesisAttributesLocallyOwnedTimerWithoutPendingStart() = runBlocking {
         val timer = CanonicalTimer(
             id = "timer-owned0001",
@@ -356,7 +574,7 @@ class IrohRoomStoreTest {
         )
         store.prepareJoinedRoom(invite, "endpoint-1")
         val seeded = HistoryItem(
-            id = "timer-seeded01",
+            id = "history-seeded01",
             timerId = "timer-seeded01",
             phase = TimerPhase.Focus,
             status = TimerStatus.Superseded,
@@ -385,7 +603,11 @@ class IrohRoomStoreTest {
     @Test
     fun selectedTaskDeletionEmitsExplicitNullIntoIrohLogAndPreservesHistoryIdentity() = runBlocking {
         val task = requireNotNull(TaskReducer.taskFromTitle("Delete selected Iroh task"))
-        val taskHistory = history("timer-task-history", "2026-01-01T00:01:00Z").copy(taskId = task.id)
+        val taskHistory = history(
+            "history-task01",
+            "timer-task-history",
+            "2026-01-01T00:01:00Z",
+        ).copy(taskId = task.id)
         database.timerDao().insertState(
             state().copy(
                 historyJson = IrohJson.strict.encodeToString(listOf(taskHistory)),
@@ -430,7 +652,35 @@ class IrohRoomStoreTest {
         val projected = requireNotNull(database.timerDao().localState())
         assertEquals(null, projected.selectedTaskId)
         val projectedHistory = IrohJson.strict.decodeFromString<List<HistoryItem>>(projected.historyJson)
+        assertEquals(taskHistory.id, projectedHistory.single().id)
+        assertEquals(taskHistory.timerId, projectedHistory.single().timerId)
         assertEquals(task.id, projectedHistory.single().taskId)
+    }
+
+    @Test
+    fun accountClearScrubsEveryRoomSnapshotWhenIrohIsInactive() = runBlocking {
+        val account = state().copy(
+            userJson = "{\"id\":\"user-1\"}",
+            ownerUserId = "user-1",
+            revision = 8,
+        )
+        database.timerDao().insertState(account)
+        val first = store.createRoom("First").first
+        store.setMode(ReplicationMode.OFFLINE)
+        val second = store.createRoom("Second").first
+        store.setMode(ReplicationMode.CENTRALIZED)
+
+        store.clearAccountData()
+
+        assertEquals(null, database.timerDao().localState()?.ownerUserId)
+        listOf(first.roomId, second.roomId).forEach { roomId ->
+            val room = requireNotNull(database.timerDao().irohRoom(roomId))
+            listOf(room.returnStateJson, room.roomStateJson).forEach { encoded ->
+                val snapshot = WorkspaceCodec.decode(encoded)
+                assertEquals(null, snapshot.local.ownerUserId)
+                assertEquals(null, snapshot.local.userJson)
+            }
+        }
     }
 
     @Test
@@ -440,7 +690,13 @@ class IrohRoomStoreTest {
             ownerUserId = "user-1",
             revision = 8,
             historyJson = IrohJson.strict.encodeToString(
-                listOf(history("account-history", "2026-01-01T00:01:00Z")),
+                listOf(
+                    history(
+                        "history-account01",
+                        "timer-account01",
+                        "2026-01-01T00:01:00Z",
+                    ),
+                ),
             ),
         )
         database.timerDao().insertState(account)
@@ -457,13 +713,40 @@ class IrohRoomStoreTest {
         assertTrue(database.timerDao().irohOperations(room.roomId).isNotEmpty())
     }
 
+    private fun newStore() = IrohRoomStore(
+        database.timerDao(),
+        IrohSecretVault(context),
+        { operation, input ->
+            if (failProjection && operation == "projection.apply.v2") {
+                throw IllegalStateException("projection unavailable")
+            }
+            core.dispatch(operation, input)
+        },
+        currentTimeMillis = { NowMs },
+    )
+
+    private fun usePersistentDatabase(name: String) {
+        database.close()
+        context.deleteDatabase(name)
+        persistentDatabaseName = name
+        database = Room.databaseBuilder(context, PomodoroughDatabase::class.java, name).build()
+        store = newStore()
+    }
+
+    private fun restartPersistentDatabase() {
+        val name = requireNotNull(persistentDatabaseName)
+        database.close()
+        database = Room.databaseBuilder(context, PomodoroughDatabase::class.java, name).build()
+        store = newStore()
+    }
+
     private fun state() = LocalStateEntity(
         deviceId = "device-1",
         settingsJson = IrohJson.strict.encodeToString(TimerSettings()),
     )
 
-    private fun history(timerId: String, endedAt: String) = HistoryItem(
-        id = timerId,
+    private fun history(id: String, timerId: String, endedAt: String) = HistoryItem(
+        id = id,
         timerId = timerId,
         phase = TimerPhase.Focus,
         status = TimerStatus.Completed,
@@ -482,10 +765,11 @@ class IrohRoomStoreTest {
         occurredAt = "2026-01-01T00:01:00Z",
         hlcWallMs = NowMs + sequence,
         hlcCounter = 0,
-        observedElapsedMs = 60_000,
+        observedElapsedMs = if (type == CommandType.Start) 0 else 60_000,
     )
 
     private companion object {
         const val NowMs = 1_767_225_700_000L
+        const val PersistentDatabaseName = "iroh-history-identity-p1-3.db"
     }
 }

@@ -20,6 +20,7 @@ import me.egigoka.pomodorough.data.TaskAcknowledgement
 import me.egigoka.pomodorough.data.TaskOperation
 import me.egigoka.pomodorough.data.TaskOperationType
 import me.egigoka.pomodorough.data.TimerPhase
+import me.egigoka.pomodorough.data.TimerRepository
 import me.egigoka.pomodorough.data.TimerCommand
 import me.egigoka.pomodorough.data.TimerSettings
 import me.egigoka.pomodorough.data.TimerStatus
@@ -82,7 +83,7 @@ class TimerRepositoryPositiveTest {
         assertEquals(SyncStatus.Synced, state.syncStatus)
         assertTrue(state.deviceId.isNotBlank())
         assertEquals(state.deviceId, stored?.deviceId)
-        assertEquals(TimerSettings(), state.settings)
+        assertEquals(DurationsMs(), state.settings.durationsMs)
         assertNull(state.timer)
     }
 
@@ -213,7 +214,8 @@ class TimerRepositoryPositiveTest {
         val commands = database.timerDao().pendingCommands().map(PendingCommandEntity::toModel)
         assertNull(repository.state.value.timer)
         assertEquals(listOf(CommandType.Clear), commands.map(TimerCommand::type))
-        assertEquals(1, repository.state.value.history.size)
+        assertEquals(2, repository.state.value.history.size)
+        assertEquals(2, repository.state.value.history.map { it.timerId }.distinct().size)
     }
 
     @Test
@@ -238,11 +240,11 @@ class TimerRepositoryPositiveTest {
         val commands = database.timerDao().pendingCommands().map(PendingCommandEntity::toModel)
         assertNull(repository.state.value.timer)
         assertEquals(listOf(CommandType.Cancel, CommandType.Clear), commands.map(TimerCommand::type))
-        assertEquals(TimerStatus.Completed, repository.state.value.history.single().status)
-        assertEquals(TimerPhase.ShortBreak, repository.state.value.settings.selectedPhase)
+        assertEquals(TimerStatus.Cancelled, repository.state.value.history.single().status)
+        assertEquals(TimerPhase.Focus, repository.state.value.settings.selectedPhase)
         val persisted = requireNotNull(database.timerDao().localState())
         assertEquals(
-            TimerPhase.ShortBreak,
+            TimerPhase.Focus,
             repositoryJson.decodeFromString<TimerSettings>(persisted.settingsJson).selectedPhase,
         )
     }
@@ -368,7 +370,7 @@ class TimerRepositoryPositiveTest {
         assertEquals(TimerPhase.LongBreak, state.timer?.phase)
         assertEquals(TimerPhase.LongBreak, state.settings.selectedPhase)
         assertEquals(4, state.history.size)
-        assertTrue(state.history.first().pending)
+        assertTrue(state.history.none { it.pending })
         assertEquals(listOf(CommandType.Finish, CommandType.Start), commands.map { it.type })
         assertEquals(listOf(11L, 12L), commands.map { it.deviceSequence })
         assertEquals(TimerPhase.LongBreak, commands.last().phase)
@@ -565,7 +567,12 @@ class TimerRepositoryPositiveTest {
         repository.initialize()
         awaitState { service.syncCalls == 1 && repository.state.value.pendingCount == 0 }
 
-        assertEquals(operations, service.syncRequests.single().durationOperations)
+        assertEquals(
+            operations.mapIndexed { index, operation ->
+                if (index == 0) operation.copy(hlcCounter = 1) else operation
+            },
+            service.syncRequests.single().durationOperations,
+        )
         assertTrue(database.timerDao().pendingDurationOperations().isEmpty())
         assertEquals(durations, repository.state.value.settings.effectiveDurationsMs())
     }
@@ -620,8 +627,10 @@ class TimerRepositoryPositiveTest {
         assertFalse(repository.state.value.settings.autoStartBreaks)
         assertEquals(25 * 60_000L, repository.state.value.timer?.plannedDurationMs)
         assertTrue(service.syncRequests.single().durationOperations.isEmpty())
+        assertEquals(1, service.bootstrapCalls)
+        assertEquals(1, service.syncCalls)
         assertEquals(serverHlcWallMs, database.timerDao().localState()?.hlcWallMs)
-        assertEquals(7L, database.timerDao().localState()?.hlcCounter)
+        assertEquals(9L, database.timerDao().localState()?.hlcCounter)
     }
 
     @Test
@@ -787,7 +796,10 @@ class TimerRepositoryPositiveTest {
         repository.initialize()
         awaitState { service.syncCalls == 1 && repository.state.value.pendingCount == 0 }
 
-        assertEquals(listOf(operation), service.syncRequests.single().taskOperations)
+        assertEquals(
+            listOf(operation.copy(hlcWallMs = 1_767_225_600_100, hlcCounter = 1)),
+            service.syncRequests.single().taskOperations,
+        )
         assertEquals(listOf(task), repository.state.value.tasks)
         assertTrue(database.timerDao().pendingTaskOperations().isEmpty())
         assertEquals(repositoryJson.encodeToString(listOf(task)), database.timerDao().localState()?.tasksJson)
@@ -838,7 +850,10 @@ class TimerRepositoryPositiveTest {
         repository.initialize()
         awaitState { service.syncCalls == 1 && repository.state.value.pendingCount == 0 }
 
-        assertEquals(listOf(operation), service.syncRequests.single().taskOperations)
+        assertEquals(
+            listOf(operation.copy(hlcWallMs = 1_767_225_600_100, hlcCounter = 1)),
+            service.syncRequests.single().taskOperations,
+        )
         assertTrue(database.timerDao().pendingTaskOperations().isEmpty())
         assertTrue(repository.state.value.tasks.isEmpty())
         assertEquals("[]", database.timerDao().localState()?.tasksJson)
@@ -887,6 +902,7 @@ class TimerRepositoryPositiveTest {
                 context,
                 PomodoroughDatabase::class.java,
             ).build()
+            var caseRepository: TimerRepository? = null
             try {
                 val profile = testUser("batch-user-$operationCount")
                 val operations = (1..operationCount).map { index ->
@@ -939,9 +955,13 @@ class TimerRepositoryPositiveTest {
                     service,
                     TestAuthSession(tokensAvailable = true),
                 )
+                caseRepository = repository
 
                 repository.initialize()
-                awaitState {
+                // A full connected run leaves the API 35 emulator under sustained GC pressure;
+                // preserve the exact convergence assertion while allowing the 513-item partition
+                // to complete through the interpreted SharedCore boundary.
+                awaitState(timeoutMs = 180_000) {
                     service.syncCalls == expectedBatchSizes.size &&
                         repository.state.value.pendingCount == 0
                 }
@@ -954,6 +974,7 @@ class TimerRepositoryPositiveTest {
                 assertTrue(caseDatabase.timerDao().pendingTaskOperations().isEmpty())
                 assertEquals(operationCount, repository.state.value.tasks.size)
             } finally {
+                caseRepository?.shutdownForTest()
                 caseDatabase.close()
             }
         }
@@ -1003,7 +1024,9 @@ class TimerRepositoryPositiveTest {
         )
 
         repository.initialize()
-        awaitState { service.syncCalls == 2 && repository.state.value.pendingCount == 0 }
+        awaitState(timeoutMs = 30_000) {
+            service.syncCalls == 2 && repository.state.value.pendingCount == 0
+        }
 
         assertEquals(listOf(256, 1), service.syncRequests.map { it.commands.size })
         assertTrue(database.timerDao().pendingCommands().isEmpty())

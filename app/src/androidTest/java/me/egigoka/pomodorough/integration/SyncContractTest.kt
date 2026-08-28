@@ -168,7 +168,9 @@ class SyncContractTest {
         awaitState { repository.state.value.syncStatus == SyncStatus.Conflict }
 
         assertEquals("Sync returned an invalid duration acknowledgement", repository.state.value.conflict)
-        assertEquals(fixture.localTimer, repository.state.value.timer)
+        assertEquals(fixture.localTimer.id, repository.state.value.timer?.id)
+        assertEquals(TimerStatus.Paused, repository.state.value.timer?.status)
+        assertEquals("command-1", repository.state.value.timer?.lastIntent?.commandId)
         assertEquals(4, repository.state.value.pendingCount)
         assertEquals(0L, database.timerDao().localState()?.revision)
         assertEquals(1, database.timerDao().pendingCommands().size)
@@ -271,8 +273,13 @@ class SyncContractTest {
             val repository = signedInRepository(service)
 
             repository.initialize()
-            awaitState { repository.state.value.syncStatus == SyncStatus.Conflict }
 
+            assertEquals(
+                "kind=$kind conflict=${repository.state.value.conflict} " +
+                    "durations=${database.timerDao().pendingDurationOperations()}",
+                SyncStatus.Conflict,
+                repository.state.value.syncStatus,
+            )
             assertEquals("kind=$kind", 0, service.syncCalls)
             assertEquals("kind=$kind", 1, repository.state.value.pendingCount)
         }

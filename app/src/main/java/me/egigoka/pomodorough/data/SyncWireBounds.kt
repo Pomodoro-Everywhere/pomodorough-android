@@ -67,50 +67,34 @@ internal object SyncWireBounds {
         return leftBytes.size.compareTo(rightBytes.size)
     }
 
-    fun reserve(
+    fun mutationStamps(
         nowMs: Long,
-        retainedWallMs: Long,
-        retainedCounter: Long,
+        clocks: List<CoreHlc>,
         retainedDeviceSequence: Long,
-        count: Int,
         withDeviceSequences: Boolean,
     ): List<MutationStamp> {
-        require(count > 0) { "Mutation reservation must be positive" }
+        require(clocks.isNotEmpty()) { "Mutation reservation must be positive" }
         require(nowMs in 1..MaxSafeInteger) { "Physical occurrence time is invalid" }
-        requirePersistedState(retainedDeviceSequence, retainedWallMs, retainedCounter)
-
-        val wallMs = maxOf(nowMs, retainedWallMs)
-        require(wallMs - nowMs <= MaxClockSkewMs) {
-            "Retained hybrid clock is too far from physical occurrence time"
+        require(retainedDeviceSequence in 0..MaxSafeInteger) {
+            "Persisted device sequence is invalid"
         }
-        val firstCounter = if (wallMs == retainedWallMs) {
-            checkedAdd(retainedCounter, 1L, "Hybrid clock counter overflow")
-        } else {
-            0L
-        }
-        val finalCounter = checkedAdd(
-            firstCounter,
-            count.toLong() - 1L,
-            "Hybrid clock counter overflow",
-        )
         val firstSequence = if (withDeviceSequences) {
             checkedAdd(retainedDeviceSequence, 1L, "Device sequence overflow")
         } else {
             null
         }
         if (firstSequence != null) {
-            checkedAdd(firstSequence, count.toLong() - 1L, "Device sequence overflow")
+            checkedAdd(firstSequence, clocks.size.toLong() - 1L, "Device sequence overflow")
         }
         val occurredAt = Instant.ofEpochMilli(nowMs).toString()
-        return List(count) { index ->
+        return clocks.mapIndexed { index, clock ->
+            requirePhysicalSkew(nowMs, clock.wallMs)
             MutationStamp(
                 deviceSequence = firstSequence?.plus(index.toLong()),
-                wallMs = wallMs,
-                counter = firstCounter + index,
+                wallMs = clock.wallMs,
+                counter = clock.counter,
                 occurredAt = occurredAt,
             )
-        }.also {
-            check(it.last().counter == finalCounter)
         }
     }
 
@@ -123,34 +107,6 @@ internal object SyncWireBounds {
         }
     }
 
-    fun merge(
-        nowMs: Long,
-        localWallMs: Long,
-        localCounter: Long,
-        serverWallMs: Long,
-        serverCounter: Long,
-    ): Pair<Long, Long> {
-        require(nowMs in 1..MaxSafeInteger) { "Physical occurrence time is invalid" }
-        require(isClockTuple(localWallMs, localCounter, allowLegacySentinel = true)) {
-            "Persisted hybrid clock is invalid"
-        }
-        require(isClockTuple(serverWallMs, serverCounter, allowLegacySentinel = false)) {
-            "Server hybrid clock is invalid"
-        }
-        val boundedLocalWallMs = localWallMs.takeIf {
-            it <= nowMs + MaxClockSkewMs
-        } ?: 0L
-        val wallMs = maxOf(nowMs, boundedLocalWallMs, serverWallMs)
-        requirePhysicalSkew(nowMs, wallMs)
-        val counter = when {
-            wallMs == boundedLocalWallMs && wallMs == serverWallMs ->
-                maxOf(localCounter, serverCounter)
-            wallMs == boundedLocalWallMs -> localCounter
-            wallMs == serverWallMs -> serverCounter
-            else -> 0L
-        }
-        return wallMs to counter
-    }
 
     fun isClockTuple(wallMs: Long, counter: Long, allowLegacySentinel: Boolean): Boolean =
         counter in 0..MaxSafeInteger && (

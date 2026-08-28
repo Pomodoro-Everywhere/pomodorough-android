@@ -13,6 +13,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.encodeToString
+import me.egigoka.pomodorough.core.SharedCore
 import me.egigoka.pomodorough.data.TimerSettings
 import me.egigoka.pomodorough.data.local.LocalStateEntity
 import me.egigoka.pomodorough.data.local.PomodoroughDatabase
@@ -26,14 +27,20 @@ import org.junit.runner.RunWith
 class IrohReplicationServiceTest {
     private lateinit var database: PomodoroughDatabase
     private lateinit var service: IrohReplicationService
+    private lateinit var core: SharedCore
 
     @Before
     fun setUp() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         database = Room.inMemoryDatabaseBuilder(context, PomodoroughDatabase::class.java).build()
+        core = SharedCore.fromAssets(context.assets)
         val vault = IrohSecretVault(context)
         service = IrohReplicationService(
-            store = IrohRoomStore(database.timerDao(), vault),
+            store = IrohRoomStore(
+                database.timerDao(),
+                vault,
+                { operation, input -> core.dispatch(operation, input) },
+            ),
             vault = vault,
             onProjection = {},
         )
@@ -55,6 +62,7 @@ class IrohReplicationServiceTest {
         val store = IrohRoomStore(
             dao,
             IrohSecretVault(ApplicationProvider.getApplicationContext()),
+            { operation, input -> core.dispatch(operation, input) },
         )
         val room = store.createRoom(null).first
         val secret = requireNotNull(store.activeRoomSecret())

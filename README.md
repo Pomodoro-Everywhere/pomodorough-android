@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="https://pomodorough.egigoka.me">Web app</a> |
-  <a href="https://github.com/egigoka/pomodorough-server">Server</a> |
+  <a href="https://github.com/Pomodoro-Everywhere/pomodorough-server">Server</a> |
   <a href="https://pomodorough.egigoka.me/openapi.yaml">API specification</a>
 </p>
 
@@ -31,7 +31,7 @@ Pomodorough client family.
 
 ## Requirements
 
-- Android Studio with JDK 17 or newer
+- Android Studio with JDK 21
 - Android SDK Platform 36
 - Android SDK Build Tools 36.0.0
 - Android 8.0 (API 26) or newer on the target device

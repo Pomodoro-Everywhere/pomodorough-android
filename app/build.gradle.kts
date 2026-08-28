@@ -34,15 +34,19 @@ android {
     namespace = "me.egigoka.pomodorough"
     compileSdk = 36
     buildToolsVersion = "36.0.0"
+    testBuildType = providers.gradleProperty("pomodorough.testBuildType").orElse("debug").get()
+    val requestedTestBuildType = testBuildType
 
     defaultConfig {
         applicationId = "me.egigoka.pomodorough"
         minSdk = 26
         targetSdk = 36
-        versionCode = 20
-        versionName = "0.4.5"
+        versionCode = 21
+        versionName = "0.4.6"
 
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunner = if (requestedTestBuildType == "release") {
+            "me.egigoka.pomodorough.releaseiroh.ReleaseIrohSmokeInstrumentation"
+        } else "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "API_BASE_URL", "\"${apiBaseUrl.get().trimEnd('/')}\"")
         buildConfigField("String", "GOOGLE_SERVER_CLIENT_ID", "\"${googleServerClientId.get()}\"")
     }
@@ -72,16 +76,17 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+            testProguardFiles("android-test-proguard-rules.pro")
         }
     }
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
     }
 
     kotlinOptions {
-        jvmTarget = "17"
+        jvmTarget = "21"
     }
 
     buildFeatures {
@@ -94,6 +99,9 @@ android {
     }
 
     sourceSets {
+        val sharedTestSources = "src/sharedTest/java"
+        getByName("test").java.srcDir(sharedTestSources)
+        getByName("androidTest").java.srcDir(sharedTestSources)
         getByName("androidTest").assets.srcDir("$projectDir/schemas")
         getByName("test").resources.srcDir("src/main/assets")
     }

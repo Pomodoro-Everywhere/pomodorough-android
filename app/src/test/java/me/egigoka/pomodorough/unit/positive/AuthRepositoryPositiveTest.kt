@@ -36,16 +36,17 @@ class AuthRepositoryPositiveTest {
     }
 
     @Test
-    fun expiredAccessTokenIsRefreshedBeforeLogout() = runTest {
+    fun expiredAccessTokenIsRevokedWithoutRefreshingOrRetainingTokens() = runTest {
         val service = TestAuthService().apply {
             refreshResult = freshTokens("replacement-access")
         }
-        val store = TestTokenStore(expiredTokens())
+        val tokens = expiredTokens()
+        val store = TestTokenStore(tokens)
 
         repository(service, store).logout()
 
-        assertEquals(1, service.refreshCalls)
-        assertEquals(listOf("replacement-access"), service.logoutTokens)
+        assertEquals(0, service.refreshCalls)
+        assertEquals(listOf(tokens.accessToken), service.logoutTokens)
         assertNull(store.tokens)
     }
 

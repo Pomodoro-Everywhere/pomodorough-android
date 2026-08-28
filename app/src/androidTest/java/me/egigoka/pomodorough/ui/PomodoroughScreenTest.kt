@@ -129,6 +129,42 @@ class PomodoroughScreenTest {
     }
 
     @Test
+    fun corruptLocalAccountOffersOnlyConfirmedResetAction() {
+        var resetCalls = 0
+        setScreen(
+            AppState(
+                ready = true,
+                authStatus = AuthStatus.SignedOut,
+                localAccountResetRequired = true,
+                syncStatus = SyncStatus.Conflict,
+                historyResolution = HistoryResolutionState(
+                    localHistoryCount = 0,
+                    remoteHistoryCount = 0,
+                    corrupted = true,
+                ),
+                conflict = "Persisted timer state is corrupted.",
+            ),
+            onResetLocalAccount = { resetCalls += 1 },
+        )
+
+        composeRule.onNodeWithText("Sign in").assertDoesNotExist()
+        composeRule.onNodeWithText("Start focus").assertIsNotEnabled()
+        composeRule.onNodeWithText("Reset local account").performClick()
+        composeRule.onNodeWithText("Reset local account data?").assertExists()
+        composeRule.onNodeWithText(
+            "Local credentials and this device’s corrupt synchronized timer data, history, tasks, settings, and queued changes will be permanently removed. Remote account data stays unchanged.",
+        ).assertExists()
+        assertEquals(0, resetCalls)
+
+        composeRule.onNodeWithText("Cancel").performClick()
+        assertEquals(0, resetCalls)
+        composeRule.onNodeWithText("Reset local account").performClick()
+        composeRule.onNodeWithText("Reset and sign out").performClick()
+
+        assertEquals(1, resetCalls)
+    }
+
+    @Test
     fun pullToRefreshIsUnavailableWhileSignedOut() {
         var refreshCalls = 0
         setScreen(
@@ -162,7 +198,7 @@ class PomodoroughScreenTest {
     }
 
     @Test
-    fun completedTimerUsesStopSoundLabelAndClearAction() {
+    fun completedTimerWithoutActiveAlertUsesDismissAndClearAction() {
         var clearCalls = 0
         setScreen(
             AppState(
@@ -180,10 +216,40 @@ class PomodoroughScreenTest {
             onClearTimer = { clearCalls += 1 },
         )
 
-        composeRule.onNodeWithText("Stop sound").performClick()
+        composeRule.onNodeWithText("Dismiss").performClick()
 
         assertEquals(1, clearCalls)
+        composeRule.onNodeWithText("Stop sound").assertDoesNotExist()
         composeRule.onNodeWithText("Cancel").assertDoesNotExist()
+    }
+
+    @Test
+    fun completedTimerWithActiveAlertStopsSoundWithoutClearing() {
+        var clearCalls = 0
+        var stopSoundCalls = 0
+        setScreen(
+            AppState(
+                ready = true,
+                authStatus = AuthStatus.SignedIn,
+                timer = CanonicalTimer(
+                    id = "timer-alert",
+                    phase = TimerPhase.Focus,
+                    status = TimerStatus.Completed,
+                    plannedDurationMs = 25 * 60_000L,
+                    elapsedAtAnchorMs = 25 * 60_000L,
+                    anchorAt = "2026-08-04T09:00:00Z",
+                ),
+                completionAlertTimerId = "timer-alert",
+            ),
+            onClearTimer = { clearCalls += 1 },
+            onStopSound = { stopSoundCalls += 1 },
+        )
+
+        composeRule.onNodeWithText("Stop sound").performClick()
+
+        assertEquals(1, stopSoundCalls)
+        assertEquals(0, clearCalls)
+        composeRule.onNodeWithText("Dismiss").assertDoesNotExist()
     }
 
     @Test
@@ -230,7 +296,6 @@ class PomodoroughScreenTest {
 
         assertEquals(1, dismissCalls)
         composeRule.onNodeWithText("Heads up").assertDoesNotExist()
-        composeRule.onNodeWithText("Dismiss").assertDoesNotExist()
     }
 
     @Test
@@ -319,6 +384,7 @@ class PomodoroughScreenTest {
                     ),
                     onSignIn = {},
                     onLogout = {},
+                    onResetLocalAccount = {},
                     onRefresh = {},
                     onToggleTimer = {},
                     onFinishTimer = {},
@@ -484,8 +550,10 @@ class PomodoroughScreenTest {
         onSignIn: () -> Unit = {},
         onRefresh: () -> Unit = {},
         onClearTimer: () -> Unit = {},
+        onStopSound: () -> Unit = {},
         onResolve: (BootstrapStrategy) -> Unit = {},
         onRecover: () -> Unit = {},
+        onResetLocalAccount: () -> Unit = {},
         onConfirmAccountSwitch: () -> Unit = {},
         onCancelAccountSwitch: () -> Unit = {},
         onDismissNotice: () -> Unit = {},
@@ -496,11 +564,13 @@ class PomodoroughScreenTest {
                     state = state,
                     onSignIn = onSignIn,
                     onLogout = {},
+                    onResetLocalAccount = onResetLocalAccount,
                     onRefresh = onRefresh,
                     onToggleTimer = {},
                     onFinishTimer = {},
                     onCancelTimer = {},
                     onClearTimer = onClearTimer,
+                    onStopSound = onStopSound,
                     onSelectPhase = {},
                     onChangeDuration = { _, _ -> },
                     onSetAutoStart = {},

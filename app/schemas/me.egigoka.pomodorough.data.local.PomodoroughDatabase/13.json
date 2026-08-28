@@ -1,0 +1,847 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 13,
+    "identityHash": "75f65cae188fd17542c429806a000b5e",
+    "entities": [
+      {
+        "tableName": "local_state",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `deviceId` TEXT NOT NULL, `deviceSequence` INTEGER NOT NULL, `hlcWallMs` INTEGER NOT NULL, `hlcCounter` INTEGER NOT NULL, `revision` INTEGER NOT NULL, `canonicalTimerJson` TEXT, `historyJson` TEXT NOT NULL, `settingsJson` TEXT NOT NULL, `userJson` TEXT, `ownerUserId` TEXT, `tasksJson` TEXT NOT NULL, `knownTasksJson` TEXT NOT NULL, `selectedTaskId` TEXT, `canonicalAutoStartBreaks` INTEGER NOT NULL, `ownedTimerId` TEXT, `serverClockOffsetMs` INTEGER, `serverClockUncertaintyMs` INTEGER, `serverClockSamplePhysicalMs` INTEGER, `serverClockSampleElapsedRealtimeMs` INTEGER, `serverClockBootId` TEXT, `lastUuidV7` TEXT, `accountDeletionState` TEXT, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "deviceId",
+            "columnName": "deviceId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "deviceSequence",
+            "columnName": "deviceSequence",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hlcWallMs",
+            "columnName": "hlcWallMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hlcCounter",
+            "columnName": "hlcCounter",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "revision",
+            "columnName": "revision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "canonicalTimerJson",
+            "columnName": "canonicalTimerJson",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "historyJson",
+            "columnName": "historyJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "settingsJson",
+            "columnName": "settingsJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "userJson",
+            "columnName": "userJson",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "ownerUserId",
+            "columnName": "ownerUserId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "tasksJson",
+            "columnName": "tasksJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "knownTasksJson",
+            "columnName": "knownTasksJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "selectedTaskId",
+            "columnName": "selectedTaskId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "canonicalAutoStartBreaks",
+            "columnName": "canonicalAutoStartBreaks",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ownedTimerId",
+            "columnName": "ownedTimerId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "serverClockOffsetMs",
+            "columnName": "serverClockOffsetMs",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "serverClockUncertaintyMs",
+            "columnName": "serverClockUncertaintyMs",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "serverClockSamplePhysicalMs",
+            "columnName": "serverClockSamplePhysicalMs",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "serverClockSampleElapsedRealtimeMs",
+            "columnName": "serverClockSampleElapsedRealtimeMs",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "serverClockBootId",
+            "columnName": "serverClockBootId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastUuidV7",
+            "columnName": "lastUuidV7",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "accountDeletionState",
+            "columnName": "accountDeletionState",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "pending_commands",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `deviceSequence` INTEGER NOT NULL, `timerId` TEXT NOT NULL, `type` TEXT NOT NULL, `phase` TEXT NOT NULL, `plannedDurationMs` INTEGER NOT NULL, `occurredAt` TEXT NOT NULL, `hlcWallMs` INTEGER NOT NULL, `hlcCounter` INTEGER NOT NULL, `observedElapsedMs` INTEGER NOT NULL, `taskId` TEXT, `generatedByFinishCommandId` TEXT, `physicalOccurredAt` TEXT, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "deviceSequence",
+            "columnName": "deviceSequence",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timerId",
+            "columnName": "timerId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "type",
+            "columnName": "type",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "phase",
+            "columnName": "phase",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "plannedDurationMs",
+            "columnName": "plannedDurationMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "occurredAt",
+            "columnName": "occurredAt",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hlcWallMs",
+            "columnName": "hlcWallMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hlcCounter",
+            "columnName": "hlcCounter",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "observedElapsedMs",
+            "columnName": "observedElapsedMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "taskId",
+            "columnName": "taskId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "generatedByFinishCommandId",
+            "columnName": "generatedByFinishCommandId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "physicalOccurredAt",
+            "columnName": "physicalOccurredAt",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_pending_commands_deviceSequence",
+            "unique": true,
+            "columnNames": [
+              "deviceSequence"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_pending_commands_deviceSequence` ON `${TABLE_NAME}` (`deviceSequence`)"
+          }
+        ]
+      },
+      {
+        "tableName": "pending_task_operations",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `taskId` TEXT NOT NULL, `type` TEXT NOT NULL, `title` TEXT, `occurredAt` TEXT NOT NULL, `hlcWallMs` INTEGER NOT NULL, `hlcCounter` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "taskId",
+            "columnName": "taskId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "type",
+            "columnName": "type",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "occurredAt",
+            "columnName": "occurredAt",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hlcWallMs",
+            "columnName": "hlcWallMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hlcCounter",
+            "columnName": "hlcCounter",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "pending_duration_operations",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`phase` TEXT NOT NULL, `id` TEXT NOT NULL, `durationMs` INTEGER NOT NULL, `occurredAt` TEXT NOT NULL, `hlcWallMs` INTEGER NOT NULL, `hlcCounter` INTEGER NOT NULL, PRIMARY KEY(`phase`))",
+        "fields": [
+          {
+            "fieldPath": "phase",
+            "columnName": "phase",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "durationMs",
+            "columnName": "durationMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "occurredAt",
+            "columnName": "occurredAt",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hlcWallMs",
+            "columnName": "hlcWallMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hlcCounter",
+            "columnName": "hlcCounter",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "phase"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_pending_duration_operations_id",
+            "unique": true,
+            "columnNames": [
+              "id"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_pending_duration_operations_id` ON `${TABLE_NAME}` (`id`)"
+          }
+        ]
+      },
+      {
+        "tableName": "pending_bootstrap_resolution",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `requestId` TEXT NOT NULL, `deviceId` TEXT NOT NULL, `expectedRevision` INTEGER NOT NULL, `strategy` TEXT NOT NULL, `commandsJson` TEXT NOT NULL, `taskOperationsJson` TEXT NOT NULL, `durationOperationsJson` TEXT NOT NULL, `ownerUserId` TEXT NOT NULL, `userJson` TEXT NOT NULL, `autoStartOperationsJson` TEXT, `selectedTaskOperationsJson` TEXT, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "requestId",
+            "columnName": "requestId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "deviceId",
+            "columnName": "deviceId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "expectedRevision",
+            "columnName": "expectedRevision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "strategy",
+            "columnName": "strategy",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "commandsJson",
+            "columnName": "commandsJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "taskOperationsJson",
+            "columnName": "taskOperationsJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "durationOperationsJson",
+            "columnName": "durationOperationsJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ownerUserId",
+            "columnName": "ownerUserId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "userJson",
+            "columnName": "userJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "autoStartOperationsJson",
+            "columnName": "autoStartOperationsJson",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "selectedTaskOperationsJson",
+            "columnName": "selectedTaskOperationsJson",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "pending_auto_start_operations",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `deviceId` TEXT NOT NULL, `enabled` INTEGER NOT NULL, `occurredAt` TEXT NOT NULL, `hlcWallMs` INTEGER NOT NULL, `hlcCounter` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "deviceId",
+            "columnName": "deviceId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "enabled",
+            "columnName": "enabled",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "occurredAt",
+            "columnName": "occurredAt",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hlcWallMs",
+            "columnName": "hlcWallMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hlcCounter",
+            "columnName": "hlcCounter",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "pending_selected_task_operations",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `taskId` TEXT, `occurredAt` TEXT NOT NULL, `hlcWallMs` INTEGER NOT NULL, `hlcCounter` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "taskId",
+            "columnName": "taskId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "occurredAt",
+            "columnName": "occurredAt",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hlcWallMs",
+            "columnName": "hlcWallMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hlcCounter",
+            "columnName": "hlcCounter",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "replication_settings",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `mode` TEXT NOT NULL, `activeRoomId` TEXT, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mode",
+            "columnName": "mode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "activeRoomId",
+            "columnName": "activeRoomId",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "iroh_rooms",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`roomId` TEXT NOT NULL, `roomName` TEXT, `encryptedRoomSecret` BLOB NOT NULL, `returnStateJson` TEXT NOT NULL, `roomStateJson` TEXT NOT NULL, `createdAtMs` INTEGER NOT NULL, `activated` INTEGER NOT NULL, PRIMARY KEY(`roomId`))",
+        "fields": [
+          {
+            "fieldPath": "roomId",
+            "columnName": "roomId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "roomName",
+            "columnName": "roomName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "encryptedRoomSecret",
+            "columnName": "encryptedRoomSecret",
+            "affinity": "BLOB",
+            "notNull": true
+          },
+          {
+            "fieldPath": "returnStateJson",
+            "columnName": "returnStateJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "roomStateJson",
+            "columnName": "roomStateJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAtMs",
+            "columnName": "createdAtMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "activated",
+            "columnName": "activated",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "roomId"
+          ]
+        }
+      },
+      {
+        "tableName": "iroh_peers",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`roomId` TEXT NOT NULL, `endpointId` TEXT NOT NULL, `endpointTicket` TEXT NOT NULL, `deviceId` TEXT, `displayName` TEXT, `lastSeenAtMs` INTEGER, PRIMARY KEY(`roomId`, `endpointId`), FOREIGN KEY(`roomId`) REFERENCES `iroh_rooms`(`roomId`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "roomId",
+            "columnName": "roomId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "endpointId",
+            "columnName": "endpointId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "endpointTicket",
+            "columnName": "endpointTicket",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "deviceId",
+            "columnName": "deviceId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "displayName",
+            "columnName": "displayName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastSeenAtMs",
+            "columnName": "lastSeenAtMs",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "roomId",
+            "endpointId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_iroh_peers_roomId",
+            "unique": false,
+            "columnNames": [
+              "roomId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_iroh_peers_roomId` ON `${TABLE_NAME}` (`roomId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "iroh_rooms",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "roomId"
+            ],
+            "referencedColumns": [
+              "roomId"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "iroh_operations",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`roomId` TEXT NOT NULL, `domain` TEXT NOT NULL, `operationId` TEXT NOT NULL, `originDeviceId` TEXT NOT NULL, `operationJson` TEXT NOT NULL, `digest` TEXT NOT NULL, `hlcWallMs` INTEGER NOT NULL, `hlcCounter` INTEGER NOT NULL, `deviceSequence` INTEGER, PRIMARY KEY(`roomId`, `domain`, `operationId`), FOREIGN KEY(`roomId`) REFERENCES `iroh_rooms`(`roomId`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "roomId",
+            "columnName": "roomId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "domain",
+            "columnName": "domain",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "operationId",
+            "columnName": "operationId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "originDeviceId",
+            "columnName": "originDeviceId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "operationJson",
+            "columnName": "operationJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "digest",
+            "columnName": "digest",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hlcWallMs",
+            "columnName": "hlcWallMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hlcCounter",
+            "columnName": "hlcCounter",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "deviceSequence",
+            "columnName": "deviceSequence",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "roomId",
+            "domain",
+            "operationId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_iroh_operations_roomId",
+            "unique": false,
+            "columnNames": [
+              "roomId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_iroh_operations_roomId` ON `${TABLE_NAME}` (`roomId`)"
+          },
+          {
+            "name": "index_iroh_operations_roomId_originDeviceId_deviceSequence",
+            "unique": true,
+            "columnNames": [
+              "roomId",
+              "originDeviceId",
+              "deviceSequence"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_iroh_operations_roomId_originDeviceId_deviceSequence` ON `${TABLE_NAME}` (`roomId`, `originDeviceId`, `deviceSequence`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "iroh_rooms",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "roomId"
+            ],
+            "referencedColumns": [
+              "roomId"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "iroh_conflicts",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`roomId` TEXT NOT NULL, `domain` TEXT NOT NULL, `operationId` TEXT NOT NULL, `localDigest` TEXT NOT NULL, `receivedDigest` TEXT NOT NULL, `detectedAtMs` INTEGER NOT NULL, PRIMARY KEY(`roomId`), FOREIGN KEY(`roomId`) REFERENCES `iroh_rooms`(`roomId`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "roomId",
+            "columnName": "roomId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "domain",
+            "columnName": "domain",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "operationId",
+            "columnName": "operationId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "localDigest",
+            "columnName": "localDigest",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "receivedDigest",
+            "columnName": "receivedDigest",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "detectedAtMs",
+            "columnName": "detectedAtMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "roomId"
+          ]
+        },
+        "foreignKeys": [
+          {
+            "table": "iroh_rooms",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "roomId"
+            ],
+            "referencedColumns": [
+              "roomId"
+            ]
+          }
+        ]
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '75f65cae188fd17542c429806a000b5e')"
+    ]
+  }
+}

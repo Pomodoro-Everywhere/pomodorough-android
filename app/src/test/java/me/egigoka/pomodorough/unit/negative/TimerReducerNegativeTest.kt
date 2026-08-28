@@ -5,7 +5,8 @@ import me.egigoka.pomodorough.data.CommandType
 import me.egigoka.pomodorough.data.TimerCommand
 import me.egigoka.pomodorough.data.TimerPhase
 import me.egigoka.pomodorough.data.TimerStatus
-import me.egigoka.pomodorough.domain.TimerReducer
+import me.egigoka.pomodorough.domain.LegacyTimerReducer
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -23,7 +24,7 @@ class TimerReducerNegativeTest {
         )
 
         commandTypes.forEachIndexed { index, type ->
-            val projection = TimerReducer.replay(
+            val projection = LegacyTimerReducer.replay(
                 canonicalTimer = null,
                 canonicalHistory = emptyList(),
                 commands = listOf(command(index.toLong(), type)),
@@ -35,18 +36,23 @@ class TimerReducerNegativeTest {
     }
 
     @Test
-    fun terminalTimerRejectsActiveOnlyCommandsWithoutCreatingHistory() {
+    fun terminalTimerAcceptsLatestAction() {
         val terminal = timer(TimerStatus.Superseded)
+        val expectations = listOf(
+            CommandType.Pause to TimerStatus.Paused,
+            CommandType.Finish to TimerStatus.Completed,
+            CommandType.Cancel to TimerStatus.Cancelled,
+        )
 
-        listOf(CommandType.Pause, CommandType.Finish, CommandType.Cancel).forEachIndexed { index, type ->
-            val projection = TimerReducer.replay(
+        expectations.forEachIndexed { index, (type, expectedStatus) ->
+            val projection = LegacyTimerReducer.replay(
                 canonicalTimer = terminal,
                 canonicalHistory = emptyList(),
                 commands = listOf(command(index.toLong(), type)),
             )
 
-            assertSame("$type must preserve terminal timer", terminal, projection.timer)
-            assertTrue("$type must not create history", projection.history.isEmpty())
+            assertEquals("$type must be latest", expectedStatus, projection.timer?.status)
+            assertEquals("$type must record intent", "command-$index", projection.timer?.lastIntent?.commandId)
         }
     }
 
@@ -55,7 +61,7 @@ class TimerReducerNegativeTest {
         val terminal = timer(TimerStatus.Completed)
         val clear = command(sequence = 1, type = CommandType.Clear, timerId = "other-timer")
 
-        val projection = TimerReducer.replay(terminal, emptyList(), listOf(clear))
+        val projection = LegacyTimerReducer.replay(terminal, emptyList(), listOf(clear))
 
         assertSame(terminal, projection.timer)
     }

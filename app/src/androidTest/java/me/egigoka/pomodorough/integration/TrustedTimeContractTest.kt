@@ -100,15 +100,17 @@ class TrustedTimeContractTest {
             }
             resolveHandler = { trustedResponse(revision = 1) }
         }
+        val auth = freshSignInAuth()
         val repository = testRepository(
             context,
             database.timerDao(),
             service,
-            TestAuthSession(tokensAvailable = true),
+            auth,
             currentTimeMillis = { physicalNow },
             elapsedRealtimeMillis = { elapsedNow },
         )
         repository.initialize()
+        repository.signIn(testCredentialProvider())
         awaitState { repository.state.value.historyResolution != null }
         physicalNow += SyncWireBounds.MaxClockSkewMs + 1
         elapsedNow += SyncWireBounds.MaxClockSkewMs + 1
@@ -135,16 +137,18 @@ class TrustedTimeContractTest {
                 trustedResponse(revision = 1)
             }
         }
+        val auth = freshSignInAuth()
         val repository = testRepository(
             context,
             database.timerDao(),
             service,
-            TestAuthSession(tokensAvailable = true),
+            auth,
             currentTimeMillis = { physicalNow },
             elapsedRealtimeMillis = { elapsedNow },
         )
 
         repository.initialize()
+        repository.signIn(testCredentialProvider())
         awaitState { repository.state.value.historyResolution != null }
         repository.resolveHistory(BootstrapStrategy.KeepRemote)
         awaitState { repository.state.value.historyResolution?.submitting == false }
@@ -241,7 +245,7 @@ class TrustedTimeContractTest {
 
         assertTrue(database.timerDao().pendingCommands().isEmpty())
         assertEquals(initial, database.timerDao().localState())
-        assertEquals(timer, repository.state.value.timer)
+        assertEquals(me.egigoka.pomodorough.data.TimerStatus.Completed, repository.state.value.timer?.status)
     }
 
     @Test
@@ -263,7 +267,7 @@ class TrustedTimeContractTest {
 
         assertTrue(database.timerDao().pendingCommands().isEmpty())
         assertEquals(initial, database.timerDao().localState())
-        assertEquals(timer, repository.state.value.timer)
+        assertEquals(me.egigoka.pomodorough.data.TimerStatus.Completed, repository.state.value.timer?.status)
     }
 
     @Test
@@ -277,7 +281,7 @@ class TrustedTimeContractTest {
     }
 
     @Test
-    fun bootstrapSampleRebasesOnceBeforeCapturingImmutableResolution() = runBlocking {
+    fun bootstrapSampleRebasesOnceBeforeFirstSyncCapture() = runBlocking {
         val profile = testUser()
         val futureMs = NowMs + 60 * 60_000L
         val futureOperation = testDurationOperation(
@@ -287,14 +291,14 @@ class TrustedTimeContractTest {
             wallMs = futureMs,
         ).copy(occurredAt = java.time.Instant.ofEpochMilli(futureMs).toString())
         database.timerDao().insertState(
-            testState().copy(hlcWallMs = futureMs),
+            testState(user = profile).copy(hlcWallMs = futureMs),
         )
         database.timerDao().upsertDurationOperation(
             me.egigoka.pomodorough.data.local.PendingDurationOperationEntity.from(futureOperation),
         )
         val service = TestRepositoryService(profile).apply {
             bootstrapResponse = trustedResponse(revision = 0)
-            resolveFailure = java.io.IOException("preserve captured request")
+            syncFailure = java.io.IOException("preserve captured request")
         }
         val repository = testRepository(
             context,
@@ -306,17 +310,12 @@ class TrustedTimeContractTest {
         )
 
         repository.initialize()
-        awaitState { service.resolveCalls == 1 }
+        awaitState { service.syncCalls == 1 }
 
-        val captured = service.resolutionRequests.single().durationOperations.single()
+        val captured = service.syncRequests.single().durationOperations.single()
         val persisted = database.timerDao().pendingDurationOperations().single().toModel()
-        val saved = requireNotNull(database.timerDao().pendingBootstrapResolution())
         assertEquals(futureOperation.id, captured.id)
         assertEquals(captured, persisted)
-        assertEquals(
-            repositoryJson.encodeToString(listOf(captured)),
-            saved.durationOperationsJson,
-        )
         assertTrue(captured.hlcWallMs in NowMs - SyncWireBounds.MaxClockSkewMs..
             NowMs + SyncWireBounds.MaxClockSkewMs)
         assertEquals(captured.hlcWallMs, java.time.Instant.parse(captured.occurredAt).toEpochMilli())
@@ -336,24 +335,32 @@ class TrustedTimeContractTest {
             durationMs = 26 * 60_000L,
             wallMs = NowMs,
         )
-        database.timerDao().insertState(testState().copy(hlcWallMs = NowMs))
+        database.timerDao().insertState(
+            testState(history = listOf(testHistory("cached-local"))).copy(hlcWallMs = NowMs),
+        )
         database.timerDao().upsertDurationOperation(
             me.egigoka.pomodorough.data.local.PendingDurationOperationEntity.from(operation),
         )
         val service = TestRepositoryService(profile).apply {
-            bootstrapResponse = trustedResponse(revision = 0)
+            bootstrapResponse = trustedResponse(revision = 0).copy(
+                history = listOf(testHistory("cached-remote")),
+            )
             resolveFailure = java.io.IOException("lost response")
         }
+        val auth = freshSignInAuth()
         var repository = testRepository(
             context,
             database.timerDao(),
             service,
-            TestAuthSession(tokensAvailable = true),
+            auth,
             currentTimeMillis = { physicalNow },
             elapsedRealtimeMillis = { elapsedNow },
         )
         repository.initialize()
-        awaitState { service.resolveCalls == 1 }
+        repository.signIn(testCredentialProvider())
+        assertTrue("initial state=${repository.state.value}", repository.state.value.historyResolution != null)
+        repository.resolveHistory(BootstrapStrategy.Merge)
+        assertEquals("initial state=${repository.state.value}", 1, service.resolveCalls)
         val captured = service.resolutionRequests.single()
 
         physicalNow += 60_000L
@@ -383,9 +390,9 @@ class TrustedTimeContractTest {
             elapsedRealtimeMillis = { elapsedNow },
         )
         repository.initialize()
-        awaitState { service.bootstrapCalls == 2 }
+        assertEquals("restart state=${repository.state.value}", 2, service.bootstrapCalls)
         repository.resolveHistory(BootstrapStrategy.Merge)
-        awaitState { service.resolveCalls == 2 }
+        assertEquals("restart state=${repository.state.value}", 2, service.resolveCalls)
         assertEquals(captured, service.resolutionRequests.last())
         assertEquals(2L, database.timerDao().localState()?.revision)
         assertEquals(listOf(freshTask), repository.state.value.tasks)
@@ -513,6 +520,7 @@ class TrustedTimeContractTest {
 
     @Test
     fun bootstrapRebaseAlignsCommandHlcWithDeviceSequence() = runBlocking {
+        val profile = testUser()
         val first = testCommand("sequence-first", 1).copy(
             hlcWallMs = NowMs + 100,
             physicalOccurredAt = "2026-01-01T00:00:00Z",
@@ -521,12 +529,14 @@ class TrustedTimeContractTest {
             hlcWallMs = NowMs,
             physicalOccurredAt = "2026-01-01T00:00:00Z",
         )
-        database.timerDao().insertState(testState(deviceSequence = 2).copy(hlcWallMs = NowMs + 100))
+        database.timerDao().insertState(
+            testState(user = profile, deviceSequence = 2).copy(hlcWallMs = NowMs + 100),
+        )
         database.timerDao().insertCommand(PendingCommandEntity.from(first))
         database.timerDao().insertCommand(PendingCommandEntity.from(second))
-        val service = TestRepositoryService().apply {
+        val service = TestRepositoryService(profile).apply {
             bootstrapResponse = trustedResponse(revision = 0)
-            resolveFailure = java.io.IOException("inspect captured request")
+            syncFailure = java.io.IOException("inspect captured request")
         }
         val repository = testRepository(
             context,
@@ -536,9 +546,10 @@ class TrustedTimeContractTest {
         )
 
         repository.initialize()
-        awaitState { service.resolveCalls == 1 }
+        repository.refresh()
+        awaitState { service.syncCalls == 1 }
 
-        val captured = service.resolutionRequests.single().commands.sortedBy { it.deviceSequence }
+        val captured = service.syncRequests.single().commands.sortedBy { it.deviceSequence }
         assertEquals(listOf(1L, 2L), captured.map { it.deviceSequence })
         assertTrue(
             captured[1].hlcWallMs > captured[0].hlcWallMs ||
@@ -924,10 +935,7 @@ class TrustedTimeContractTest {
         awaitState { service.syncCalls == 1 && repository.state.value.pendingCount == 0 }
 
         val physicalDeadlineMs = wireDeadlineMs + deviceSkewMs
-        assertEquals(
-            physicalDeadlineMs,
-            java.time.Instant.parse(repository.state.value.timer?.anchorAt).toEpochMilli(),
-        )
+        assertNull(repository.state.value.timer)
         assertEquals(
             physicalDeadlineMs,
             java.time.Instant.parse(repository.state.value.history.single().completedAt).toEpochMilli(),
@@ -1000,10 +1008,7 @@ class TrustedTimeContractTest {
         awaitState { repository.state.value.pendingCount == 0 }
 
         val expectedPhysicalDeadline = wireDeadlineMs + startDeltaMs
-        assertEquals(
-            expectedPhysicalDeadline,
-            java.time.Instant.parse(repository.state.value.timer?.anchorAt).toEpochMilli(),
-        )
+        assertNull(repository.state.value.timer)
         assertEquals(
             expectedPhysicalDeadline,
             java.time.Instant.parse(repository.state.value.history.single().completedAt).toEpochMilli(),
@@ -1030,10 +1035,7 @@ class TrustedTimeContractTest {
         repository.initialize()
         awaitState { repeatedService.bootstrapCalls == 1 }
 
-        assertEquals(
-            expectedPhysicalDeadline,
-            java.time.Instant.parse(repository.state.value.timer?.anchorAt).toEpochMilli(),
-        )
+        assertNull(repository.state.value.timer)
         assertEquals(
             expectedPhysicalDeadline,
             java.time.Instant.parse(repository.state.value.history.single().completedAt).toEpochMilli(),

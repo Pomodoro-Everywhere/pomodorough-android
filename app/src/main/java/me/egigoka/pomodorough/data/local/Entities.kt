@@ -34,6 +34,7 @@ data class LocalStateEntity(
     val serverClockSampleElapsedRealtimeMs: Long? = null,
     val serverClockBootId: String? = null,
     val lastUuidV7: String? = null,
+    val accountDeletionState: String? = null,
 )
 
 @Entity(tableName = "pending_bootstrap_resolution")

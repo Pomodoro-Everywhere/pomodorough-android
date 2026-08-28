@@ -26,7 +26,7 @@ class TimerConvergenceFixtureTest {
             "%02x".format(it.toInt() and 0xff)
         }
         assertEquals(
-            "a293a679179f7f441a89b04f0260ee77fc0d810abc61e99501f9260a6ea9012e",
+            "51c357d8fd63e7200c1316ef36fc45821bea9ac2fbe11f255832fa21110ea104",
             digest,
         )
 
@@ -50,7 +50,7 @@ class TimerConvergenceFixtureTest {
                 )
             }
             listOf(commands, commands.reversed()).forEach { arrivalOrder ->
-                val projection = TimerReducer.replay(null, emptyList(), arrivalOrder)
+                val projection = LegacyTimerReducer.replay(null, emptyList(), arrivalOrder)
                 assertEquals(
                     fixtureCase.name,
                     fixtureCase.expected,
@@ -214,7 +214,7 @@ class TimerConvergenceFixtureTest {
                     ),
                 )
             }
-            val timerProjection = TimerReducer.replay(canonicalTimer, emptyList(), retainedCommands)
+            val timerProjection = LegacyTimerReducer.replay(canonicalTimer, emptyList(), retainedCommands)
             assertEquals(
                 fixtureCase.name,
                 ConvergenceExpected(fixtureCase.expected.timer, fixtureCase.expected.history),

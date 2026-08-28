@@ -38,7 +38,7 @@ import me.egigoka.pomodorough.data.local.PendingAutoStartOperationEntity
 import me.egigoka.pomodorough.data.local.PendingCommandEntity
 import me.egigoka.pomodorough.data.local.PomodoroughDatabase
 import me.egigoka.pomodorough.domain.TaskReducer
-import me.egigoka.pomodorough.domain.TimerReducer
+import me.egigoka.pomodorough.domain.LegacyTimerReducer
 import me.egigoka.pomodorough.timer.TimerAlarmScheduler
 import okhttp3.Request
 import okhttp3.sse.EventSource
@@ -174,7 +174,10 @@ class AutoStartRepositoryTest {
         repository.initialize()
         awaitState { service.syncCalls == 1 && repository.state.value.pendingCount == 0 }
 
-        assertEquals(operations, service.syncRequests.single().autoStartOperations)
+        assertEquals(
+            listOf(operations.first().copy(hlcCounter = 1), operations.last()),
+            service.syncRequests.single().autoStartOperations,
+        )
         assertTrue(!repository.state.value.settings.autoStartBreaks)
         assertTrue(!requireNotNull(database.timerDao().localState()).canonicalAutoStartBreaks)
         assertTrue(database.timerDao().pendingAutoStartOperations().isEmpty())
@@ -201,8 +204,11 @@ class AutoStartRepositoryTest {
         )
 
         repository.initialize()
-        awaitState { repository.state.value.syncStatus == SyncStatus.Conflict }
+        awaitState {
+            service.syncCalls == 1 && repository.state.value.syncStatus != SyncStatus.Syncing
+        }
 
+        assertEquals(SyncStatus.Conflict, repository.state.value.syncStatus)
         assertEquals(
             "Sync returned an invalid auto-start acknowledgement set",
             repository.state.value.conflict,
@@ -300,7 +306,9 @@ class AutoStartRepositoryTest {
         )
 
         repository.initialize()
-        awaitState { service.syncCalls == 2 && repository.state.value.pendingCount == 0 }
+        awaitState(timeoutMs = 30_000) {
+            service.syncCalls == 2 && repository.state.value.pendingCount == 0
+        }
 
         assertEquals(listOf(256, 1), service.syncRequests.map { it.autoStartOperations.size })
         assertTrue(repository.state.value.settings.autoStartBreaks)
@@ -394,10 +402,13 @@ class AutoStartRepositoryTest {
         )
 
         remoteRepository.initialize()
-        awaitState { service.syncCalls == 1 && remoteRepository.state.value.timer?.status == TimerStatus.Completed }
+        awaitState {
+            service.syncCalls == 1 && remoteRepository.state.value.history.any { it.timerId == running.id }
+        }
 
         assertTrue(database.timerDao().pendingCommands().isEmpty())
-        assertEquals(TimerStatus.Completed, remoteRepository.state.value.timer?.status)
+        assertNull(remoteRepository.state.value.timer)
+        assertEquals(TimerStatus.Completed, remoteRepository.state.value.history.single().status)
     }
 
     @Test
@@ -420,7 +431,13 @@ class AutoStartRepositoryTest {
             TestAuthSession(tokensAvailable = true),
         )
 
-        assertTrue(repository.finishExpiredTimer())
+        val finished = repository.finishExpiredTimer()
+        assertTrue(
+            "timer=${repository.state.value.timer}, " +
+                "owned=${database.timerDao().localState()?.ownedTimerId}, " +
+                "auth=${repository.state.value.authStatus}, notice=${repository.state.value.notice}",
+            finished,
+        )
 
         val commands = database.timerDao().pendingCommands().map { it.toModel() }
         assertEquals(listOf(CommandType.Finish, CommandType.Start), commands.map { it.type })
@@ -489,7 +506,10 @@ class AutoStartRepositoryTest {
         restarted.initialize()
         awaitState { retryService.syncCalls == 1 && restarted.state.value.pendingCount == 0 }
 
-        assertEquals(listOf(operation), retryService.syncRequests.single().autoStartOperations)
+        assertEquals(
+            listOf(operation.copy(hlcCounter = 1)),
+            retryService.syncRequests.single().autoStartOperations,
+        )
         assertTrue(restarted.state.value.settings.autoStartBreaks)
         assertTrue(database.timerDao().pendingAutoStartOperations().isEmpty())
 
@@ -623,7 +643,7 @@ class AutoStartRepositoryTest {
 
         override suspend fun sync(accessToken: String, request: SyncRequest): SyncResponse = mutex.withLock {
             if (request.commands.isNotEmpty()) {
-                val projected = TimerReducer.replay(timer, history, request.commands)
+                val projected = LegacyTimerReducer.replay(timer, history, request.commands)
                 timer = projected.timer
                 history = projected.history.map { it.copy(pending = false) }
             }

@@ -21,11 +21,11 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  JAVA_VERSION: "17"
+  JAVA_VERSION: "21"
   ANDROID_API_LEVEL: "36"
   ANDROID_BUILD_TOOLS_VERSION: "36.0.0"
-  CORE_COMMIT: "8dc24486b38d87eb2c717e80b4315b31dd6a671d"
-  CORE_SHA256: "1e67043a8a652c5f9c6d36b28fe280b4bb5677e0c0279faaccdceb407181face"
+  CORE_COMMIT: "71c85020eab69a803ab0d3046aa7abef890c4780"
+  CORE_SHA256: "69ecfeb3bf292866dca2c9dba936120cb6839a761111ce19087e30cbff1428a4"
   TZ: Etc/UTC
 
 jobs:
@@ -42,7 +42,7 @@ jobs:
           python3 scripts/check_docs.py
           python3 scripts/check_protocol_fixture.py
           python3 scripts/check_workflow_pins.py
-          python3 -m unittest scripts/test_check_localization.py scripts/test_ci_workflow.py scripts/test_release_workflow.py -v
+          python3 -m unittest scripts/test_check_localization.py scripts/test_ci_workflow.py -v
           python3 scripts/check_localization.py
 
       - name: Set up JDK
@@ -71,7 +71,6 @@ jobs:
             cargo +1.97.1 build --release --target wasm32-unknown-unknown --locked
           )
           rebuilt=pomodorough-core-source/target/wasm32-unknown-unknown/release/pomodorough_core.wasm
-          python3 pomodorough-core-source/scripts/canonicalize_wasm_artifact.py "$rebuilt"
           python3 pomodorough-core-source/scripts/verify_wasm_artifact.py \
             "$rebuilt"
           python3 pomodorough-core-source/scripts/verify_wasm_artifact.py \
@@ -128,14 +127,41 @@ jobs:
           cp app/build/outputs/apk/release/app-release-unsigned.apk "$first_apk"
           cp app/build/outputs/bundle/release/app-release.aab "$first_aab"
           rm -rf app/build
-          ./gradlew --no-daemon --stacktrace :app:assembleRelease :app:bundleRelease
+          ./gradlew --no-daemon --stacktrace -Ppomodorough.testBuildType=release \
+            :app:assembleRelease :app:bundleRelease :app:assembleReleaseAndroidTest
           python3 scripts/normalize_release_aab.py app/build/outputs/bundle/release/app-release.aab
           cmp "$first_apk" app/build/outputs/apk/release/app-release-unsigned.apk
           cmp "$first_aab" app/build/outputs/bundle/release/app-release.aab
           release_apk="app/build/outputs/apk/release/app-release-unsigned.apk"
           release_aab="app/build/outputs/bundle/release/app-release.aab"
+          release_test_apk="app/build/outputs/apk/androidTest/release/app-release-androidTest.apk"
           test -f "$release_apk"
           test -f "$release_aab"
+          test -f "$release_test_apk"
+          target_classes="$RUNNER_TEMP/release-target-classes.txt"
+          test_classes="$RUNNER_TEMP/release-test-classes.txt"
+          apkanalyzer dex packages --defined-only "$release_apk" > "$target_classes"
+          apkanalyzer dex packages --defined-only "$release_test_apk" > "$test_classes"
+          for source_class in \
+            me.egigoka.pomodorough.data.iroh.IrohReplicationService \
+            me.egigoka.pomodorough.data.iroh.IrohEndpointLifecycle \
+            computer.iroh.EndpointBuilder \
+            computer.iroh.Endpoint \
+            computer.iroh.EndpointAddr \
+            computer.iroh.Incoming \
+            computer.iroh.Accepting \
+            computer.iroh.Connection; do
+            mapping_line="$(grep -F "$source_class -> " app/build/outputs/mapping/release/mapping.txt)"
+            test -n "$mapping_line"
+            obfuscated_class="${mapping_line#* -> }"
+            obfuscated_class="${obfuscated_class%:}"
+            test "$obfuscated_class" != "$source_class"
+            grep -E "^C[[:space:]].*[[:space:]]${obfuscated_class}$" "$target_classes"
+            if grep -E "^C[[:space:]].*[[:space:]]${obfuscated_class}$" "$test_classes"; then
+              echo "Release test APK defines production class $obfuscated_class" >&2
+              exit 1
+            fi
+          done
           packaged_core_sha=$(unzip -p "$release_apk" assets/pomodorough_core.wasm | sha256sum | awk '{print $1}')
           test "$packaged_core_sha" = "$CORE_SHA256"
           packaged_core_sha=$(unzip -p "$release_aab" base/assets/pomodorough_core.wasm | sha256sum | awk '{print $1}')
@@ -149,9 +175,10 @@ jobs:
             echo "Release AAB unexpectedly contains a production signature" >&2
             exit 1
           fi
-          mkdir -p dist
+          mkdir -p dist release-test
           cp "$release_apk" "dist/pomodorough-${GITHUB_REF_NAME}-release-unsigned.apk"
           cp "$release_aab" "dist/pomodorough-${GITHUB_REF_NAME}-release-unsigned.aab"
+          cp "$release_test_apk" "release-test/pomodorough-${GITHUB_REF_NAME}-release-androidTest.apk"
           cd dist
           sha256sum -- *.apk *.aab > SHA256SUMS.txt
 
@@ -165,15 +192,56 @@ jobs:
           overwrite: true
           retention-days: 7
 
+      - name: Upload release instrumentation payload
+        if: inputs.upload-release-bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pomodorough-android-release-test-${{ github.ref_name }}
+          path: release-test/
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 1
+
   connected:
-    name: Connected API ${{ matrix.api-level }} · ${{ matrix.font-scale }}x font
+    name: Connected API ${{ matrix.api-level }} · ${{ matrix.font-scale }}x font · ${{ matrix.locale }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        api-level: [35, 36]
-        font-scale: ["1.0", "2.0"]
+        include:
+          - api-level: 35
+            font-scale: "1.0"
+            locale: "en-US"
+            test-class: ""
+          - api-level: 35
+            font-scale: "2.0"
+            locale: "en-US"
+            test-class: ""
+          - api-level: 36
+            font-scale: "1.0"
+            locale: "en-US"
+            test-class: ""
+          - api-level: 36
+            font-scale: "2.0"
+            locale: "en-US"
+            test-class: ""
+          - api-level: 35
+            font-scale: "1.0"
+            locale: "ar-XB"
+            test-class: me.egigoka.pomodorough.ui.PomodoroughRtlAccessibilityTest
+          - api-level: 35
+            font-scale: "2.0"
+            locale: "ar-XB"
+            test-class: me.egigoka.pomodorough.ui.PomodoroughRtlAccessibilityTest
+          - api-level: 36
+            font-scale: "1.0"
+            locale: "ar-XB"
+            test-class: me.egigoka.pomodorough.ui.PomodoroughRtlAccessibilityTest
+          - api-level: 36
+            font-scale: "2.0"
+            locale: "ar-XB"
+            test-class: me.egigoka.pomodorough.ui.PomodoroughRtlAccessibilityTest
     steps:
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -183,7 +251,7 @@ jobs:
           python3 scripts/check_docs.py
           python3 scripts/check_protocol_fixture.py
           python3 scripts/check_workflow_pins.py
-          python3 -m unittest scripts/test_check_localization.py scripts/test_ci_workflow.py scripts/test_release_workflow.py -v
+          python3 -m unittest scripts/test_check_localization.py scripts/test_ci_workflow.py -v
           python3 scripts/check_localization.py
 
       - name: Set up JDK
@@ -209,16 +277,19 @@ jobs:
           target: google_apis
           arch: x86_64
           profile: pixel_6
+          cores: 2
           disable-animations: true
           script: |
             ./gradlew --no-daemon --stacktrace :app:assembleDebug :app:assembleDebugAndroidTest
-            FONT_SCALE=${{ matrix.font-scale }} .github/scripts/run-instrumented-tests.sh
+            FONT_SCALE=${{ matrix.font-scale }} TEST_LOCALE=${{ matrix.locale }} \
+              TEST_CLASS=${{ matrix.test-class }} \
+              .github/scripts/run-instrumented-tests.sh
 
       - name: Retain connected reports, screenshots, and diagnostics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: connected-api-${{ matrix.api-level }}-font-${{ matrix.font-scale }}
+          name: connected-api-${{ matrix.api-level }}-font-${{ matrix.font-scale }}-locale-${{ matrix.locale }}
           path: |
             app/build/outputs/androidTest-results/
             app/build/reports/androidTests/
@@ -226,11 +297,19 @@ jobs:
           retention-days: 14
 
   release-smoke:
-    name: Clean-install packaged release payload (API 36)
+    name: Clean-install packaged release payload (API ${{ matrix.api-level }}, ${{ matrix.architecture }})
     if: inputs.upload-release-bundle
-    needs: verify
+    needs: [verify, connected]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - api-level: 30
+            architecture: x86
+          - api-level: 36
+            architecture: x86_64
     steps:
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -242,6 +321,12 @@ jobs:
         with:
           name: pomodorough-android-${{ github.ref_name }}
           path: dist
+
+      - name: Download release instrumentation payload
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: pomodorough-android-release-test-${{ github.ref_name }}
+          path: release-test
 
       - name: Set up JDK
         uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
@@ -265,12 +350,22 @@ jobs:
       - name: Ephemerally sign, clean-install, and launch packaged APK
         uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
-          api-level: 36
+          api-level: ${{ matrix.api-level }}
           target: google_apis
-          arch: x86_64
+          arch: ${{ matrix.architecture }}
           profile: pixel_6
+          cores: 2
           disable-animations: true
           script: bash .github/scripts/smoke-packaged-release.sh
+
+      - name: Retain release-Iroh instrumentation and diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-smoke-api-${{ matrix.api-level }}-${{ matrix.architecture }}
+          path: release-smoke-results/
+          if-no-files-found: warn
+          retention-days: 14
 
   dependency-review:
     name: Dependency review

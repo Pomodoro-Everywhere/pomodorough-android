@@ -116,8 +116,11 @@ class TimerAlarmDeliveryPolicyTest {
     fun differentActiveTimerStopsExistingCompletionAlert() {
         assertTrue(shouldStopCompletionAlert("completed-focus", timer(TimerStatus.Running, "next-break")))
         assertTrue(shouldStopCompletionAlert("completed-focus", timer(TimerStatus.Paused, "next-break")))
-        assertFalse(shouldStopCompletionAlert("same-timer", timer(TimerStatus.Running, "same-timer")))
-        assertFalse(shouldStopCompletionAlert("completed-focus", timer(TimerStatus.Completed, "next-break")))
+        assertTrue(shouldStopCompletionAlert("same-timer", timer(TimerStatus.Running, "same-timer")))
+        assertTrue(shouldStopCompletionAlert("completed-focus", timer(TimerStatus.Completed, "next-break")))
+        assertTrue(shouldStopCompletionAlert("completed-focus", null))
+        assertFalse(shouldStopCompletionAlert("same-timer", timer(TimerStatus.Completed, "same-timer")))
+        assertFalse(shouldStopCompletionAlert(null, timer(TimerStatus.Completed, "same-timer")))
     }
 
     @Test
@@ -159,6 +162,44 @@ class TimerAlarmDeliveryPolicyTest {
         assertTrue(SystemTimerCompletionNotifier.canPostNotification(32, permissionGranted = false))
         assertFalse(SystemTimerCompletionNotifier.canPostNotification(33, permissionGranted = false))
         assertTrue(SystemTimerCompletionNotifier.canPostNotification(33, permissionGranted = true))
+    }
+
+    @Test
+    fun coldProcessAlarmInitializesBeforeMatchingDurableTimer() = runTest {
+        var currentTimerId: String? = null
+        var finishCalls = 0
+
+        val completed = completeMatchingExpiredTimer(
+            expectedTimerId = "timer-1",
+            initialize = { currentTimerId = "timer-1" },
+            currentTimerId = { currentTimerId },
+            finish = {
+                finishCalls += 1
+                true
+            },
+        )
+
+        assertTrue(completed)
+        assertEquals(1, finishCalls)
+    }
+
+    @Test
+    fun coldProcessAlarmRejectsDifferentTimerAfterInitialization() = runTest {
+        var currentTimerId: String? = null
+        var finishCalls = 0
+
+        val completed = completeMatchingExpiredTimer(
+            expectedTimerId = "stale-timer",
+            initialize = { currentTimerId = "current-timer" },
+            currentTimerId = { currentTimerId },
+            finish = {
+                finishCalls += 1
+                true
+            },
+        )
+
+        assertFalse(completed)
+        assertEquals(0, finishCalls)
     }
 
     @Test

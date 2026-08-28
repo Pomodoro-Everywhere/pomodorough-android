@@ -16,8 +16,21 @@ import me.egigoka.pomodorough.data.TokenPair
 
 interface TokenStore {
     fun read(): TokenPair?
+    fun state(): TokenStoreState = read()?.let(TokenStoreState::Active) ?: TokenStoreState.Empty
     fun write(tokens: TokenPair)
-    fun clear()
+    fun markLogoutPending(tokens: TokenPair) {
+        throw UnsupportedOperationException("Pending logout persistence is not implemented")
+    }
+    fun clear() {
+        throw UnsupportedOperationException("Token clearing is not implemented")
+    }
+}
+
+sealed interface TokenStoreState {
+    data object Empty : TokenStoreState
+    data class Active(val tokens: TokenPair) : TokenStoreState
+    data class LogoutPending(val tokens: TokenPair) : TokenStoreState
+    data class Unreadable(val cause: Throwable) : TokenStoreState
 }
 
 class TokenVault(
@@ -28,8 +41,28 @@ class TokenVault(
     private val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
 
     @Synchronized
-    override fun read(): TokenPair? {
-        val encoded = preferences.getString(PayloadKey, null) ?: return null
+    override fun read(): TokenPair? = when (val state = state()) {
+        TokenStoreState.Empty -> null
+        is TokenStoreState.Active -> state.tokens
+        is TokenStoreState.LogoutPending -> state.tokens
+        is TokenStoreState.Unreadable -> throw IllegalStateException(
+            "Persisted authentication state is unreadable",
+            state.cause,
+        )
+    }
+
+    @Synchronized
+    override fun state(): TokenStoreState {
+        val encoded = preferences.getString(PayloadKey, null)
+        if (encoded == null) {
+            return if (preferences.contains(LogoutPendingKey)) {
+                TokenStoreState.Unreadable(
+                    IllegalStateException("Pending logout marker has no credential payload"),
+                )
+            } else {
+                TokenStoreState.Empty
+            }
+        }
         return runCatching {
             val bytes = Base64.decode(encoded, Base64.NO_WRAP)
             require(bytes.size > IvSize)
@@ -38,11 +71,13 @@ class TokenVault(
             val cipher = Cipher.getInstance(Transformation).apply {
                 init(Cipher.DECRYPT_MODE, secretKey(), GCMParameterSpec(TagSizeBits, iv))
             }
-            json.decodeFromString<TokenPair>(cipher.doFinal(ciphertext).decodeToString())
-        }.getOrElse {
-            clear()
-            null
-        }
+            val tokens = json.decodeFromString<TokenPair>(cipher.doFinal(ciphertext).decodeToString())
+            if (preferences.getBoolean(LogoutPendingKey, false)) {
+                TokenStoreState.LogoutPending(tokens)
+            } else {
+                TokenStoreState.Active(tokens)
+            }
+        }.getOrElse(TokenStoreState::Unreadable)
     }
 
     @Synchronized
@@ -56,14 +91,27 @@ class TokenVault(
         check(
             preferences.edit()
                 .putString(PayloadKey, Base64.encodeToString(payload, Base64.NO_WRAP))
+                .remove(LogoutPendingKey)
                 .commit(),
         ) { "Could not persist authentication tokens" }
     }
 
     @Synchronized
     @SuppressLint("ApplySharedPref")
+    override fun markLogoutPending(tokens: TokenPair) {
+        val current = state()
+        check(current == TokenStoreState.Active(tokens) || current == TokenStoreState.LogoutPending(tokens)) {
+            "Could not mark a non-current authentication session for logout"
+        }
+        check(preferences.edit().putBoolean(LogoutPendingKey, true).commit()) {
+            "Could not persist pending logout"
+        }
+    }
+
+    @Synchronized
+    @SuppressLint("ApplySharedPref")
     override fun clear() {
-        check(preferences.edit().remove(PayloadKey).commit()) {
+        check(preferences.edit().remove(PayloadKey).remove(LogoutPendingKey).commit()) {
             "Could not clear authentication tokens"
         }
     }
@@ -88,6 +136,7 @@ class TokenVault(
     private companion object {
         const val KeyAlias = "pomodorough-token-key-v1"
         const val PayloadKey = "token-pair"
+        const val LogoutPendingKey = "logout-pending"
         const val Transformation = "AES/GCM/NoPadding"
         const val IvSize = 12
         const val TagSizeBits = 128

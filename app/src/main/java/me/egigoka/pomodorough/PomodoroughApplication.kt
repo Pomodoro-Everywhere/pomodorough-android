@@ -4,6 +4,8 @@ import android.app.Application
 import computer.iroh.IrohAndroid
 import java.util.concurrent.TimeUnit
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import me.egigoka.pomodorough.core.SharedCore
 import me.egigoka.pomodorough.data.TimerRepository
 import me.egigoka.pomodorough.data.api.PomodoroughApi
 import me.egigoka.pomodorough.data.auth.AuthRepository
@@ -12,9 +14,8 @@ import me.egigoka.pomodorough.data.iroh.IrohReplicationRepository
 import me.egigoka.pomodorough.data.iroh.IrohReplicationService
 import me.egigoka.pomodorough.data.iroh.IrohRoomStore
 import me.egigoka.pomodorough.data.iroh.IrohSecretVault
-import me.egigoka.pomodorough.data.iroh.ReplicationMode
-import me.egigoka.pomodorough.data.local.PomodoroughDatabase
 import me.egigoka.pomodorough.data.local.LocalWorkspaceCoordinator
+import me.egigoka.pomodorough.data.local.PomodoroughDatabase
 import okhttp3.OkHttpClient
 
 class PomodoroughApplication : Application() {
@@ -24,46 +25,73 @@ class PomodoroughApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         IrohAndroid.installAndroidContext(applicationContext)
-        val json = Json {
-            ignoreUnknownKeys = true
-            explicitNulls = false
-        }
-        val client = OkHttpClient.Builder()
-            .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(35, TimeUnit.SECONDS)
-            .writeTimeout(15, TimeUnit.SECONDS)
-            .callTimeout(45, TimeUnit.SECONDS)
-            .build()
-        val api = PomodoroughApi(BuildConfig.API_BASE_URL, client, json)
-        val database = PomodoroughDatabase.create(this)
-        val irohVault = IrohSecretVault(this)
-        val workspaceCoordinator = LocalWorkspaceCoordinator()
-        val irohRoomStore = IrohRoomStore(database.timerDao(), irohVault, workspaceCoordinator)
-        val auth = AuthRepository(
+        timerRepository = ApplicationDependencyGraph(this).createTimerRepository()
+    }
+}
+
+private class ApplicationDependencyGraph(
+    private val application: PomodoroughApplication,
+) {
+    private val json = Json {
+        ignoreUnknownKeys = true
+        explicitNulls = false
+    }
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(35, TimeUnit.SECONDS)
+        .writeTimeout(15, TimeUnit.SECONDS)
+        .callTimeout(45, TimeUnit.SECONDS)
+        .build()
+    private val api = PomodoroughApi(BuildConfig.API_BASE_URL, client, json)
+    private val database = PomodoroughDatabase.create(application)
+    private val irohVault = IrohSecretVault(application)
+    private val workspaceCoordinator = LocalWorkspaceCoordinator()
+    private val sharedCore by lazy { SharedCore.fromAssets(application.assets) }
+    private val sharedCoreDispatch: (String, String) -> JsonElement = { operation, input ->
+        sharedCore.dispatch(operation, input)
+    }
+    private var repository: TimerRepository? = null
+
+    fun createTimerRepository(): TimerRepository {
+        val roomStore = createRoomStore()
+        val replication = createIrohReplication(roomStore)
+        return TimerRepository(
+            context = application,
+            dao = database.timerDao(),
             api = api,
-            tokenVault = TokenVault(this, json),
-            googleServerClientId = BuildConfig.GOOGLE_SERVER_CLIENT_ID,
-        )
-        var repository: TimerRepository? = null
-        val irohService = IrohReplicationService(
-            store = irohRoomStore,
+            auth = createAuthRepository(),
+            json = json,
+            sharedCoreDispatch = sharedCoreDispatch,
+            replication = replication,
+            workspaceCoordinator = workspaceCoordinator,
+        ).also { repository = it }
+    }
+
+    private fun createRoomStore() = IrohRoomStore(
+        database.timerDao(),
+        irohVault,
+        sharedCoreDispatch,
+        workspaceCoordinator,
+    )
+
+    private fun createAuthRepository() = AuthRepository(
+        api = api,
+        tokenVault = TokenVault(application, json),
+        googleServerClientId = BuildConfig.GOOGLE_SERVER_CLIENT_ID,
+    )
+
+    private fun createIrohReplication(roomStore: IrohRoomStore): IrohReplicationRepository {
+        val dao = database.timerDao()
+        val service = IrohReplicationService(
+            store = roomStore,
             vault = irohVault,
             onProjection = { repository?.scheduleWorkspaceReload() },
         )
-        val irohReplication = IrohReplicationRepository(
-            dao = database.timerDao(),
-            store = irohRoomStore,
-            service = irohService,
+        return IrohReplicationRepository(
+            workspace = dao,
+            rooms = dao,
+            store = roomStore,
+            service = service,
         )
-        repository = TimerRepository(
-            context = this,
-            dao = database.timerDao(),
-            api = api,
-            auth = auth,
-            json = json,
-            replication = irohReplication,
-            workspaceCoordinator = workspaceCoordinator,
-        )
-        timerRepository = checkNotNull(repository)
     }
 }

@@ -2,7 +2,7 @@ package me.egigoka.pomodorough.data
 
 import kotlinx.coroutines.flow.StateFlow
 import me.egigoka.pomodorough.data.auth.GoogleCredentialProvider
-import me.egigoka.pomodorough.data.iroh.ReplicationMode
+import me.egigoka.pomodorough.data.iroh.protocol.ReplicationMode
 
 interface TimerRepositoryContract {
     val state: StateFlow<AppState>
@@ -10,6 +10,9 @@ interface TimerRepositoryContract {
     suspend fun initialize()
     suspend fun signIn(credentialProvider: GoogleCredentialProvider)
     suspend fun logout()
+    suspend fun resetLocalAccount() {
+        throw UnsupportedOperationException(LocalAccountResetUnsupportedMessage)
+    }
     suspend fun deleteAccount(confirmation: String)
     fun refresh()
     suspend fun toggleTimer()
@@ -38,3 +41,11 @@ interface TimerRepositoryContract {
     fun onForeground()
     fun onBackground()
 }
+
+/** Opt-in contract for repositories that must provide local-account reset. */
+interface LocalAccountResetTimerRepositoryContract : TimerRepositoryContract {
+    override suspend fun resetLocalAccount()
+}
+
+private const val LocalAccountResetUnsupportedMessage =
+    "Local account reset is not supported by this repository"

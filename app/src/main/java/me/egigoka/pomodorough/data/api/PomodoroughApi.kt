@@ -54,7 +54,9 @@ interface PomodoroughService {
     suspend fun deleteAccount(accessToken: String, confirmation: String) {
         throw UnsupportedOperationException("Account deletion is not implemented")
     }
-    fun revisionStream(accessToken: String, listener: EventSourceListener): EventSource
+    fun revisionStream(accessToken: String, listener: EventSourceListener): EventSource {
+        throw UnsupportedOperationException("Revision streaming is not implemented")
+    }
 }
 
 class PomodoroughApi(

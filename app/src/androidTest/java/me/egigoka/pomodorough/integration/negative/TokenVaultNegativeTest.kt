@@ -5,22 +5,24 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.serialization.json.Json
 import me.egigoka.pomodorough.data.auth.TokenVault
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
+import me.egigoka.pomodorough.data.auth.TokenStoreState
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class TokenVaultNegativeTest {
     @Test
-    fun corruptEncryptedPayloadIsRejectedAndDeleted() {
+    fun corruptEncryptedPayloadIsPreservedAsUnreadable() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val preferences = context.getSharedPreferences(PreferencesName, Context.MODE_PRIVATE)
         preferences.edit().putString(PayloadKey, "not-valid-base64").commit()
         val vault = TokenVault(context, Json)
 
-        assertNull(vault.read())
-        assertFalse(preferences.contains(PayloadKey))
+        assertTrue(vault.state() is TokenStoreState.Unreadable)
+        assertThrows(IllegalStateException::class.java, vault::read)
+        assertTrue(preferences.contains(PayloadKey))
     }
 
     private companion object {

@@ -38,6 +38,28 @@ internal val repositoryJson = Json {
     explicitNulls = false
 }
 
+private val trackedTestRepositories = mutableListOf<TimerRepository>()
+
+private fun trackTestRepository(repository: TimerRepository): TimerRepository =
+    synchronized(trackedTestRepositories) {
+        trackedTestRepositories += repository
+        repository
+    }
+
+internal suspend fun shutdownTrackedTestRepository(repository: TimerRepository) {
+    synchronized(trackedTestRepositories) {
+        trackedTestRepositories.remove(repository)
+    }
+    repository.shutdownForTest()
+}
+
+internal suspend fun shutdownTrackedTestRepositories() {
+    val repositories = synchronized(trackedTestRepositories) {
+        trackedTestRepositories.toList().also { trackedTestRepositories.clear() }
+    }
+    repositories.asReversed().forEach { it.shutdownForTest() }
+}
+
 internal class TestAuthSession(
     var tokensAvailable: Boolean = false,
 ) : AuthSession {
@@ -45,6 +67,8 @@ internal class TestAuthSession(
     var signInHandler: (suspend (GoogleCredentialProvider, String) -> TokenPair)? = null
     var logoutCalls = 0
     var logoutFailure: Throwable? = null
+    var tokenClearFailuresRemaining = 0
+    var clearCalls = 0
 
     override suspend fun signIn(
         credentialProvider: GoogleCredentialProvider,
@@ -58,11 +82,20 @@ internal class TestAuthSession(
 
     override suspend fun logout() {
         logoutCalls += 1
+        clearTokens()
         logoutFailure?.let { throw it }
-        tokensAvailable = false
     }
 
     override fun clear() {
+        clearCalls += 1
+        clearTokens()
+    }
+
+    private fun clearTokens() {
+        if (tokenClearFailuresRemaining > 0) {
+            tokenClearFailuresRemaining -= 1
+            error("token clear unavailable")
+        }
         tokensAvailable = false
     }
 }
@@ -72,6 +105,20 @@ internal fun testCredentialProvider(
 ): GoogleCredentialProvider = object : GoogleCredentialProvider {
     override suspend fun identityToken(serverClientId: String, nonce: String): String = identityToken
 }
+
+internal fun freshSignInAuth() = TestAuthSession(tokensAvailable = false).apply {
+    signInHandler = { _, _ ->
+        tokensAvailable = true
+        testTokens()
+    }
+}
+
+internal fun testTokens() = TokenPair(
+    accessToken = "access-token",
+    accessTokenExpiresAt = "2999-01-01T00:00:00Z",
+    refreshToken = "refresh-token",
+    refreshTokenExpiresAt = "2999-02-01T00:00:00Z",
+)
 
 internal class TestRepositoryService(
     var profile: User = testUser(),
@@ -179,20 +226,22 @@ internal fun testRepository(
     bootId: () -> String? = { "test-boot" },
     uuidEntropy: () -> ByteArray = me.egigoka.pomodorough.data.UuidV7::secureEntropy,
     initialSyncRetryDelayMs: Long = 1_000L,
-    remoteSyncIntervalMs: Long = 15_000L,
-) = TimerRepository(
-    context = context,
-    dao = dao,
-    api = service,
-    auth = auth,
-    json = repositoryJson,
-    networkAvailable = { online },
-    currentTimeMillis = currentTimeMillis,
-    elapsedRealtimeMillis = elapsedRealtimeMillis,
-    bootId = bootId,
-    uuidEntropy = uuidEntropy,
-    initialSyncRetryDelayMs = initialSyncRetryDelayMs,
-    remoteSyncIntervalMs = remoteSyncIntervalMs,
+    remoteSyncIntervalMs: Long = Long.MAX_VALUE,
+) = trackTestRepository(
+    TimerRepository(
+        context = context,
+        dao = dao,
+        api = service,
+        auth = auth,
+        json = repositoryJson,
+        networkAvailable = { online },
+        currentTimeMillis = currentTimeMillis,
+        elapsedRealtimeMillis = elapsedRealtimeMillis,
+        bootId = bootId,
+        uuidEntropy = uuidEntropy,
+        initialSyncRetryDelayMs = initialSyncRetryDelayMs,
+        remoteSyncIntervalMs = remoteSyncIntervalMs,
+    ),
 )
 
 internal fun testState(
@@ -297,8 +346,8 @@ internal fun testAutoStartOperation(
     hlcCounter = counter,
 )
 
-internal suspend fun awaitState(condition: () -> Boolean) {
-    withTimeout(5_000) {
+internal suspend fun awaitState(timeoutMs: Long = 5_000, condition: () -> Boolean) {
+    withTimeout(timeoutMs) {
         while (!condition()) delay(10)
     }
 }

@@ -14,14 +14,16 @@ import java.nio.charset.StandardCharsets.UTF_8
 import java.security.MessageDigest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
-import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
 /** Thread-safe transport adapter for pinned shared-core WebAssembly ABI. */
-class SharedCore private constructor(
+class SharedCore internal constructor(
     private val instance: Instance,
+    private val freeStatusOverride: ((Int, Long) -> Long)? = null,
+    private val dispatchResultOverride: (() -> Long)? = null,
 ) {
     private val lock = Any()
     private var unusableCause: Throwable? = null
@@ -32,9 +34,9 @@ class SharedCore private constructor(
         returns = arrayOf(ValType.I32),
     )
     private val free = requireExport(
-        name = "pomodorough_free",
+        name = "pomodorough_free_v2",
         parameters = arrayOf(ValType.I32, ValType.I32),
-        returns = emptyArray(),
+        returns = arrayOf(ValType.I32),
     )
     private val dispatch = requireExport(
         name = "pomodorough_dispatch",
@@ -62,7 +64,7 @@ class SharedCore private constructor(
         try {
             operationPointer = allocate(operationBytes)
             inputPointer = allocate(inputBytes)
-            val packedResult = callSingle(
+            val packedResult = dispatchResultOverride?.invoke() ?: callSingle(
                 dispatch,
                 "pomodorough_dispatch",
                 unsigned(operationPointer),
@@ -72,6 +74,14 @@ class SharedCore private constructor(
             )
             resultPointer = (packedResult and UINT32_MASK).toInt()
             resultLength = packedResult ushr 32
+            if ((resultPointer == 0) != (resultLength == 0L)) {
+                val ownershipError = SharedCoreException.Abi(
+                    "dispatch returned inconsistent pointer/length ownership: " +
+                        "pointer=${unsigned(resultPointer)} length=$resultLength",
+                )
+                unusableCause = ownershipError
+                throw ownershipError
+            }
             parseEnvelope(operation, readUtf8(resultPointer, checkedLength(resultLength)))
         } catch (cause: Throwable) {
             failure = cause
@@ -106,7 +116,11 @@ class SharedCore private constructor(
 
     private fun release(pointer: Int, length: Long) {
         if (pointer == 0 || length == 0L) return
-        free.apply(unsigned(pointer), length)
+        val status = freeStatusOverride?.invoke(pointer, length)
+            ?: callSingle(free, "pomodorough_free_v2", unsigned(pointer), length)
+        if (status != 1L) {
+            throw SharedCoreException.Abi("pomodorough_free_v2 rejected buffer with status $status")
+        }
     }
 
     private fun releaseAll(
@@ -194,7 +208,7 @@ class SharedCore private constructor(
         return length.toInt()
     }
 
-    private fun parseEnvelope(operation: String, envelopeJson: String): JsonElement {
+    internal fun parseEnvelope(operation: String, envelopeJson: String): JsonElement {
         val envelope = try {
             Json.parseToJsonElement(envelopeJson).jsonObject
         } catch (cause: Exception) {
@@ -202,13 +216,22 @@ class SharedCore private constructor(
         }
         return try {
             when (envelope["ok"]?.jsonPrimitive?.booleanOrNull) {
-                true -> envelope["value"]
-                    ?: throw SharedCoreException.Abi("successful dispatch envelope has no value")
-                false -> throw SharedCoreException.Operation(
-                    operation,
-                    envelope["error"]?.jsonPrimitive?.contentOrNull
-                        ?: "shared core returned an unspecified error",
-                )
+                true -> {
+                    if (envelope.keys != setOf("ok", "value")) {
+                        throw SharedCoreException.Abi("successful dispatch envelope is not canonical")
+                    }
+                    envelope.getValue("value")
+                }
+                false -> {
+                    if (envelope.keys != setOf("ok", "error")) {
+                        throw SharedCoreException.Abi("failed dispatch envelope is not canonical")
+                    }
+                    val error = envelope["error"] as? JsonPrimitive
+                    if (error == null || !error.isString || error.content.isBlank()) {
+                        throw SharedCoreException.Abi("failed dispatch envelope has no non-empty string error")
+                    }
+                    throw SharedCoreException.Operation(operation, error.content)
+                }
                 null -> throw SharedCoreException.Abi("dispatch envelope has no boolean ok field")
             }
         } catch (cause: SharedCoreException) {
@@ -220,16 +243,21 @@ class SharedCore private constructor(
 
     companion object {
         const val ASSET_NAME = "pomodorough_core.wasm"
-        const val CORE_COMMIT = "8dc24486b38d87eb2c717e80b4315b31dd6a671d"
-        const val CORE_SHA256 = "1e67043a8a652c5f9c6d36b28fe280b4bb5677e0c0279faaccdceb407181face"
+        const val CORE_COMMIT = "71c85020eab69a803ab0d3046aa7abef890c4780"
+        const val CORE_SHA256 = "69ecfeb3bf292866dca2c9dba936120cb6839a761111ce19087e30cbff1428a4"
 
         private const val MAX_OPERATION_BYTES = 256
         private const val MAX_TRANSFER_BYTES = 16 * 1024 * 1024
         private const val UINT32_MASK = 0xffff_ffffL
         private const val HEX = "0123456789abcdef"
+        private val assetCoreLock = Any()
+        @Volatile private var assetCore: SharedCore? = null
 
         /** Opens pinned module from Android assets. */
-        fun fromAssets(assets: AssetManager): SharedCore = load(assets.open(ASSET_NAME))
+        fun fromAssets(assets: AssetManager): SharedCore =
+            assetCore ?: synchronized(assetCoreLock) {
+                assetCore ?: load(assets.open(ASSET_NAME)).also { assetCore = it }
+            }
 
         /** Consumes, closes, verifies, parses, and instantiates pinned module stream. */
         fun load(wasm: InputStream): SharedCore {

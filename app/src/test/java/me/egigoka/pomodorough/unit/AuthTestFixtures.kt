@@ -9,21 +9,34 @@ import me.egigoka.pomodorough.data.SyncResponse
 import me.egigoka.pomodorough.data.TokenPair
 import me.egigoka.pomodorough.data.api.PomodoroughService
 import me.egigoka.pomodorough.data.auth.TokenStore
+import me.egigoka.pomodorough.data.auth.TokenStoreState
 import okhttp3.sse.EventSource
 import okhttp3.sse.EventSourceListener
 
 internal class TestTokenStore(initial: TokenPair?) : TokenStore {
     var tokens = initial
+    var pendingLogout: TokenPair? = null
     var clearCalls = 0
 
     override fun read(): TokenPair? = tokens
 
+    override fun state(): TokenStoreState = pendingLogout?.let(TokenStoreState::LogoutPending)
+        ?: tokens?.let(TokenStoreState::Active)
+        ?: TokenStoreState.Empty
+
     override fun write(tokens: TokenPair) {
         this.tokens = tokens
+        pendingLogout = null
+    }
+
+    override fun markLogoutPending(tokens: TokenPair) {
+        check(this.tokens == tokens)
+        pendingLogout = tokens
     }
 
     override fun clear() {
         tokens = null
+        pendingLogout = null
         clearCalls += 1
     }
 }

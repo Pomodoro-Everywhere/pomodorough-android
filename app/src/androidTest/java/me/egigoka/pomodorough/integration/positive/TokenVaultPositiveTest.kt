@@ -6,6 +6,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.serialization.json.Json
 import me.egigoka.pomodorough.data.TokenPair
 import me.egigoka.pomodorough.data.auth.TokenVault
+import me.egigoka.pomodorough.data.auth.TokenStoreState
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -44,6 +45,24 @@ class TokenVaultPositiveTest {
         assertEquals(tokens, vault.read())
         vault.clear()
         assertNull(vault.read())
+    }
+
+    @Test
+    fun pendingLogoutSurvivesVaultReconstructionUntilAtomicClear() {
+        val tokens = TokenPair(
+            accessToken = "access-secret",
+            accessTokenExpiresAt = "2999-01-01T00:00:00Z",
+            refreshToken = "refresh-secret",
+            refreshTokenExpiresAt = "2999-02-01T00:00:00Z",
+        )
+        vault.write(tokens)
+        vault.markLogoutPending(tokens)
+
+        val reconstructed = TokenVault(context, Json)
+
+        assertEquals(TokenStoreState.LogoutPending(tokens), reconstructed.state())
+        reconstructed.clear()
+        assertEquals(TokenStoreState.Empty, reconstructed.state())
     }
 
     private companion object {

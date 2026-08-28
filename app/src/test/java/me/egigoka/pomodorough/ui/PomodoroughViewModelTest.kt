@@ -43,6 +43,7 @@ class PomodoroughViewModelTest {
 
         val signInJob = launch { viewModel.signIn(credentialProvider) }
         viewModel.logout()
+        viewModel.resetLocalAccount()
         viewModel.refresh()
         viewModel.toggleTimer()
         viewModel.finishTimer()
@@ -80,6 +81,7 @@ class PomodoroughViewModelTest {
                 "dismissConflict",
                 "dismissNotice",
                 "logout",
+                "resetLocalAccount",
                 "toggleTimer",
                 "finishTimer",
                 "cancelAndClearTimer",
@@ -103,7 +105,7 @@ class PomodoroughViewModelTest {
             ),
             repository.events.toSet(),
         )
-        assertEquals(26, repository.events.size)
+        assertEquals(27, repository.events.size)
     }
 
     @Test
@@ -206,6 +208,7 @@ private class RecordingTimerRepository : TimerRepositoryContract {
         record("signIn")
     }
     override suspend fun logout() = record("logout")
+    override suspend fun resetLocalAccount() = record("resetLocalAccount")
     override suspend fun deleteAccount(confirmation: String) = record("deleteAccount:$confirmation")
     override fun refresh() = record("refresh")
     override suspend fun toggleTimer() = record("toggleTimer")

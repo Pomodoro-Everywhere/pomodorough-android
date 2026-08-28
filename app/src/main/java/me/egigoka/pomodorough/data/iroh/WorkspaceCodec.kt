@@ -12,9 +12,13 @@ import me.egigoka.pomodorough.data.local.PendingSelectedTaskOperationEntity
 import me.egigoka.pomodorough.data.local.PendingTaskOperationEntity
 
 internal object WorkspaceCodec {
-    fun encode(snapshot: LocalWorkspaceSnapshot): String = IrohJson.strict.encodeToString(snapshot.toStored())
-    fun decode(value: String): LocalWorkspaceSnapshot =
-        IrohJson.strict.decodeFromString<StoredWorkspace>(value).toEntity()
+    fun encode(snapshot: LocalWorkspaceSnapshot): String {
+        return IrohJson.strict.encodeToString(snapshot.toStored())
+    }
+
+    fun decode(value: String): LocalWorkspaceSnapshot {
+        return IrohJson.strict.decodeFromString<StoredWorkspace>(value).toEntity()
+    }
 }
 
 @Serializable

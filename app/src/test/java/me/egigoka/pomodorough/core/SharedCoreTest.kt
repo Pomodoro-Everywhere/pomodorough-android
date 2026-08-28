@@ -1,5 +1,7 @@
 package me.egigoka.pomodorough.core
 
+import com.dylibso.chicory.runtime.Instance
+import com.dylibso.chicory.wasm.Parser
 import java.io.ByteArrayInputStream
 import java.util.Properties
 import java.util.concurrent.Callable
@@ -26,7 +28,7 @@ class SharedCoreTest {
         assertEquals(
             buildJsonObject {
                 put("schemaVersion", JsonPrimitive(1))
-                put("coreVersion", JsonPrimitive("0.1.5"))
+                put("coreVersion", JsonPrimitive("0.1.6"))
             },
             core.dispatch("core.version", "{}"),
         )
@@ -78,6 +80,26 @@ class SharedCoreTest {
     }
 
     @Test
+    fun rejectsNonCanonicalResultEnvelopes() {
+        val invalid = listOf(
+            """{"ok":true,"value":{},"error":"contradiction"}""",
+            """{"ok":true,"value":{},"unknown":1}""",
+            """{"ok":false,"error":"failure","value":{}}""",
+            """{"ok":false,"error":""}""",
+            """{"ok":false,"error":"failure","unknown":1}""",
+        )
+
+        invalid.forEach { envelope ->
+            try {
+                core.parseEnvelope("test.operation", envelope)
+                fail("non-canonical envelope must fail: $envelope")
+            } catch (_: SharedCoreException.Abi) {
+                // Expected.
+            }
+        }
+    }
+
+    @Test
     fun invalidatedInstanceRejectsSubsequentDispatches() {
         val field = SharedCore::class.java.getDeclaredField("unusableCause").apply {
             isAccessible = true
@@ -90,6 +112,58 @@ class SharedCoreTest {
         } catch (error: SharedCoreException.Abi) {
             assertTrue(error.message.orEmpty().contains("unusable after cleanup failure"))
         }
+    }
+
+    @Test
+    fun inconsistentResultOwnershipInvalidatesInstance() {
+        val malformed = SharedCore(
+            freshInstance(),
+            dispatchResultOverride = { 8L shl 32 },
+        )
+
+        try {
+            malformed.dispatch("core.version", "{}")
+            fail("inconsistent result ownership must fail")
+        } catch (error: SharedCoreException.Abi) {
+            assertTrue(error.message.orEmpty().contains("inconsistent pointer/length"))
+        }
+        try {
+            malformed.dispatch("core.version", "{}")
+            fail("ownership uncertainty must invalidate the instance")
+        } catch (error: SharedCoreException.Abi) {
+            assertTrue(error.message.orEmpty().contains("unusable after cleanup failure"))
+        }
+    }
+
+    @Test
+    fun rejectedFreeStatusPreservesPrimaryAndInvalidatesInstance() {
+        val rejected = SharedCore(freshInstance(), freeStatusOverride = { _, _ -> 0L })
+
+        try {
+            rejected.dispatch("missing.operation", "{}")
+            fail("rejected free must fail the dispatch")
+        } catch (error: SharedCoreException.Operation) {
+            assertTrue(error.suppressed.any { it.message.orEmpty().contains("rejected buffer") })
+        }
+        try {
+            rejected.dispatch("core.version", "{}")
+            fail("cleanup uncertainty must invalidate the instance")
+        } catch (error: SharedCoreException.Abi) {
+            assertTrue(error.message.orEmpty().contains("unusable after cleanup failure"))
+        }
+    }
+
+    @Test
+    fun bundledWasmReportsInvalidAndDuplicateFrees() {
+        val instance = freshInstance()
+        val allocate = instance.export("pomodorough_alloc")
+        val free = instance.export("pomodorough_free_v2")
+        val pointer = allocate.apply(8).single()
+
+        assertEquals(0L, free.apply(pointer, 7).single())
+        assertEquals(1L, free.apply(pointer, 8).single())
+        assertEquals(0L, free.apply(pointer, 8).single())
+        assertEquals(0L, free.apply(0, 8).single())
     }
 
     @Test
@@ -155,5 +229,11 @@ class SharedCoreTest {
 
         assertEquals(SharedCore.CORE_COMMIT, properties.getProperty("CORE_COMMIT"))
         assertEquals(SharedCore.CORE_SHA256, properties.getProperty("CORE_SHA256"))
+    }
+
+    private fun freshInstance(): Instance {
+        val bytes = requireNotNull(javaClass.classLoader?.getResourceAsStream("pomodorough_core.wasm"))
+            .use { it.readBytes() }
+        return Instance.builder(Parser.parse(bytes)).build()
     }
 }

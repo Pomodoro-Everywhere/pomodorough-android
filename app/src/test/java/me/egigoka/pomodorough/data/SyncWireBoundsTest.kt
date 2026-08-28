@@ -1,11 +1,21 @@
 package me.egigoka.pomodorough.data
 
 import java.time.Instant
+import me.egigoka.pomodorough.core.SharedCore
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class SyncWireBoundsTest {
+    private val core by lazy {
+        SharedCore.load(
+            requireNotNull(javaClass.classLoader?.getResourceAsStream("pomodorough_core.wasm")),
+        )
+    }
+    private val hlc by lazy {
+        CoreHlcDispatcher { operation, input -> core.dispatch(operation, input) }
+    }
+
     @Test
     fun exactWireAndSkewBoundariesAreAccepted() {
         val maximum = SyncWireBounds.MaxSafeInteger
@@ -28,7 +38,7 @@ class SyncWireBoundsTest {
     fun twoStampReservationAcceptsExactSequenceAndCounterHeadroom() {
         val maximum = SyncWireBounds.MaxSafeInteger
 
-        val stamps = SyncWireBounds.reserve(
+        val stamps = reserve(
             nowMs = 100,
             retainedWallMs = 100,
             retainedCounter = maximum - 2,
@@ -45,13 +55,13 @@ class SyncWireBoundsTest {
     fun reservationRejectsSequenceCounterAndSkewOverflow() {
         val maximum = SyncWireBounds.MaxSafeInteger
         assertThrows(IllegalArgumentException::class.java) {
-            SyncWireBounds.reserve(100, 100, 0, maximum, 1, withDeviceSequences = true)
+            reserve(100, 100, 0, maximum, 1, withDeviceSequences = true)
         }
         assertThrows(IllegalArgumentException::class.java) {
-            SyncWireBounds.reserve(100, 100, maximum, 0, 1, withDeviceSequences = false)
+            reserve(100, 100, maximum, 0, 1, withDeviceSequences = false)
         }
         assertThrows(IllegalArgumentException::class.java) {
-            SyncWireBounds.reserve(
+            reserve(
                 nowMs = 100,
                 retainedWallMs = 100 + SyncWireBounds.MaxClockSkewMs + 1,
                 retainedCounter = 0,
@@ -100,16 +110,35 @@ class SyncWireBoundsTest {
     }
 
     @Test
-    fun mergeRebasesPoisonedLocalWallToTrustedServerTime() {
+    fun coreTickRebasesPoisonedLocalWallToTrustedServerTime() {
         assertEquals(
-            100L to 7L,
-            SyncWireBounds.merge(
-                nowMs = 100,
-                localWallMs = 3_600_100,
-                localCounter = SyncWireBounds.MaxSafeInteger,
-                serverWallMs = 100,
-                serverCounter = 7,
+            CoreHlc(100L, 8L),
+            hlc.tick(
+                physicalNowMs = 100,
+                local = CoreHlc(0, 0),
+                remote = CoreHlc(100, 7),
             ),
+        )
+    }
+
+    private fun reserve(
+        nowMs: Long,
+        retainedWallMs: Long,
+        retainedCounter: Long,
+        retainedDeviceSequence: Long,
+        count: Int,
+        withDeviceSequences: Boolean,
+    ): List<SyncWireBounds.MutationStamp> {
+        val clocks = hlc.reserve(
+            physicalNowMs = nowMs,
+            retained = CoreHlc(retainedWallMs, retainedCounter),
+            count = count,
+        )
+        return SyncWireBounds.mutationStamps(
+            nowMs,
+            clocks,
+            retainedDeviceSequence,
+            withDeviceSequences,
         )
     }
 }

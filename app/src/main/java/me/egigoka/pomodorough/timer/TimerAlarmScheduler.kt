@@ -29,25 +29,27 @@ class TimerAlarmScheduler(context: Context) {
             alarmManager.setExactAndAllowWhileIdle(
                 AlarmManager.RTC_WAKEUP,
                 triggerAt,
-                pendingIntent(),
+                pendingIntent(timer.id),
             )
         } else {
             alarmManager.setAndAllowWhileIdle(
                 AlarmManager.RTC_WAKEUP,
                 triggerAt,
-                pendingIntent(),
+                pendingIntent(timer.id),
             )
         }
     }
 
     fun cancel() {
-        alarmManager.cancel(pendingIntent())
+        alarmManager.cancel(pendingIntent(null))
     }
 
-    private fun pendingIntent(): PendingIntent = PendingIntent.getBroadcast(
+    private fun pendingIntent(timerId: String?): PendingIntent = PendingIntent.getBroadcast(
         appContext,
         RequestCode,
-        Intent(appContext, TimerAlarmReceiver::class.java),
+        Intent(appContext, TimerAlarmReceiver::class.java).apply {
+            timerId?.let { putExtra(TimerAlarmReceiver.TimerIdExtra, it) }
+        },
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
 
