@@ -330,10 +330,19 @@ internal class CoreCompletionDispatcher(
             dayEnd = bounds.second,
         )
         val output = decode(wireJson.encodeToString(wire))
+        val canonicalHasSource = input.canonical.hasExactSource(input.commandId, input.timerId)
+        val sourceAccepted = !input.sourceFinishPending && canonicalHasSource
+        val selected = if (input.requireCanonical || sourceAccepted) {
+            input.canonical
+        } else {
+            input.optimistic
+        }
         if (output.expired || output.commandEligible || output.reserveGeneratedBreak ||
             output.selectedPhase != null || output.queueAutoBreak ||
             output.generatedBreakPhase?.let(::validPhase) == false ||
-            !output.generatedBreakEligible && output.generatedBreakPhase != null
+            output.generatedBreakEligible != (output.generatedBreakPhase != null) ||
+            output.generatedBreakEligible != selected.hasExactSource(input.commandId, input.timerId) ||
+            output.sourceAlreadyAccepted != sourceAccepted
         ) invalidOutput()
         return CoreGeneratedBreakDecision(
             output.generatedBreakEligible,
@@ -364,6 +373,13 @@ internal class CoreCompletionDispatcher(
 
     private fun TimerProjection.toCoreProjection() =
         CoreCompletionProjection(timer, history)
+
+    private fun TimerProjection.hasExactSource(commandId: String, timerId: String): Boolean =
+        timer?.id == timerId && timer.phase == TimerPhase.Focus && timer.status == "completed" &&
+            history.any {
+                it.timerId == timerId && it.commandId == commandId &&
+                    it.phase == TimerPhase.Focus && it.status == "completed"
+            }
 
     private fun validPhase(phase: String): Boolean = phase in setOf(
         TimerPhase.Focus,

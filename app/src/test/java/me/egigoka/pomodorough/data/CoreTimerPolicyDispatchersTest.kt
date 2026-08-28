@@ -66,6 +66,96 @@ class CoreTimerPolicyDispatchersTest {
     }
 
     @Test
+    fun completionDispatcherRejectsEligibleGeneratedBreakWithoutPhase() {
+        val dispatcher = CoreCompletionDispatcher { _, _ ->
+            buildJsonObject {
+                put("expired", false)
+                put("commandEligible", false)
+                put("reserveGeneratedBreak", false)
+                put("queueAutoBreak", false)
+                put("generatedBreakEligible", true)
+                put("sourceAlreadyAccepted", false)
+            }
+        }
+
+        assertThrows(CoreProjectionException.InvalidOutput::class.java) {
+            dispatcher.generatedBreak(generatedBreakInput())
+        }
+    }
+
+    @Test
+    fun completionDispatcherRejectsEligibleGeneratedBreakWithoutExactSourceEvidence() {
+        val dispatcher = CoreCompletionDispatcher { _, _ ->
+            buildJsonObject {
+                put("expired", false)
+                put("commandEligible", false)
+                put("reserveGeneratedBreak", false)
+                put("queueAutoBreak", false)
+                put("generatedBreakEligible", true)
+                put("generatedBreakPhase", TimerPhase.ShortBreak)
+                put("sourceAlreadyAccepted", false)
+            }
+        }
+
+        assertThrows(CoreProjectionException.InvalidOutput::class.java) {
+            dispatcher.generatedBreak(generatedBreakInput())
+        }
+    }
+
+    @Test
+    fun completionDispatcherRejectsAcceptedSourceWithoutEligibility() {
+        val dispatcher = CoreCompletionDispatcher { _, _ ->
+            buildJsonObject {
+                put("expired", false)
+                put("commandEligible", false)
+                put("reserveGeneratedBreak", false)
+                put("queueAutoBreak", false)
+                put("generatedBreakEligible", false)
+                put("sourceAlreadyAccepted", true)
+            }
+        }
+
+        assertThrows(CoreProjectionException.InvalidOutput::class.java) {
+            dispatcher.generatedBreak(generatedBreakInput())
+        }
+    }
+
+    @Test
+    fun completionDispatcherAcceptsExactGeneratedBreakEvidence() {
+        val dispatcher = CoreCompletionDispatcher { _, _ ->
+            buildJsonObject {
+                put("expired", false)
+                put("commandEligible", false)
+                put("reserveGeneratedBreak", false)
+                put("queueAutoBreak", false)
+                put("generatedBreakEligible", true)
+                put("generatedBreakPhase", TimerPhase.ShortBreak)
+                put("sourceAlreadyAccepted", true)
+            }
+        }
+        val completed = timer(TimerStatus.Completed, "2026-08-25T12:00:00Z", 1_500_000)
+        val history = HistoryItem(
+            id = "history-4",
+            timerId = "timer-4",
+            commandId = "finish-4",
+            phase = TimerPhase.Focus,
+            status = TimerStatus.Completed,
+            plannedDurationMs = 1_500_000,
+            completedAt = "2026-08-25T12:00:00Z",
+            endedAt = "2026-08-25T12:00:00Z",
+        )
+        val input = generatedBreakInput().copy(
+            canonical = TimerProjection(completed, listOf(history)),
+            optimistic = TimerProjection(completed, listOf(history)),
+        )
+
+        assertEquals(
+            CoreGeneratedBreakDecision(true, TimerPhase.ShortBreak, true),
+            dispatcher.generatedBreak(input),
+        )
+    }
+
+    @Test
     fun hlcBatchUsesTypedCoreTicksAndAcceptsFutureCounterPolicy() {
         val inputs = mutableListOf<String>()
         val counters = ArrayDeque(listOf(40L, 80L))
