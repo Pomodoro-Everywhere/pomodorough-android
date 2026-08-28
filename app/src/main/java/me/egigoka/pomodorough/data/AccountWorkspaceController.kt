@@ -28,6 +28,11 @@ internal data class AccountAttemptIdentity(
     val requestId: String?,
 )
 
+internal data class AccountAdmissionSnapshot(
+    val generation: Long,
+    val deletionQuarantined: Boolean,
+)
+
 internal data class AccountBootstrapCapture(
     val response: SyncResponse,
     val clockSample: ServerClockSample?,
@@ -78,11 +83,15 @@ internal class AccountWorkspaceController(
 ) {
     private val actionMutex = Mutex()
     private val signInInFlight = AtomicBoolean(false)
-    @Volatile private var currentGeneration = 0L
+    @Volatile private var currentAdmission = AccountAdmissionSnapshot(
+        generation = 0L,
+        deletionQuarantined = false,
+    )
     @Volatile private var currentBootstrap: AccountBootstrapCapture? = null
     @Volatile private var currentAccountSwitch: AccountSwitchCandidate? = null
 
-    val generation: Long get() = currentGeneration
+    val generation: Long get() = currentAdmission.generation
+    val admissionSnapshot: AccountAdmissionSnapshot get() = currentAdmission
     val bootstrap: AccountBootstrapCapture? get() = currentBootstrap
     val accountSwitchCandidate: AccountSwitchCandidate? get() = currentAccountSwitch
 
@@ -100,19 +109,28 @@ internal class AccountWorkspaceController(
     }
 
     fun attemptIdentity(requestId: String?): AccountAttemptIdentity =
-        AccountAttemptIdentity(currentGeneration, requestId)
+        AccountAttemptIdentity(generation, requestId)
 
     fun owns(identity: AccountAttemptIdentity, requestId: String?): Boolean =
-        identity.accountGeneration == currentGeneration && identity.requestId == requestId
+        identity.accountGeneration == generation && identity.requestId == requestId
+
+    fun beginDeletionAdmission(): AccountWorkspaceTransition.GenerationAdvanced {
+        currentAdmission = currentAdmission.copy(deletionQuarantined = true)
+        return advanceGeneration(AccountWorkspaceReason.DeletionStarted)
+    }
+
+    fun setDeletionAdmissionQuarantined(quarantined: Boolean) {
+        currentAdmission = currentAdmission.copy(deletionQuarantined = quarantined)
+    }
 
     fun advanceGeneration(
         reason: AccountWorkspaceReason,
     ): AccountWorkspaceTransition.GenerationAdvanced {
-        val previous = currentGeneration
-        currentGeneration += 1
+        val previous = currentAdmission.generation
+        currentAdmission = currentAdmission.copy(generation = previous + 1)
         return AccountWorkspaceTransition.GenerationAdvanced(
             previousGeneration = previous,
-            generation = currentGeneration,
+            generation = currentAdmission.generation,
             reason = reason,
         ).also(eventSink::emit)
     }
@@ -154,7 +172,7 @@ internal class AccountWorkspaceController(
         currentBootstrap = capture
         return AccountWorkspaceTransition.BootstrapCaptured(
             capture = capture,
-            generation = currentGeneration,
+            generation = generation,
             reason = reason,
         ).also(eventSink::emit)
     }
@@ -176,7 +194,7 @@ internal class AccountWorkspaceController(
         advanceGeneration(AccountWorkspaceReason.AccountSwitchDetected)
         val candidate = AccountSwitchCandidate(profile, bootstrap, clockSample)
         currentAccountSwitch = candidate
-        eventSink.emit(AccountWorkspaceTransition.AccountSwitchCaptured(candidate, currentGeneration))
+        eventSink.emit(AccountWorkspaceTransition.AccountSwitchCaptured(candidate, generation))
         return candidate
     }
 
@@ -190,7 +208,7 @@ internal class AccountWorkspaceController(
     ): AccountWorkspaceTransition.BootstrapCleared {
         currentBootstrap = null
         return AccountWorkspaceTransition.BootstrapCleared(
-            generation = currentGeneration,
+            generation = generation,
             reason = reason,
         ).also(eventSink::emit)
     }

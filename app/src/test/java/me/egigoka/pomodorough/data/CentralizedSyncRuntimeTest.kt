@@ -166,6 +166,12 @@ private class FakeCentralizedSyncRuntimeHost(
 
     override fun accountGeneration(): Long = 1
 
+    override fun revisionStreamAdmission() = RevisionStreamAdmission(
+        accountGeneration = accountGeneration(),
+        eligible = snapshot.signedIn && snapshot.centralized &&
+            !snapshot.resolutionPending && !snapshot.accountSwitchPending,
+    )
+
     override suspend fun prepareSyncAttempt(identity: SyncAttemptIdentity): SyncAttempt? = prepare(identity)
 
     override suspend fun accept(event: CentralizedSyncRuntimeEvent) {

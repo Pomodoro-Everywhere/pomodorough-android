@@ -11,6 +11,7 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import me.egigoka.pomodorough.data.auth.AuthenticationRequired
 import okhttp3.Request
 import okhttp3.sse.EventSource
 import okhttp3.sse.EventSourceListener
@@ -110,9 +111,41 @@ class RevisionStreamLifecycleTest {
         lifecycle.shutdown()
     }
 
+    @Test
+    fun authenticationFailureAdmittedBeforeDeletionCarriesStaleGeneration() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        var accountGeneration = 7L
+        var authenticationAdvances = 0
+        val expiredGenerations = mutableListOf<Long>()
+        val lifecycle = lifecycle(
+            dispatcher = dispatcher,
+            eligible = {
+                val admitted = true
+                accountGeneration += 1 // Account deletion is prepared after this admission decision.
+                admitted
+            },
+            accountGeneration = { accountGeneration },
+            expireAuthentication = { admittedGeneration ->
+                expiredGenerations += admittedGeneration
+                if (admittedGeneration == accountGeneration) authenticationAdvances += 1
+            },
+        ) { throw AuthenticationRequired() }
+
+        lifecycle.onForeground()
+        runCurrent()
+
+        assertEquals(8L, accountGeneration)
+        assertEquals(listOf(7L), expiredGenerations)
+        assertEquals(0, authenticationAdvances)
+        lifecycle.shutdown()
+    }
+
     private fun lifecycle(
         dispatcher: TestDispatcher,
         emit: (RevisionStreamEvent) -> Unit = {},
+        eligible: () -> Boolean = { true },
+        accountGeneration: () -> Long = { 0L },
+        expireAuthentication: suspend (Long) -> Unit = {},
         open: suspend (EventSourceListener) -> EventSource,
     ): RevisionStreamLifecycle {
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
@@ -122,9 +155,13 @@ class RevisionStreamLifecycleTest {
             json = Json,
             reconnectDelayMs = 5_000,
             initialOnline = true,
-            eligible = { true },
+            admission = {
+                val generation = accountGeneration()
+                RevisionStreamAdmission(generation, eligible())
+            },
             open = open,
             emit = emit,
+            expireAuthentication = expireAuthentication,
         )
     }
 }

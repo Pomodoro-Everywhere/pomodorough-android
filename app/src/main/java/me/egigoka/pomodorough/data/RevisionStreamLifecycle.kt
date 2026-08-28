@@ -24,8 +24,19 @@ internal sealed interface RevisionStreamEvent {
 
     data object Unauthorized : RevisionStreamEvent
 
-    data object AuthenticationExpired : RevisionStreamEvent
+    data class AuthenticationExpired(val accountGeneration: Long) : RevisionStreamEvent
 }
+
+private sealed interface RevisionStreamSignal {
+    data object Open : RevisionStreamSignal
+    data object Close : RevisionStreamSignal
+    data class Barrier(val completed: kotlinx.coroutines.CompletableDeferred<Unit>) : RevisionStreamSignal
+}
+
+internal data class RevisionStreamAdmission(
+    val accountGeneration: Long,
+    val eligible: Boolean,
+)
 
 internal class RevisionStreamLifecycle(
     scope: CoroutineScope,
@@ -33,17 +44,17 @@ internal class RevisionStreamLifecycle(
     private val json: Json,
     private val reconnectDelayMs: Long = 5_000,
     initialOnline: Boolean,
-    private val eligible: () -> Boolean,
+    private val admission: () -> RevisionStreamAdmission,
     private val open: suspend (EventSourceListener) -> EventSource,
     private val emit: (RevisionStreamEvent) -> Unit,
-    private val expireAuthentication: suspend () -> Unit = {
-        emit(RevisionStreamEvent.AuthenticationExpired)
+    private val expireAuthentication: suspend (Long) -> Unit = { generation ->
+        emit(RevisionStreamEvent.AuthenticationExpired(generation))
     },
 ) {
     private val lifecycleJob = SupervisorJob(scope.coroutineContext[Job])
     private val lifecycleScope = CoroutineScope(scope.coroutineContext + lifecycleJob)
     private val streamMutex = Mutex()
-    private val signals = Channel<Boolean>(Channel.UNLIMITED)
+    private val signals = Channel<RevisionStreamSignal>(Channel.UNLIMITED)
     private var eventSource: EventSource? = null
 
     @Volatile
@@ -81,11 +92,17 @@ internal class RevisionStreamLifecycle(
     }
 
     fun requestOpen() {
-        signals.trySend(true)
+        signals.trySend(RevisionStreamSignal.Open)
     }
 
     fun requestClose() {
-        signals.trySend(false)
+        signals.trySend(RevisionStreamSignal.Close)
+    }
+
+    suspend fun awaitPendingSignals() {
+        val completed = kotlinx.coroutines.CompletableDeferred<Unit>()
+        signals.send(RevisionStreamSignal.Barrier(completed))
+        completed.await()
     }
 
     suspend fun closeNow() {
@@ -102,13 +119,17 @@ internal class RevisionStreamLifecycle(
     }
 
     private suspend fun consumeSignals() {
-        for (shouldOpen in signals) {
+        for (signal in signals) {
             try {
-                if (shouldOpen) openNow() else closeNow()
+                when (signal) {
+                    RevisionStreamSignal.Open -> openNow()
+                    RevisionStreamSignal.Close -> closeNow()
+                    is RevisionStreamSignal.Barrier -> signal.completed.complete(Unit)
+                }
             } catch (error: CancellationException) {
                 throw error
             } catch (_: Exception) {
-                if (shouldOpen) scheduleOpenRetry(generation)
+                if (signal == RevisionStreamSignal.Open) scheduleOpenRetry(generation)
             }
         }
     }
@@ -116,11 +137,13 @@ internal class RevisionStreamLifecycle(
     private suspend fun openNow() {
         initialized.await()
         streamMutex.withLock {
-            if (!foreground || !online || !eligible() || eventSource != null) return
+            if (!foreground || !online) return
+            val admitted = admission()
+            if (!admitted.eligible || eventSource != null) return
             try {
                 eventSource = open(listener())
             } catch (_: AuthenticationRequired) {
-                expireAuthentication()
+                expireAuthentication(admitted.accountGeneration)
             }
         }
     }
@@ -148,7 +171,7 @@ internal class RevisionStreamLifecycle(
             val reconnectGeneration = streamMutex.withLock {
                 if (eventSource !== source) return@withLock null
                 eventSource = null
-                generation.takeIf { foreground && online && eligible() }
+                generation.takeIf { foreground && online && admission().eligible }
             }
             if (responseCode == 401) emit(RevisionStreamEvent.Unauthorized)
             reconnectGeneration?.let { scheduleOpenRetry(it) }

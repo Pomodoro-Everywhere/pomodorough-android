@@ -64,13 +64,17 @@ internal sealed interface CentralizedSyncRuntimeEvent {
         val error: Throwable,
     ) : CentralizedSyncRuntimeEvent
 
-    data object RevisionAuthenticationExpired : CentralizedSyncRuntimeEvent
+    data class RevisionAuthenticationExpired(
+        val accountGeneration: Long,
+    ) : CentralizedSyncRuntimeEvent
 }
 
 internal interface CentralizedSyncRuntimeHost {
     fun snapshot(): CentralizedSyncRuntimeSnapshot
 
     fun accountGeneration(): Long
+
+    fun revisionStreamAdmission(): RevisionStreamAdmission
 
     suspend fun prepareSyncAttempt(identity: SyncAttemptIdentity): SyncAttempt?
 
@@ -109,11 +113,11 @@ internal class CentralizedSyncRuntime(
         json = json,
         reconnectDelayMs = revisionReconnectDelayMs,
         initialOnline = initialOnline,
-        eligible = ::revisionStreamEligible,
+        admission = host::revisionStreamAdmission,
         open = openRevisionStream,
         emit = ::acceptRevisionEvent,
-        expireAuthentication = {
-            host.accept(CentralizedSyncRuntimeEvent.RevisionAuthenticationExpired)
+        expireAuthentication = { accountGeneration ->
+            host.accept(CentralizedSyncRuntimeEvent.RevisionAuthenticationExpired(accountGeneration))
         },
     )
 
@@ -163,6 +167,8 @@ internal class CentralizedSyncRuntime(
     fun requestRevisionClose() = revisionLifecycle.requestClose()
 
     suspend fun closeRevisionStream() = revisionLifecycle.closeNow()
+
+    suspend fun awaitPendingRevisionSignals() = revisionLifecycle.awaitPendingSignals()
 
     suspend fun shutdown() {
         revisionLifecycle.shutdown()
@@ -288,16 +294,12 @@ internal class CentralizedSyncRuntime(
                 }
             }
             RevisionStreamEvent.Unauthorized -> requestSync(force = true)
-            RevisionStreamEvent.AuthenticationExpired -> scope.launch {
-                host.accept(CentralizedSyncRuntimeEvent.RevisionAuthenticationExpired)
+            is RevisionStreamEvent.AuthenticationExpired -> scope.launch {
+                host.accept(
+                    CentralizedSyncRuntimeEvent.RevisionAuthenticationExpired(event.accountGeneration),
+                )
             }
         }
-    }
-
-    private fun revisionStreamEligible(): Boolean {
-        val state = host.snapshot()
-        return state.signedIn && state.centralized &&
-            !state.resolutionPending && !state.accountSwitchPending
     }
 }
 
