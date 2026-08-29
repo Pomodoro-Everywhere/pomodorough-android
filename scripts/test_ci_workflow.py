@@ -108,6 +108,11 @@ class CIWorkflowTests(unittest.TestCase):
         self.assertIn("${{ matrix.locale }}", connected_job)
         self.assertIn("TEST_LOCALE=${{ matrix.locale }}", connected_job)
         self.assertIn("TEST_CLASS=${{ matrix.test-class }}", connected_job)
+        self.assertIn(
+            "TEST_LOCALE=${{ matrix.locale }} TEST_CLASS=${{ matrix.test-class }} "
+            ".github/scripts/run-instrumented-tests.sh",
+            connected_job,
+        )
         self.assertIn("locale-${{ matrix.locale }}", connected_job)
 
     def test_instrumented_runner_applies_and_verifies_requested_app_locale(self) -> None:

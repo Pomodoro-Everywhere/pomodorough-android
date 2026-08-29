@@ -283,9 +283,7 @@ jobs:
           disable-animations: true
           script: |
             ./gradlew --no-daemon --stacktrace :app:assembleDebug :app:assembleDebugAndroidTest
-            FONT_SCALE=${{ matrix.font-scale }} TEST_LOCALE=${{ matrix.locale }} \
-              TEST_CLASS=${{ matrix.test-class }} \
-              .github/scripts/run-instrumented-tests.sh
+            FONT_SCALE=${{ matrix.font-scale }} TEST_LOCALE=${{ matrix.locale }} TEST_CLASS=${{ matrix.test-class }} .github/scripts/run-instrumented-tests.sh
 
       - name: Retain connected reports, screenshots, and diagnostics
         if: always()
