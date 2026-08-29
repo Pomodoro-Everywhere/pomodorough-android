@@ -76,8 +76,8 @@ test "$app_signer" = "$test_signer"
 
 adb uninstall me.egigoka.pomodorough.test >/dev/null 2>&1 || true
 adb uninstall me.egigoka.pomodorough >/dev/null 2>&1 || true
-adb install "$smoke_apk"
-adb install "$smoke_test_apk"
+adb install --no-incremental "$smoke_apk"
+adb install --no-incremental "$smoke_test_apk"
 installed_path="$(adb shell pm path me.egigoka.pomodorough | sed -n 's/^package://p' | tr -d '\r')"
 test -n "$installed_path"
 adb pull "$installed_path" "$installed_apk"

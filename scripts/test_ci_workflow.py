@@ -288,7 +288,8 @@ class CIWorkflowTests(unittest.TestCase):
         script = SMOKE_SCRIPT.read_text(encoding="utf-8")
         self.assertTrue(script.startswith("#!/usr/bin/env bash\nset -euo pipefail\n"))
         self.assertIn("release_apks=(dist/*-release-unsigned.apk)", script)
-        self.assertIn("adb install \"$smoke_apk\"", script)
+        self.assertIn('adb install --no-incremental "$smoke_apk"', script)
+        self.assertEqual(2, script.count("adb install --no-incremental "))
         self.assertIn("grep -Fq 'Status: ok'", script)
 
 
