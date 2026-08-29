@@ -45,6 +45,7 @@ class CIWorkflowTests(unittest.TestCase):
             "cargo +1.97.1 build --release --target wasm32-unknown-unknown --locked",
             workflow,
         )
+        self.assertIn("canonicalize_wasm_artifact.py", workflow)
         self.assertIn("verify_wasm_artifact.py", workflow)
         self.assertIn('--sha256 "$CORE_SHA256"', workflow)
         self.assertIn("scripts/verify_shared_core_provenance.py", workflow)
@@ -128,6 +129,7 @@ class CIWorkflowTests(unittest.TestCase):
         self.assertIn('-e expectedLocale "$test_locale"', script)
         self.assertIn('-e class "$test_class"', script)
         self.assertIn('shard_count="${TEST_SHARD_COUNT:-8}"', script)
+        self.assertIn('expected_test_count="${EXPECTED_TEST_COUNT:-282}"', script)
         self.assertIn('-e numShards "$shard_count" -e shardIndex "$shard_index"', script)
         self.assertIn('instrumentation-shard-$shard_index.txt', script)
         self.assertIn('completed_tests=$((completed_tests + completed))', script)
