@@ -134,7 +134,7 @@ class CIWorkflowTests(unittest.TestCase):
         self.assertIn('-e expectedLocale "$test_locale"', script)
         self.assertIn('-e class "$test_class"', script)
         self.assertIn('shard_count="${TEST_SHARD_COUNT:-8}"', script)
-        self.assertIn('expected_test_count="${EXPECTED_TEST_COUNT:-282}"', script)
+        self.assertIn('expected_test_count="${EXPECTED_TEST_COUNT:-281}"', script)
         self.assertIn('-e numShards "$shard_count" -e shardIndex "$shard_index"', script)
         self.assertIn('instrumentation-shard-$shard_index.txt', script)
         self.assertIn('completed_tests=$((completed_tests + completed))', script)

@@ -382,9 +382,9 @@ class GeneratedAutoBreakDependencyTest {
         val finish = queued.first { it.type == CommandType.Finish }
         assertEquals(TimerPhase.ShortBreak, queued.first { it.generatedByFinishCommandId != null }.phase)
         val globalHistory = listOf(
-            precedingFocusHistory("global-3", 57),
-            precedingFocusHistory("global-2", 58),
-            precedingFocusHistory("global-1", 59),
+            precedingFocusHistory("global-3", 1),
+            precedingFocusHistory("global-2", 2),
+            precedingFocusHistory("global-1", 3),
         )
         val sourceOccurredAt = Instant.parse(requireNotNull(finish.physicalOccurredAt))
         assertTrue(globalHistory.all { Instant.parse(it.completedAt).isBefore(sourceOccurredAt) })
@@ -516,7 +516,7 @@ class GeneratedAutoBreakDependencyTest {
                                                 (1..3).map {
                                                     precedingFocusHistory(
                                                         "matrix-global-$caseIndex-$it",
-                                                        56 + it,
+                                                        it,
                                                     )
                                                 }
                                             } else {
@@ -1048,7 +1048,11 @@ class GeneratedAutoBreakDependencyTest {
                 settings = TimerSettings(autoStartBreaks = true),
             ),
         )
-        val repository = testRepository(context, database.timerDao())
+        val repository = testRepository(
+            context,
+            database.timerDao(),
+            currentTimeMillis = { TestPhysicalNowMs },
+        )
         repository.initialize()
         assertTrue(repository.finishExpiredTimer())
         assertEquals(TimerPhase.ShortBreak, repository.state.value.timer?.phase)
@@ -1068,19 +1072,19 @@ class GeneratedAutoBreakDependencyTest {
         phase = TimerPhase.Focus,
         status = TimerStatus.Completed,
         plannedDurationMs = focus.plannedDurationMs,
-        completedAt = "2026-01-01T00:00:00Z",
-        endedAt = "2026-01-01T00:00:00Z",
+        completedAt = "2026-01-01T00:04:00Z",
+        endedAt = "2026-01-01T00:04:00Z",
     )
 
     private fun precedingFocusHistory(id: String, minute: Int) = testHistory(id).copy(
-        completedAt = "2025-12-31T23:${minute.toString().padStart(2, '0')}:00Z",
-        endedAt = "2025-12-31T23:${minute.toString().padStart(2, '0')}:00Z",
+        completedAt = "2026-01-01T00:${minute.toString().padStart(2, '0')}:00Z",
+        endedAt = "2026-01-01T00:${minute.toString().padStart(2, '0')}:00Z",
     )
 
     private fun completedTimer(focus: CanonicalTimer) = focus.copy(
         status = TimerStatus.Completed,
         elapsedAtAnchorMs = focus.plannedDurationMs,
-        anchorAt = "2026-01-01T00:25:00Z",
+        anchorAt = "2026-01-01T00:04:00Z",
     )
 
     private fun acceptedFinishResponse(
@@ -1092,7 +1096,7 @@ class GeneratedAutoBreakDependencyTest {
     ): SyncResponse {
         val source = completedHistory(focus, finish.id)
         val preceding = (1 until completedCount).map {
-            precedingFocusHistory("global-$it", 56 + it)
+            precedingFocusHistory("global-$it", it)
         }
         return response(
             revision = revision,
@@ -1129,8 +1133,8 @@ class GeneratedAutoBreakDependencyTest {
         revision = revision,
         canonicalTimer = timer,
         history = history,
-        serverTime = "2026-01-01T00:00:00Z",
-        serverHlcWallMs = 1_767_225_600_000 + revision,
+        serverTime = "2026-01-01T00:04:00Z",
+        serverHlcWallMs = TestPhysicalNowMs + revision,
         serverHlcCounter = 0,
         durationAcknowledgements = emptyList(),
         durationsMs = me.egigoka.pomodorough.data.DurationsMs(),
@@ -1142,5 +1146,6 @@ class GeneratedAutoBreakDependencyTest {
 
     private companion object {
         const val LegacyResolutionDatabaseName = "legacy-resolution-migration-test"
+        const val TestPhysicalNowMs = 1_767_225_840_000L
     }
 }
