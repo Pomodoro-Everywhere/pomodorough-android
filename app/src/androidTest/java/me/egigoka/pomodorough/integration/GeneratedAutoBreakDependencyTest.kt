@@ -175,6 +175,7 @@ class GeneratedAutoBreakDependencyTest {
             status = TimerStatus.Paused,
             elapsedAtAnchorMs = focus.plannedDurationMs / 2,
         )
+        val localizedPaused = paused.copy(anchorAt = "1999-12-31T23:56:00Z")
         val service = TestRepositoryService(profile).apply {
             bootstrapResponse = response(timer = focus, autoStart = true)
             syncHandler = { request ->
@@ -197,7 +198,7 @@ class GeneratedAutoBreakDependencyTest {
         awaitState { repository.state.value.pendingCount == 0 }
 
         assertEquals(1, service.syncCalls)
-        assertEquals(paused, repository.state.value.timer)
+        assertEquals(localizedPaused, repository.state.value.timer)
         assertNull(repository.state.value.conflict)
         assertEquals(TimerPhase.Focus, repository.state.value.settings.selectedPhase)
         assertEquals(focus.id, database.timerDao().localState()?.ownedTimerId)
