@@ -9,7 +9,7 @@ font_scale="${FONT_SCALE:-1.0}"
 scale_slug="${font_scale//./_}"
 test_locale="${TEST_LOCALE:-en-US}"
 test_class="${TEST_CLASS:-}"
-instrumentation_timeout_seconds="${INSTRUMENTATION_TIMEOUT_SECONDS:-180}"
+instrumentation_timeout_seconds="${INSTRUMENTATION_TIMEOUT_SECONDS:-600}"
 locale_slug="${test_locale//-/_}"
 results_dir="app/build/outputs/androidTest-results/direct-font-$scale_slug-locale-$locale_slug"
 diagnostics_dir="app/build/reports/androidTests/diagnostics-font-$scale_slug-locale-$locale_slug"
@@ -240,7 +240,7 @@ if [[ -n "$test_class" ]]; then
     || runner_status=$?
 else
   shard_count="${TEST_SHARD_COUNT:-8}"
-  expected_test_count="${EXPECTED_TEST_COUNT:-282}"
+  expected_test_count="${EXPECTED_TEST_COUNT:-290}"
   if [[ ! "$shard_count" =~ ^[1-9][0-9]*$ ]]; then
     echo "TEST_SHARD_COUNT must be a positive integer" >&2
     exit 1

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -121,6 +122,10 @@ class CIWorkflowTests(unittest.TestCase):
         self.assertIn('test_locale="${TEST_LOCALE:-en-US}"', script)
         self.assertIn('test_class="${TEST_CLASS:-}"', script)
         self.assertIn(
+            'instrumentation_timeout_seconds="${INSTRUMENTATION_TIMEOUT_SECONDS:-600}"',
+            script,
+        )
+        self.assertIn(
             'cmd locale set-app-locales "$package_name" --user 0 --locales "$test_locale"',
             script,
         )
@@ -134,7 +139,7 @@ class CIWorkflowTests(unittest.TestCase):
         self.assertIn('-e expectedLocale "$test_locale"', script)
         self.assertIn('-e class "$test_class"', script)
         self.assertIn('shard_count="${TEST_SHARD_COUNT:-8}"', script)
-        self.assertIn('expected_test_count="${EXPECTED_TEST_COUNT:-282}"', script)
+        self.assertIn('expected_test_count="${EXPECTED_TEST_COUNT:-290}"', script)
         self.assertIn('-e numShards "$shard_count" -e shardIndex "$shard_index"', script)
         self.assertIn('instrumentation-shard-$shard_index.txt', script)
         self.assertIn('completed_tests=$((completed_tests + completed))', script)
@@ -164,6 +169,24 @@ class CIWorkflowTests(unittest.TestCase):
         )[0]
 
         self.assertIn("needs: [verify, connected]", release_job)
+
+    def test_release_runtime_matrix_executes_every_packaged_abi(self) -> None:
+        workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+        release_job = workflow.split("  release-smoke:", 1)[1].split(
+            "\n  dependency-review:", 1
+        )[0]
+        cells = re.findall(
+            r"- api-level: (\d+)\s+architecture: (\S+)\s+runtime-abi: (\S+)",
+            release_job,
+        )
+        self.assertCountEqual(cells, [
+            ("30", "x86", "x86"), ("36", "x86_64", "x86_64"),
+            ("30", "x86", "armeabi-v7a"), ("30", "x86_64", "arm64-v8a"),
+        ])
+        self.assertIn("target: google_apis", release_job)
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertIn("without publishing", workflow)
+        self.assertIn("if: inputs.upload-release-bundle", release_job)
 
     def test_release_bundle_contains_release_targeted_instrumentation(self) -> None:
         build = BUILD_FILE.read_text(encoding="utf-8")
@@ -232,7 +255,17 @@ class CIWorkflowTests(unittest.TestCase):
 
         self.assertIn("release_test_apks=(release-test/*-release-androidTest.apk)", script)
         self.assertIn("sha256sum -c SHA256SUMS.txt", script)
-        self.assertIn('runtime_abi="$(adb shell getprop ro.product.cpu.abi', script)
+        self.assertIn('runtime_abi="$(select_release_runtime_abi)"', script)
+        self.assertIn('adb install --no-incremental --abi "$runtime_abi" "$smoke_apk"', script)
+        self.assertIn('adb install --no-incremental --abi "$runtime_abi" "$smoke_test_apk"', script)
+        self.assertIn('verify_installed_release_abi "$runtime_abi"', script)
+        self.assertIn('--abi "$runtime_abi" -e expectedAbi "$runtime_abi"', script)
+        self.assertIn('INSTRUMENTATION_STATUS: runtimeAbi=$runtime_abi', script)
+        release_source = RELEASE_IROH_SOURCE.read_text(encoding="utf-8")
+        self.assertLess(release_source.index("verifyRuntimeAbi();"),
+                        release_source.index("completeEndpointHandshake();"))
+        self.assertIn("Process.is64Bit() == expected64Bit", release_source)
+        self.assertIn('nativeDirectory.endsWith("/" + libraryArchitecture)', release_source)
         self.assertIn('grep -Fx "lib/$runtime_abi/libiroh_ffi.so"', script)
         self.assertIn('unzip -Z1 "$unsigned_apk" > "$native_entries"', script)
         self.assertNotIn('unzip -Z1 "$unsigned_apk" | grep -Fxq', script)
@@ -271,9 +304,9 @@ class CIWorkflowTests(unittest.TestCase):
         self.assertIn("architecture: x86_64", release_job)
         self.assertIn("api-level: ${{ matrix.api-level }}", release_job)
         self.assertIn("arch: ${{ matrix.architecture }}", release_job)
-        self.assertIn("script: bash .github/scripts/smoke-packaged-release.sh", smoke)
+        self.assertIn("script: RUNTIME_ABI=${{ matrix.runtime-abi }} bash .github/scripts/smoke-packaged-release.sh", smoke)
         self.assertNotIn("script: |", smoke)
-        self.assertIn("name: release-smoke-api-${{ matrix.api-level }}-${{ matrix.architecture }}", release_job)
+        self.assertIn("name: release-smoke-api-${{ matrix.api-level }}-${{ matrix.runtime-abi }}", release_job)
         self.assertIn("path: release-smoke-results/", release_job)
         self.assertIn("if: always()", release_job)
 
@@ -284,7 +317,8 @@ class CIWorkflowTests(unittest.TestCase):
         script = SMOKE_SCRIPT.read_text(encoding="utf-8")
         self.assertTrue(script.startswith("#!/usr/bin/env bash\nset -euo pipefail\n"))
         self.assertIn("release_apks=(dist/*-release-unsigned.apk)", script)
-        self.assertIn("adb install \"$smoke_apk\"", script)
+        self.assertIn('adb install --no-incremental --abi "$runtime_abi" "$smoke_apk"', script)
+        self.assertEqual(2, script.count("adb install --no-incremental "))
         self.assertIn("grep -Fq 'Status: ok'", script)
 
 

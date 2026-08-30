@@ -48,7 +48,7 @@ class TokenVaultPositiveTest {
     }
 
     @Test
-    fun pendingLogoutSurvivesVaultReconstructionUntilAtomicClear() {
+    fun pendingLogoutSurvivesVaultReconstructionUntilExactCompletion() {
         val tokens = TokenPair(
             accessToken = "access-secret",
             accessTokenExpiresAt = "2999-01-01T00:00:00Z",
@@ -59,9 +59,11 @@ class TokenVaultPositiveTest {
         vault.markLogoutPending(tokens)
 
         val reconstructed = TokenVault(context, Json)
+        val revocation = reconstructed.pendingLogoutRevocations().single()
 
-        assertEquals(TokenStoreState.LogoutPending(tokens), reconstructed.state())
-        reconstructed.clear()
+        assertEquals(tokens, revocation.tokens)
+        assertEquals(TokenStoreState.LogoutPending(listOf(revocation)), reconstructed.state())
+        reconstructed.completeLogoutRevocation(revocation)
         assertEquals(TokenStoreState.Empty, reconstructed.state())
     }
 

@@ -25,7 +25,10 @@ interface AuthSession {
     fun credentialState(): AuthCredentialState =
         if (hasTokens()) AuthCredentialState.Active else AuthCredentialState.Empty
     suspend fun <T> authorized(block: suspend (String) -> T): T
+    fun prepareLogout() {}
     suspend fun logout()
+    suspend fun retryPendingLogout() {}
+    fun hasPendingLogout(): Boolean = false
     suspend fun deleteAccount(confirmation: String) {
         throw UnsupportedOperationException("Account deletion is not implemented")
     }
@@ -67,18 +70,23 @@ class AuthRepository(
     private val api: PomodoroughService,
     private val tokenVault: TokenStore,
     private val googleServerClientId: String,
+    private val now: () -> Instant = Instant::now,
 ) : AuthSession {
     private val refreshMutex = Mutex()
     private val logoutMutex = Mutex()
     private val sessionLock = Any()
     private var sessionGeneration = 0L
-    private var logoutInFlight: SessionSnapshot? = null
+    private var preparedLogout: LogoutRevocation? = null
 
     override suspend fun signIn(
         credentialProvider: GoogleCredentialProvider,
         deviceId: String,
     ): TokenPair {
-        retryPendingLogout()
+        if (tokenVault.state() is TokenStoreState.Unreadable) {
+            throw AuthenticationRequired(
+                "Stored session is unreadable; clear local account data before signing in",
+            )
+        }
         val challenge = api.createChallenge()
         val idToken = credentialProvider.identityToken(googleServerClientId, challenge.nonce)
             .takeIf(String::isNotBlank)
@@ -126,55 +134,87 @@ class AuthRepository(
         }
     }
 
-    override suspend fun logout() = logoutMutex.withLock {
-        val session = prepareLogout() ?: return@withLock
-        try {
+    override fun prepareLogout() {
+        synchronized(sessionLock) {
+            when (val state = tokenVault.state()) {
+                TokenStoreState.Empty, is TokenStoreState.LogoutPending -> return
+                is TokenStoreState.Active -> {
+                    preparedLogout = tokenVault.retireForLogout(state.tokens)
+                    sessionGeneration += 1
+                }
+                is TokenStoreState.Unreadable -> throw AuthenticationRequired(
+                    "Stored session is unreadable; clear local account data to recover",
+                )
+            }
+        }
+    }
+
+    override suspend fun logout() {
+        prepareLogout()
+        val prepared = synchronized(sessionLock) {
+            preparedLogout.also { preparedLogout = null }
+        }
+        if (prepared == null) retryPendingLogout() else revokeSerialized(prepared)
+    }
+
+    override suspend fun retryPendingLogout() = logoutMutex.withLock {
+        refreshMutex.withLock {
+            tokenVault.pendingLogoutRevocations().forEach { revoke(it) }
+        }
+    }
+
+    override fun hasPendingLogout(): Boolean = tokenVault.pendingLogoutRevocations().isNotEmpty()
+
+    private suspend fun revokeSerialized(revocation: LogoutRevocation) = logoutMutex.withLock {
+        refreshMutex.withLock {
+            if (tokenVault.pendingLogoutRevocations().contains(revocation)) revoke(revocation)
+        }
+    }
+
+    private suspend fun revoke(initial: LogoutRevocation) {
+        if (refreshAuthorityExpired(initial)) {
+            tokenVault.completeLogoutRevocation(initial)
+            return
+        }
+        if (!initial.refreshOutcomeUnknown && isAccessFresh(initial.tokens)) {
             try {
-                api.logout(session.tokens.accessToken)
+                api.logout(initial.tokens.accessToken)
+                tokenVault.completeLogoutRevocation(initial)
+                return
             } catch (error: ApiException) {
                 if (error.statusCode != 401) throw error
             }
-            clearSessionIfCurrent(session)
-        } finally {
-            synchronized(sessionLock) {
-                if (logoutInFlight == session) logoutInFlight = null
-            }
         }
+        refreshAndRevoke(initial)
     }
 
-    private suspend fun retryPendingLogout() {
-        when (val state = tokenVault.state()) {
-            TokenStoreState.Empty, is TokenStoreState.Active -> return
-            is TokenStoreState.LogoutPending -> {
-                val alreadyRunning = synchronized(sessionLock) {
-                    logoutInFlight?.tokens == state.tokens
-                }
-                if (!alreadyRunning) logout()
-            }
-            is TokenStoreState.Unreadable -> throw AuthenticationRequired(
-                "Stored session is unreadable; clear local account data before signing in",
-            )
+    private suspend fun refreshAndRevoke(initial: LogoutRevocation) {
+        val uncertain = initial.copy(refreshOutcomeUnknown = true)
+        if (!initial.refreshOutcomeUnknown) {
+            tokenVault.replaceLogoutRevocation(initial, uncertain)
         }
+        val refreshed = try {
+            api.refresh(initial.tokens.refreshToken)
+        } catch (error: ApiException) {
+            if (error.statusCode != 401) throw error
+            tokenVault.completeLogoutRevocation(uncertain)
+            return
+        }
+        val current = uncertain.copy(tokens = refreshed, refreshOutcomeUnknown = false)
+        tokenVault.replaceLogoutRevocation(uncertain, current)
+        try {
+            api.logout(refreshed.accessToken)
+        } catch (error: ApiException) {
+            if (error.statusCode != 401) throw error
+        }
+        tokenVault.completeLogoutRevocation(current)
     }
 
-    private fun prepareLogout(): SessionSnapshot? = synchronized(sessionLock) {
-        when (val state = tokenVault.state()) {
-            TokenStoreState.Empty -> {
-                sessionGeneration += 1
-                tokenVault.clear()
-                null
-            }
-            is TokenStoreState.Active -> {
-                tokenVault.markLogoutPending(state.tokens)
-                sessionGeneration += 1
-                SessionSnapshot(state.tokens, sessionGeneration).also { logoutInFlight = it }
-            }
-            is TokenStoreState.LogoutPending ->
-                SessionSnapshot(state.tokens, sessionGeneration).also { logoutInFlight = it }
-            is TokenStoreState.Unreadable -> throw AuthenticationRequired(
-                "Stored session is unreadable; clear local account data to recover",
-            )
-        }
+    private fun refreshAuthorityExpired(revocation: LogoutRevocation): Boolean {
+        if (revocation.refreshOutcomeUnknown) return false
+        val expiresAt = runCatching { Instant.parse(revocation.tokens.refreshTokenExpiresAt) }
+            .getOrNull() ?: return false
+        return !expiresAt.isAfter(now())
     }
 
     override suspend fun deleteAccount(confirmation: String) {
@@ -238,18 +278,15 @@ class AuthRepository(
     }
 
     private fun clearSession(): SessionSnapshot? = synchronized(sessionLock) {
-        val current = tokenVault.read()?.let { SessionSnapshot(it, sessionGeneration) }
+        val current = (tokenVault.state() as? TokenStoreState.Active)?.tokens
+            ?.let { SessionSnapshot(it, sessionGeneration) }
         sessionGeneration += 1
         tokenVault.clear()
         current
     }
 
     private fun clearSessionIfCurrent(current: SessionSnapshot): Boolean = synchronized(sessionLock) {
-        val storedTokens = when (val state = tokenVault.state()) {
-            is TokenStoreState.Active -> state.tokens
-            is TokenStoreState.LogoutPending -> state.tokens
-            else -> null
-        }
+        val storedTokens = (tokenVault.state() as? TokenStoreState.Active)?.tokens
         if (sessionGeneration != current.generation || storedTokens != current.tokens) {
             return@synchronized false
         }
@@ -259,7 +296,7 @@ class AuthRepository(
 
     private fun isAccessFresh(tokens: TokenPair): Boolean {
         val expiresAt = runCatching { Instant.parse(tokens.accessTokenExpiresAt) }.getOrNull() ?: return false
-        return expiresAt.isAfter(Instant.now().plusSeconds(60))
+        return expiresAt.isAfter(now().plusSeconds(60))
     }
 
     private data class SessionSnapshot(

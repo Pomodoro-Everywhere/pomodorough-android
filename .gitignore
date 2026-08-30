@@ -9,6 +9,10 @@ captures/
 .DS_Store
 .claude/
 graphify-out/
+.cache_ggshield
 *.jks
 *.keystore
 release-smoke-results/
+dist/
+release-test/
+__pycache__/

@@ -24,7 +24,7 @@ class AuthRepositoryPositiveTest {
     }
 
     @Test
-    fun successfulLogoutRevokesAccessBeforeClearingTokens() = runTest {
+    fun successfulLogoutRevokesDetachedAccessAndCompletesObligation() = runTest {
         val service = TestAuthService()
         val store = TestTokenStore(freshTokens("logout-access"))
 
@@ -32,11 +32,12 @@ class AuthRepositoryPositiveTest {
 
         assertEquals(listOf("logout-access"), service.logoutTokens)
         assertNull(store.tokens)
-        assertEquals(1, store.clearCalls)
+        assertEquals(null, store.pendingLogout)
+        assertEquals(0, store.clearCalls)
     }
 
     @Test
-    fun expiredAccessTokenIsRevokedWithoutRefreshingOrRetainingTokens() = runTest {
+    fun expiredAccessTokenRefreshesDetachedSessionBeforeRevocation() = runTest {
         val service = TestAuthService().apply {
             refreshResult = freshTokens("replacement-access")
         }
@@ -45,9 +46,10 @@ class AuthRepositoryPositiveTest {
 
         repository(service, store).logout()
 
-        assertEquals(0, service.refreshCalls)
-        assertEquals(listOf(tokens.accessToken), service.logoutTokens)
+        assertEquals(1, service.refreshCalls)
+        assertEquals(listOf("replacement-access"), service.logoutTokens)
         assertNull(store.tokens)
+        assertNull(store.pendingLogout)
     }
 
     private fun repository(service: TestAuthService, store: TestTokenStore) = AuthRepository(

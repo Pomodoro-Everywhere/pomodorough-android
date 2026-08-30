@@ -13,7 +13,6 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -44,6 +43,7 @@ import me.egigoka.pomodorough.data.auth.AuthCredentialState
 import me.egigoka.pomodorough.data.auth.AuthSession
 import me.egigoka.pomodorough.data.auth.AuthenticationRequired
 import me.egigoka.pomodorough.data.auth.GoogleCredentialProvider
+import me.egigoka.pomodorough.data.auth.LogoutRevocationRetryController
 import me.egigoka.pomodorough.data.local.LocalStateEntity
 import me.egigoka.pomodorough.data.local.LocalWorkspaceCoordinator
 import me.egigoka.pomodorough.data.local.PendingBootstrapResolutionEntity
@@ -200,6 +200,7 @@ class TimerRepository(
     }
     private val repositoryJob = SupervisorJob()
     private val scope = CoroutineScope(repositoryJob + Dispatchers.IO)
+    private val logoutRevocations = LogoutRevocationRetryController(auth, scope)
     private val initializeMutex = Mutex()
     private val actionMutex = workspaceCoordinator
     private val initialized = CompletableDeferred<Unit>()
@@ -273,6 +274,11 @@ class TimerRepository(
     private val online: Boolean get() = centralizedSyncRuntime.online
     private val foreground: Boolean get() = centralizedSyncRuntime.foreground
 
+    internal fun requestRevisionOpen() = centralizedSyncRuntime.requestRevisionOpen()
+
+    internal suspend fun awaitPendingRevisionSignals() =
+        centralizedSyncRuntime.awaitPendingRevisionSignals()
+
     private val bootstrapSnapshot: SyncResponse?
         get() = accountWorkspaceController.bootstrap?.response
     private val bootstrapClockSample: ServerClockSample?
@@ -306,6 +312,7 @@ class TimerRepository(
         if (localMutationCorrupted || mutationFailure != null) return
         if (resolveDeletionStateForInitialization()) return
         if (resolveCredentialStateForInitialization()) return
+        logoutRevocations.startIfNeeded()
         accountAdmissionResolved = true
         replication?.initialize()
         if (foreground) replication?.onForeground()
@@ -354,6 +361,7 @@ class TimerRepository(
             authStatus = AuthStatus.SignedOut
             notice = PendingLogoutMessage
             publish()
+            logoutRevocations.startIfNeeded()
             true
         }
         else -> false
@@ -435,6 +443,9 @@ class TimerRepository(
     private suspend fun loadLocalInitialization(): LocalInitializationData? = try {
         timerStore.initialize()
     } catch (error: LocalDecodingException) {
+        accountWorkspaceController.setDeletionAdmissionQuarantined(
+            error.local.accountDeletionState != null,
+        )
         accountPublication.transition(error.local.accountDeletionState != null)
         local = error.local
         localMutationCorrupted = true
@@ -447,6 +458,9 @@ class TimerRepository(
     }
 
     private fun installLocalInitialization(data: LocalInitializationData) {
+        accountWorkspaceController.setDeletionAdmissionQuarantined(
+            data.local.accountDeletionState != null,
+        )
         accountPublication.transition(data.local.accountDeletionState != null)
         local = data.local
         pending = data.commands
@@ -813,6 +827,7 @@ class TimerRepository(
     private suspend fun persistAccountDeletionMarker(marker: String) {
         val previous = local
         val marked = previous.copy(accountDeletionState = marker)
+        accountWorkspaceController.setDeletionAdmissionQuarantined(true)
         accountPublication.transition(
             quarantined = true,
             repairPublication = ::publishSnapshot,
@@ -831,6 +846,9 @@ class TimerRepository(
             throw error
         } catch (error: Exception) {
             local = previous
+            accountWorkspaceController.setDeletionAdmissionQuarantined(
+                previous.accountDeletionState != null,
+            )
             accountPublication.transition(
                 quarantined = previous.accountDeletionState != null,
                 repairPublication = ::publishSnapshot,
@@ -842,23 +860,13 @@ class TimerRepository(
     private suspend fun logoutInternal() {
         initialize()
         if (localMutationCorrupted) return
-        actionMutex.withLock {
-            accountWorkspaceController.advanceGeneration(AccountWorkspaceReason.LogoutStarted)
-            syncing = false
-            retrying = false
-            if (local.ownerUserId != null) {
-                persistAccountDeletionMarker(AccountLocalScrubRequired)
-                alarmCoordinator.cancelForAccountClear()
-            }
-            authStatus = AuthStatus.SignedOut
-            user = null
-            accountAdmissionResolved = false
-            publish()
-        }
+        if (!prepareRemoteLogout()) return
+        val hasOwnedAccount = beginLocalLogout()
+        logoutRevocations.startPreparedLogout()
         try {
+            persistLogoutScrubMarker(hasOwnedAccount)
             closeRevisionStream()
             replication?.quarantineAccount()
-            scope.launch(start = CoroutineStart.UNDISPATCHED) { runCatching { auth.logout() } }
             replication?.clearAccountData()
             actionMutex.withLock {
                 if (local.ownerUserId == null) {
@@ -881,6 +889,38 @@ class TimerRepository(
                 notice = error.message ?: appContext.getString(R.string.sign_out_failed_local_timer_data_was_kept)
                 publish()
             }
+        }
+    }
+
+    private suspend fun beginLocalLogout(): Boolean = actionMutex.withLock {
+        accountWorkspaceController.advanceGeneration(AccountWorkspaceReason.LogoutStarted)
+        syncing = false
+        retrying = false
+        authStatus = AuthStatus.SignedOut
+        user = null
+        accountAdmissionResolved = false
+        publish()
+        local.ownerUserId != null
+    }
+
+    private suspend fun persistLogoutScrubMarker(hasOwnedAccount: Boolean) {
+        if (!hasOwnedAccount) return
+        actionMutex.withLock {
+            persistAccountDeletionMarker(AccountLocalScrubRequired)
+            alarmCoordinator.cancelForAccountClear()
+        }
+    }
+
+    private suspend fun prepareRemoteLogout(): Boolean {
+        return try {
+            auth.prepareLogout()
+            true
+        } catch (error: Exception) {
+            actionMutex.withLock {
+                notice = error.message ?: "Could not preserve remote sign-out work"
+                publish()
+            }
+            false
         }
     }
 
@@ -910,6 +950,7 @@ class TimerRepository(
         installClearedCanonical(nextLocal, clearedSettings)
         installClearedPending()
         installClearedSession(clearCorruption, resetSequence, reason)
+        accountWorkspaceController.setDeletionAdmissionQuarantined(false)
         replication?.releaseAccountQuarantine()
         accountPublication.transition(quarantined = false)
         notice = nextNotice
@@ -1000,9 +1041,7 @@ class TimerRepository(
         initialize()
         require(confirmation == "DELETE") { "Type DELETE exactly" }
         val deletionGeneration = actionMutex.withLock {
-            val transition = accountWorkspaceController.advanceGeneration(
-                AccountWorkspaceReason.DeletionStarted,
-            )
+            val transition = accountWorkspaceController.beginDeletionAdmission()
             syncing = false
             retrying = false
             persistAccountDeletionMarker(AccountDeletionPrepared)
@@ -1037,9 +1076,7 @@ class TimerRepository(
 
     private suspend fun recoverCommittedAccountDeletion() {
         runCatching(auth::clear)
-        val deletionGeneration = accountWorkspaceController.advanceGeneration(
-            AccountWorkspaceReason.DeletionStarted,
-        ).generation
+        val deletionGeneration = accountWorkspaceController.beginDeletionAdmission().generation
         runCatching { scrubDeletedAccount(deletionGeneration) }
             .onFailure { error ->
                 actionMutex.withLock {
@@ -1066,7 +1103,10 @@ class TimerRepository(
         }
     }
 
-    override suspend fun confirmAccountSwitch() {
+    override suspend fun confirmAccountSwitch() =
+        accountWorkspaceController.serialize { confirmAccountSwitchInternal() }
+
+    private suspend fun confirmAccountSwitchInternal() {
         initialize()
         if (localMutationCorrupted) return
         val candidate = actionMutex.withLock {
@@ -1126,7 +1166,10 @@ class TimerRepository(
         scheduleAlarm()
     }
 
-    override suspend fun cancelAccountSwitch() {
+    override suspend fun cancelAccountSwitch() =
+        accountWorkspaceController.serialize { cancelAccountSwitchInternal() }
+
+    private suspend fun cancelAccountSwitchInternal() {
         initialize()
         if (localMutationCorrupted) return
         val candidate = actionMutex.withLock {
@@ -1431,7 +1474,10 @@ class TimerRepository(
         publish()
     }
 
-    override suspend fun setReplicationMode(mode: ReplicationMode) {
+    override suspend fun setReplicationMode(mode: ReplicationMode) =
+        accountWorkspaceController.serialize { setReplicationModeInternal(mode) }
+
+    private suspend fun setReplicationModeInternal(mode: ReplicationMode) {
         initialize()
         if (accountNetworkBlocked()) return
         val controller = replication ?: return
@@ -1446,7 +1492,10 @@ class TimerRepository(
         }
     }
 
-    override suspend fun createIrohRoom(name: String) {
+    override suspend fun createIrohRoom(name: String) =
+        accountWorkspaceController.serialize { createIrohRoomInternal(name) }
+
+    private suspend fun createIrohRoomInternal(name: String) {
         initialize()
         if (accountNetworkBlocked()) return
         val controller = replication ?: return
@@ -1455,7 +1504,10 @@ class TimerRepository(
         centralizedSyncRuntime.requestRevisionClose()
     }
 
-    override suspend fun joinIrohRoom(invite: String) {
+    override suspend fun joinIrohRoom(invite: String) =
+        accountWorkspaceController.serialize { joinIrohRoomInternal(invite) }
+
+    private suspend fun joinIrohRoomInternal(invite: String) {
         initialize()
         if (accountNetworkBlocked()) return
         val controller = replication ?: return
@@ -1466,7 +1518,10 @@ class TimerRepository(
         }
     }
 
-    override suspend fun leaveIrohRoom() {
+    override suspend fun leaveIrohRoom() =
+        accountWorkspaceController.serialize { leaveIrohRoomInternal() }
+
+    private suspend fun leaveIrohRoomInternal() {
         initialize()
         if (accountNetworkBlocked()) return
         val controller = replication ?: return
@@ -2371,6 +2426,16 @@ class TimerRepository(
 
         override fun accountGeneration(): Long = accountWorkspaceController.generation
 
+        override fun revisionStreamAdmission(): RevisionStreamAdmission {
+            val admission = accountWorkspaceController.admissionSnapshot
+            val state = snapshot()
+            return RevisionStreamAdmission(
+                accountGeneration = admission.generation,
+                eligible = !admission.deletionQuarantined && state.signedIn && state.centralized &&
+                    !state.resolutionPending && !state.accountSwitchPending,
+            )
+        }
+
         override suspend fun prepareSyncAttempt(identity: SyncAttemptIdentity): SyncAttempt? =
             actionMutex.withLock { this@TimerRepository.prepareSyncAttempt(identity) }
 
@@ -2397,7 +2462,8 @@ class TimerRepository(
                 }
             }
             is CentralizedSyncRuntimeEvent.AuthenticationExpired -> expireSyncAuthentication(event.identity)
-            CentralizedSyncRuntimeEvent.RevisionAuthenticationExpired -> expireRevisionAuthentication()
+            is CentralizedSyncRuntimeEvent.RevisionAuthenticationExpired ->
+                expireRevisionAuthentication(event.accountGeneration)
             is CentralizedSyncRuntimeEvent.TerminalFailure -> actionMutex.withLock {
                 if (currentSyncAttempt(event.identity)) {
                     activeSyncAttempt = null
@@ -2450,7 +2516,8 @@ class TimerRepository(
         publish()
     }
 
-    private suspend fun expireRevisionAuthentication() = actionMutex.withLock {
+    private suspend fun expireRevisionAuthentication(accountGeneration: Long) = actionMutex.withLock {
+        if (accountGeneration != accountWorkspaceController.generation) return@withLock
         accountWorkspaceController.expireAuthentication(
             AccountWorkspaceReason.AuthenticationExpired,
             discardBootstrap = false,

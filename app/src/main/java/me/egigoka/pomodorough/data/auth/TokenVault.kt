@@ -6,10 +6,12 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import java.security.KeyStore
+import java.util.UUID
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import me.egigoka.pomodorough.data.TokenPair
@@ -21,17 +23,43 @@ interface TokenStore {
     fun markLogoutPending(tokens: TokenPair) {
         throw UnsupportedOperationException("Pending logout persistence is not implemented")
     }
+    fun retireForLogout(tokens: TokenPair): LogoutRevocation {
+        markLogoutPending(tokens)
+        return LogoutRevocation(tokens = tokens)
+    }
+    fun pendingLogoutRevocations(): List<LogoutRevocation> = when (val stored = state()) {
+        is TokenStoreState.LogoutPending -> stored.revocations
+        else -> emptyList()
+    }
+    fun replaceLogoutRevocation(previous: LogoutRevocation, replacement: LogoutRevocation) {
+        throw UnsupportedOperationException("Pending logout replacement is not implemented")
+    }
+    fun completeLogoutRevocation(revocation: LogoutRevocation) = clear()
     fun clear() {
         throw UnsupportedOperationException("Token clearing is not implemented")
     }
 }
 
+@Serializable
+data class LogoutRevocation(
+    val id: String = UUID.randomUUID().toString(),
+    val tokens: TokenPair,
+    val refreshOutcomeUnknown: Boolean = false,
+)
+
 sealed interface TokenStoreState {
     data object Empty : TokenStoreState
     data class Active(val tokens: TokenPair) : TokenStoreState
-    data class LogoutPending(val tokens: TokenPair) : TokenStoreState
+    data class LogoutPending(val revocations: List<LogoutRevocation>) : TokenStoreState
     data class Unreadable(val cause: Throwable) : TokenStoreState
 }
+
+@Serializable
+private data class StoredAuthPayload(
+    val format: Int,
+    val active: TokenPair? = null,
+    val logoutRevocations: List<LogoutRevocation> = emptyList(),
+)
 
 class TokenVault(
     context: Context,
@@ -41,78 +69,137 @@ class TokenVault(
     private val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
 
     @Synchronized
-    override fun read(): TokenPair? = when (val state = state()) {
-        TokenStoreState.Empty -> null
-        is TokenStoreState.Active -> state.tokens
-        is TokenStoreState.LogoutPending -> state.tokens
-        is TokenStoreState.Unreadable -> throw IllegalStateException(
-            "Persisted authentication state is unreadable",
-            state.cause,
+    override fun read(): TokenPair? = loadPayload().getOrElse {
+        throw IllegalStateException("Persisted authentication state is unreadable", it)
+    }.active
+
+    @Synchronized
+    override fun state(): TokenStoreState = loadPayload().fold(
+        onSuccess = { payload ->
+            when {
+                payload.active != null -> TokenStoreState.Active(payload.active)
+                payload.logoutRevocations.isNotEmpty() -> {
+                    TokenStoreState.LogoutPending(payload.logoutRevocations)
+                }
+                else -> TokenStoreState.Empty
+            }
+        },
+        onFailure = TokenStoreState::Unreadable,
+    )
+
+    @Synchronized
+    override fun write(tokens: TokenPair) {
+        val current = loadPayload().getOrThrow()
+        persist(current.copy(active = tokens), "Could not persist authentication tokens")
+    }
+
+    @Synchronized
+    override fun markLogoutPending(tokens: TokenPair) {
+        retireForLogout(tokens)
+    }
+
+    @Synchronized
+    override fun retireForLogout(tokens: TokenPair): LogoutRevocation {
+        val current = loadPayload().getOrThrow()
+        check(current.active == tokens) { "Could not retire a non-current authentication session" }
+        val revocation = LogoutRevocation(tokens = tokens)
+        val pending = current.logoutRevocations + revocation
+        persist(
+            current.copy(active = null, logoutRevocations = pending),
+            "Could not persist pending logout",
+        )
+        return revocation
+    }
+
+    @Synchronized
+    override fun pendingLogoutRevocations(): List<LogoutRevocation> =
+        loadPayload().getOrThrow().logoutRevocations
+
+    @Synchronized
+    override fun replaceLogoutRevocation(
+        previous: LogoutRevocation,
+        replacement: LogoutRevocation,
+    ) {
+        val current = loadPayload().getOrThrow()
+        val index = current.logoutRevocations.indexOfFirst { it.id == previous.id }
+        check(index >= 0) { "Could not replace missing pending logout" }
+        val updated = current.logoutRevocations.toMutableList().apply { set(index, replacement) }
+        persist(current.copy(logoutRevocations = updated), "Could not update pending logout")
+    }
+
+    @Synchronized
+    override fun completeLogoutRevocation(revocation: LogoutRevocation) {
+        val current = loadPayload().getOrThrow()
+        persist(
+            current.copy(logoutRevocations = current.logoutRevocations.filterNot { it.id == revocation.id }),
+            "Could not complete pending logout",
         )
     }
 
     @Synchronized
-    override fun state(): TokenStoreState {
-        val encoded = preferences.getString(PayloadKey, null)
-        if (encoded == null) {
-            return if (preferences.contains(LogoutPendingKey)) {
-                TokenStoreState.Unreadable(
-                    IllegalStateException("Pending logout marker has no credential payload"),
-                )
-            } else {
-                TokenStoreState.Empty
-            }
+    override fun clear() {
+        val current = loadPayload().getOrNull()
+        if (current == null) {
+            deletePayload("Could not repair authentication storage")
+            return
         }
-        return runCatching {
-            val bytes = Base64.decode(encoded, Base64.NO_WRAP)
-            require(bytes.size > IvSize)
-            val iv = bytes.copyOfRange(0, IvSize)
-            val ciphertext = bytes.copyOfRange(IvSize, bytes.size)
-            val cipher = Cipher.getInstance(Transformation).apply {
-                init(Cipher.DECRYPT_MODE, secretKey(), GCMParameterSpec(TagSizeBits, iv))
-            }
-            val tokens = json.decodeFromString<TokenPair>(cipher.doFinal(ciphertext).decodeToString())
-            if (preferences.getBoolean(LogoutPendingKey, false)) {
-                TokenStoreState.LogoutPending(tokens)
-            } else {
-                TokenStoreState.Active(tokens)
-            }
-        }.getOrElse(TokenStoreState::Unreadable)
+        persist(current.copy(active = null), "Could not clear authentication tokens")
     }
 
-    @Synchronized
+    private fun loadPayload(): Result<StoredAuthPayload> = runCatching {
+        val encoded = preferences.getString(PayloadKey, null)
+        if (encoded != null) return@runCatching decodePayload(encoded)
+        check(!preferences.contains(LogoutPendingKey)) {
+            "Pending logout marker has no encrypted payload"
+        }
+        StoredAuthPayload(format = CurrentFormat)
+    }
+
+    private fun decodePayload(encoded: String): StoredAuthPayload {
+        val bytes = Base64.decode(encoded, Base64.NO_WRAP)
+        require(bytes.size > IvSize)
+        val cipher = Cipher.getInstance(Transformation).apply {
+            init(
+                Cipher.DECRYPT_MODE,
+                secretKey(),
+                GCMParameterSpec(TagSizeBits, bytes.copyOfRange(0, IvSize)),
+            )
+        }
+        val plaintext = cipher.doFinal(bytes.copyOfRange(IvSize, bytes.size)).decodeToString()
+        return runCatching { json.decodeFromString<StoredAuthPayload>(plaintext) }
+            .getOrElse { migrateLegacy(json.decodeFromString(plaintext)) }
+    }
+
+    private fun migrateLegacy(tokens: TokenPair): StoredAuthPayload {
+        if (!preferences.getBoolean(LogoutPendingKey, false)) {
+            return StoredAuthPayload(format = CurrentFormat, active = tokens)
+        }
+        return StoredAuthPayload(
+            format = CurrentFormat,
+            logoutRevocations = listOf(LogoutRevocation(tokens = tokens)),
+        )
+    }
+
     @SuppressLint("ApplySharedPref")
-    override fun write(tokens: TokenPair) {
+    private fun persist(payload: StoredAuthPayload, failureMessage: String) {
+        val editor = preferences.edit().remove(LogoutPendingKey)
+        if (payload.active == null && payload.logoutRevocations.isEmpty()) {
+            check(editor.remove(PayloadKey).commit()) { failureMessage }
+            return
+        }
         val cipher = Cipher.getInstance(Transformation).apply {
             init(Cipher.ENCRYPT_MODE, secretKey())
         }
-        val encrypted = cipher.doFinal(json.encodeToString(tokens).encodeToByteArray())
-        val payload = cipher.iv + encrypted
-        check(
-            preferences.edit()
-                .putString(PayloadKey, Base64.encodeToString(payload, Base64.NO_WRAP))
-                .remove(LogoutPendingKey)
-                .commit(),
-        ) { "Could not persist authentication tokens" }
-    }
-
-    @Synchronized
-    @SuppressLint("ApplySharedPref")
-    override fun markLogoutPending(tokens: TokenPair) {
-        val current = state()
-        check(current == TokenStoreState.Active(tokens) || current == TokenStoreState.LogoutPending(tokens)) {
-            "Could not mark a non-current authentication session for logout"
-        }
-        check(preferences.edit().putBoolean(LogoutPendingKey, true).commit()) {
-            "Could not persist pending logout"
+        val encrypted = cipher.iv + cipher.doFinal(json.encodeToString(payload).encodeToByteArray())
+        check(editor.putString(PayloadKey, Base64.encodeToString(encrypted, Base64.NO_WRAP)).commit()) {
+            failureMessage
         }
     }
 
-    @Synchronized
     @SuppressLint("ApplySharedPref")
-    override fun clear() {
+    private fun deletePayload(failureMessage: String) {
         check(preferences.edit().remove(PayloadKey).remove(LogoutPendingKey).commit()) {
-            "Could not clear authentication tokens"
+            failureMessage
         }
     }
 
@@ -140,5 +227,6 @@ class TokenVault(
         const val Transformation = "AES/GCM/NoPadding"
         const val IvSize = 12
         const val TagSizeBits = 128
+        const val CurrentFormat = 2
     }
 }

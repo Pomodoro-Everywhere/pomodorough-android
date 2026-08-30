@@ -7,6 +7,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.io.IOException
 import java.time.Instant
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -27,9 +28,13 @@ import me.egigoka.pomodorough.R
 import me.egigoka.pomodorough.core.SharedCore
 import me.egigoka.pomodorough.core.SharedCoreException
 import me.egigoka.pomodorough.data.api.PomodoroughService
-import me.egigoka.pomodorough.data.auth.AuthSession
 import me.egigoka.pomodorough.data.auth.AuthCredentialState
+import me.egigoka.pomodorough.data.auth.AuthRepository
+import me.egigoka.pomodorough.data.auth.AuthSession
+import me.egigoka.pomodorough.data.auth.AuthenticationRequired
 import me.egigoka.pomodorough.data.auth.GoogleCredentialProvider
+import me.egigoka.pomodorough.data.auth.TokenStoreState
+import me.egigoka.pomodorough.data.auth.TokenVault
 import me.egigoka.pomodorough.data.iroh.IrohNetworkState
 import me.egigoka.pomodorough.data.iroh.IrohReplicationController
 import me.egigoka.pomodorough.data.iroh.ReplicationMode
@@ -38,6 +43,7 @@ import me.egigoka.pomodorough.data.local.PendingCommandEntity
 import me.egigoka.pomodorough.data.local.PendingDurationOperationEntity
 import me.egigoka.pomodorough.data.local.PendingTaskOperationEntity
 import me.egigoka.pomodorough.data.local.PomodoroughDatabase
+import me.egigoka.pomodorough.data.local.TimerDao
 import okhttp3.sse.EventSource
 import okhttp3.sse.EventSourceListener
 import org.junit.After
@@ -59,14 +65,24 @@ class TimerRepositoryTest {
     @Before
     fun setUp() {
         context = ApplicationProvider.getApplicationContext()
+        context.getSharedPreferences(CredentialPreferencesName, Context.MODE_PRIVATE)
+            .edit().clear().commit()
+        context.getSharedPreferences(UnrelatedPreferencesName, Context.MODE_PRIVATE)
+            .edit().clear().commit()
         database = Room.inMemoryDatabaseBuilder(context, PomodoroughDatabase::class.java).build()
     }
 
     @After
-    fun tearDown() = runBlocking {
-        repositories.asReversed().forEach { it.shutdownForTest() }
-        repositories.clear()
-        database.close()
+    fun tearDown() {
+        runBlocking {
+            repositories.asReversed().forEach { it.shutdownForTest() }
+            repositories.clear()
+            database.close()
+            context.getSharedPreferences(CredentialPreferencesName, Context.MODE_PRIVATE)
+                .edit().clear().commit()
+            context.getSharedPreferences(UnrelatedPreferencesName, Context.MODE_PRIVATE)
+                .edit().clear().commit()
+        }
     }
 
     @Test
@@ -381,6 +397,140 @@ class TimerRepositoryTest {
     }
 
     @Test
+    fun staleRevisionAuthenticationFailureCannotStrandConfirmedDeletion() = runBlocking {
+        val account = user("account-1")
+        database.timerDao().insertState(emptyState(account))
+        val auth = FakeAuthSession().apply { blockDeleteAccount = true }
+        val service = FakeService(account).apply { blockRevisionAuthentication = true }
+        val replication = FakeReplicationController()
+        val repository = repository(service, auth, replication = replication)
+        repository.initialize()
+        repository.onForeground()
+        assertTrue(
+            "revision stream did not begin opening",
+            withTimeoutOrNull(5_000) { service.revisionStreamStarted.await(); true } == true,
+        )
+
+        val deletion = async(start = CoroutineStart.UNDISPATCHED) {
+            repository.deleteAccount("DELETE")
+        }
+        assertTrue(
+            "deletion did not persist its prepared marker",
+            withTimeoutOrNull(5_000) {
+                while (database.timerDao().localState()?.accountDeletionState != "prepared") yield()
+                true
+            } == true,
+        )
+
+        service.releaseRevisionAuthentication.complete(Unit)
+        assertTrue(
+            "deletion did not advance past the stale revision failure",
+            withTimeoutOrNull(5_000) { auth.deleteAccountStarted.await(); true } == true,
+        )
+        auth.releaseDeleteAccount.complete(Unit)
+        assertTrue(
+            "deletion did not finish after confirmed remote success",
+            withTimeoutOrNull(5_000) { deletion.await(); true } == true,
+        )
+
+        assertEquals(1, replication.clearAccountDataCalls)
+        assertNull(database.timerDao().localState()?.accountDeletionState)
+        assertNull(database.timerDao().localState()?.ownerUserId)
+    }
+
+    @Test
+    fun revisionOpenAfterDeletionGenerationAdvanceIsRejectedBeforePreparedMarker() = runBlocking {
+        val account = user("account-1")
+        database.timerDao().insertState(emptyState(account))
+        val dao = PausingDeletionMarkerDao(database.timerDao())
+        val auth = FakeAuthSession().apply { blockDeleteAccount = true }
+        val service = FakeService(account).apply { failRevisionAuthentication = true }
+        val replication = FakeReplicationController().apply { blockClearAccountData = true }
+        val repository = repository(service, auth, replication = replication, dao = dao)
+        repository.initialize()
+
+        val deletion = async(start = CoroutineStart.UNDISPATCHED) {
+            repository.deleteAccount("DELETE")
+        }
+        dao.preparedWriteStarted.await()
+
+        repository.onForeground()
+        repository.requestRevisionOpen()
+        repository.awaitPendingRevisionSignals()
+
+        assertEquals(0, service.revisionStreamCalls)
+        dao.releasePreparedWrite.complete(Unit)
+        auth.deleteAccountStarted.await()
+        auth.releaseDeleteAccount.complete(Unit)
+        replication.clearAccountDataStarted.await()
+
+        assertEquals("remote_committed", database.timerDao().localState()?.accountDeletionState)
+        assertFalse(deletion.isCompleted)
+
+        replication.releaseClearAccountData.complete(Unit)
+        deletion.await()
+        assertNull(database.timerDao().localState()?.accountDeletionState)
+        assertNull(database.timerDao().localState()?.ownerUserId)
+    }
+
+    @Test
+    fun confirmedAccountSwitchWaitsForAdmittedRouteChange() = runBlocking {
+        val oldUser = user("old-user")
+        database.timerDao().insertState(state(oldUser, timer("old-timer")))
+        val replication = FakeReplicationController().apply { blockSetMode = true }
+        val repository = repository(FakeService(user("new-user")), replication = replication)
+        repository.initialize()
+        await { repository.state.value.accountSwitch != null }
+
+        val routeChange = async(start = CoroutineStart.UNDISPATCHED) {
+            repository.setReplicationMode(ReplicationMode.OFFLINE)
+        }
+        replication.setModeStarted.await()
+        val accountSwitch = async(start = CoroutineStart.UNDISPATCHED) {
+            repository.confirmAccountSwitch()
+        }
+
+        assertFalse("account switch did not wait for the admitted route change", accountSwitch.isCompleted)
+
+        replication.releaseSetMode.complete(Unit)
+        routeChange.await()
+        accountSwitch.await()
+
+        assertEquals("new-user", database.timerDao().localState()?.ownerUserId)
+        assertNull(repository.state.value.accountSwitch)
+    }
+
+    @Test
+    fun accountDeletionWaitsForAdmittedReplicationModeChange() = runBlocking {
+        val account = user("account-1")
+        database.timerDao().insertState(state(account, timer("timer-1")))
+        val auth = FakeAuthSession().apply { blockDeleteAccount = true }
+        val replication = FakeReplicationController().apply { blockSetMode = true }
+        val repository = repository(FakeService(account), auth, replication = replication)
+        repository.initialize()
+
+        val routeChange = async(start = CoroutineStart.UNDISPATCHED) {
+            repository.setReplicationMode(ReplicationMode.OFFLINE)
+        }
+        replication.setModeStarted.await()
+        val deletion = async(start = CoroutineStart.UNDISPATCHED) {
+            repository.deleteAccount("DELETE")
+        }
+
+        assertFalse("account deletion did not wait for the admitted route change", deletion.isCompleted)
+        assertFalse(auth.deleteAccountStarted.isCompleted)
+
+        replication.releaseSetMode.complete(Unit)
+        routeChange.await()
+        auth.deleteAccountStarted.await()
+        auth.releaseDeleteAccount.complete(Unit)
+        deletion.await()
+
+        assertNull(database.timerDao().localState()?.accountDeletionState)
+        assertNull(database.timerDao().localState()?.ownerUserId)
+    }
+
+    @Test
     fun preparedDeletionMarkerQuarantinesColdStartWithoutNetworkingOrScrub() = runBlocking {
         val account = user("account-1")
         val task = FocusTask("aaf83054-24b2-4c0e-901f-a974147bfe82", "Private task")
@@ -591,6 +741,41 @@ class TimerRepositoryTest {
     }
 
     @Test
+    fun corruptProductionCredentialsPublishRecoveryAndRepairWithoutUnrelatedDataLoss() = runBlocking {
+        val account = user("account-1")
+        val stored = emptyState(account)
+        database.timerDao().insertState(stored)
+        val credentialPreferences = context.getSharedPreferences(
+            CredentialPreferencesName,
+            Context.MODE_PRIVATE,
+        )
+        credentialPreferences.edit().putString("token-pair", "not-valid-base64").commit()
+        val unrelatedPreferences = context.getSharedPreferences(
+            UnrelatedPreferencesName,
+            Context.MODE_PRIVATE,
+        )
+        unrelatedPreferences.edit().putString("sentinel", "keep").commit()
+        val service = FakeService(account)
+        val auth = AuthRepository(service, TokenVault(context, json), "unused")
+        val repository = repository(service, auth)
+
+        repository.initialize()
+
+        assertEquals(stored, database.timerDao().localState())
+        assertEquals(0, service.syncCalls)
+        assertEquals(AuthStatus.SignedOut, repository.state.value.authStatus)
+        assertTrue(repository.state.value.localAccountResetRequired)
+        assertEquals("keep", unrelatedPreferences.getString("sentinel", null))
+
+        repository.resetLocalAccount()
+
+        assertEquals(TokenStoreState.Empty, TokenVault(context, json).state())
+        assertFalse(credentialPreferences.contains("token-pair"))
+        assertEquals("keep", unrelatedPreferences.getString("sentinel", null))
+        assertFalse(repository.state.value.localAccountResetRequired)
+    }
+
+    @Test
     fun malformedAccountJsonStaysQuarantinedUntilExplicitReset() = runBlocking {
         val account = user("account-1")
         val malformed = state(account, timer("timer-1")).copy(userJson = "{malformed")
@@ -749,6 +934,35 @@ class TimerRepositoryTest {
     }
 
     @Test
+    fun logoutMarkerFailureStillDrainsRevocationWithoutRestart() = runBlocking {
+        val account = user("account-1")
+        database.timerDao().insertState(state(account, timer("timer-1")))
+        val tokenVault = TokenVault(context, json).apply { write(FakeCredentialStore().tokens!!) }
+        val service = FakeService(account).apply { logoutFailuresRemaining = 1 }
+        val auth = AuthRepository(service, tokenVault, "unused")
+        val dao = FailingLogoutMarkerDao(database.timerDao())
+        val repository = repository(service, auth, dao = dao)
+        repository.initialize()
+
+        repository.logout()
+
+        assertEquals(1, dao.failureCount)
+        assertEquals(1, service.logoutCalls)
+        assertTrue(TokenVault(context, json).state() is TokenStoreState.LogoutPending)
+        assertEquals(AuthStatus.SignedOut, repository.state.value.authStatus)
+        assertNull(repository.state.value.user)
+        assertEquals(account.id, database.timerDao().localState()?.ownerUserId)
+        assertNull(database.timerDao().localState()?.accountDeletionState)
+
+        withTimeout(10_000) {
+            while (tokenVault.state() != TokenStoreState.Empty) delay(25)
+        }
+
+        assertEquals(2, service.logoutCalls)
+        assertEquals(TokenStoreState.Empty, TokenVault(context, json).state())
+    }
+
+    @Test
     fun lateSyncResponseCannotRestoreLoggedOutAccount() = runBlocking {
         val account = user("account-1")
         val running = timer("timer-1")
@@ -888,13 +1102,14 @@ class TimerRepositoryTest {
 
     private fun repository(
         service: FakeService,
-        auth: FakeAuthSession = FakeAuthSession(),
+        auth: AuthSession = FakeAuthSession(),
         networkAvailable: () -> Boolean = { true },
         sharedCoreDispatch: ((String, String) -> JsonElement)? = null,
         replication: IrohReplicationController? = null,
+        dao: TimerDao = database.timerDao(),
     ) = TimerRepository(
         context = context,
-        dao = database.timerDao(),
+        dao = dao,
         api = service,
         auth = auth,
         json = json,
@@ -995,10 +1210,18 @@ class TimerRepositoryTest {
         var quarantineAccountCalls = 0
         var foregroundCalls = 0
         var routeOperationCalls = 0
+        var blockSetMode = false
+        val setModeStarted = CompletableDeferred<Unit>()
+        val releaseSetMode = CompletableDeferred<Unit>()
+        var blockClearAccountData = false
+        val clearAccountDataStarted = CompletableDeferred<Unit>()
+        val releaseClearAccountData = CompletableDeferred<Unit>()
 
         override suspend fun initialize() = Unit
         override suspend fun setMode(mode: ReplicationMode) {
             routeOperationCalls += 1
+            setModeStarted.complete(Unit)
+            if (blockSetMode) releaseSetMode.await()
             mutableState.value = mutableState.value.copy(mode = mode)
         }
         override suspend fun createRoom(name: String) { routeOperationCalls += 1 }
@@ -1012,6 +1235,8 @@ class TimerRepositoryTest {
         }
         override suspend fun clearAccountData() {
             clearAccountDataCalls += 1
+            clearAccountDataStarted.complete(Unit)
+            if (blockClearAccountData) releaseClearAccountData.await()
             clearAccountDataFailure?.let { throw it }
         }
         override fun onForeground() {
@@ -1094,9 +1319,16 @@ class TimerRepositoryTest {
     private class FakeService(var profile: User) : PomodoroughService {
         var blockSync = false
         var syncCalls = 0
+        var logoutCalls = 0
+        var logoutFailuresRemaining = 0
         val syncStarted = CompletableDeferred<Unit>()
         val releaseSync = CompletableDeferred<Unit>()
         val syncCompleted = CompletableDeferred<Unit>()
+        var blockRevisionAuthentication = false
+        var failRevisionAuthentication = false
+        var revisionStreamCalls = 0
+        val revisionStreamStarted = CompletableDeferred<Unit>()
+        val releaseRevisionAuthentication = CompletableDeferred<Unit>()
         var syncResponse = SyncResponse(
             acknowledgements = emptyList(),
             revision = 0,
@@ -1138,8 +1370,56 @@ class TimerRepositoryTest {
         override suspend fun createChallenge(): NativeChallenge = error("Unused")
         override suspend fun exchange(request: NativeExchangeRequest): TokenPair = error("Unused")
         override suspend fun refresh(refreshToken: String): TokenPair = error("Unused")
-        override suspend fun logout(accessToken: String) = Unit
-        override fun revisionStream(accessToken: String, listener: EventSourceListener): EventSource =
+        override suspend fun logout(accessToken: String) {
+            logoutCalls += 1
+            if (logoutFailuresRemaining > 0) {
+                logoutFailuresRemaining -= 1
+                throw IOException("remote unavailable")
+            }
+        }
+        override fun revisionStream(accessToken: String, listener: EventSourceListener): EventSource {
+            revisionStreamCalls += 1
+            revisionStreamStarted.complete(Unit)
+            if (blockRevisionAuthentication) {
+                runBlocking { releaseRevisionAuthentication.await() }
+                throw AuthenticationRequired()
+            }
+            if (failRevisionAuthentication) throw AuthenticationRequired()
             error("Unused")
+        }
+    }
+
+    private class PausingDeletionMarkerDao(
+        private val delegate: TimerDao,
+    ) : TimerDao by delegate {
+        val preparedWriteStarted = CompletableDeferred<Unit>()
+        val releasePreparedWrite = CompletableDeferred<Unit>()
+
+        override suspend fun updateState(state: LocalStateEntity) {
+            if (state.accountDeletionState == "prepared" && !preparedWriteStarted.isCompleted) {
+                preparedWriteStarted.complete(Unit)
+                releasePreparedWrite.await()
+            }
+            delegate.updateState(state)
+        }
+    }
+
+    private class FailingLogoutMarkerDao(
+        private val delegate: TimerDao,
+    ) : TimerDao by delegate {
+        var failureCount = 0
+
+        override suspend fun updateState(state: LocalStateEntity) {
+            if (state.accountDeletionState == "local_scrub_required") {
+                failureCount += 1
+                throw IOException("marker write failed")
+            }
+            delegate.updateState(state)
+        }
+    }
+
+    private companion object {
+        const val CredentialPreferencesName = "pomodorough_tokens"
+        const val UnrelatedPreferencesName = "p1-2-unrelated"
     }
 }

@@ -153,7 +153,7 @@ class AuthRepositoryTest {
 
         repository(service, store).logout()
 
-        assertEquals(1, store.clearCalls)
+        assertEquals(0, store.clearCalls)
         assertTrue(service.logoutTokens.isEmpty())
     }
 
@@ -225,12 +225,14 @@ class AuthRepositoryTest {
             capture<AuthenticationRequired> { repository.authorized { it } }
         }
         refreshStarted.await()
-        repository.logout()
+        val logout = async { repository.logout() }
+        runCurrent()
         releaseRefresh.complete(Unit)
+        logout.await()
         request.await()
 
         assertNull(store.tokens)
-        assertEquals(1, store.clearCalls)
+        assertEquals(0, store.clearCalls)
     }
 
     @Test
@@ -294,20 +296,20 @@ class AuthRepositoryTest {
     }
 
     @Test
-    fun logoutServerFailureRetainsCredentialsForDurableRevocationRetry() = runTest {
+    fun logoutServerFailureRetiresCredentialsButKeepsDurableRevocation() = runTest {
         val original = freshTokens()
         val store = FakeTokenStore(original)
         val service = FakeService().apply { logoutFailure = ApiException(500, "unavailable") }
 
         capture<ApiException> { repository(service, store).logout() }
 
-        assertEquals(original, store.tokens)
+        assertNull(store.tokens)
         assertEquals(original, store.pendingLogout)
         assertEquals(0, store.clearCalls)
     }
 
     @Test
-    fun reconstructedRepositoryRetriesPendingLogoutBeforeSignIn() = runTest {
+    fun reconstructedRepositoryAllowsSignInWithoutRestoringPendingLogout() = runTest {
         val original = freshTokens()
         val replacement = freshTokens("replacement-access")
         val store = FakeTokenStore(original).apply { pendingLogout = original }
@@ -315,8 +317,81 @@ class AuthRepositoryTest {
 
         repository(service, store).signIn(FakeGoogleCredentialProvider("new-id-token"), "device-123")
 
-        assertEquals(listOf(original.accessToken), service.logoutTokens)
+        assertTrue(service.logoutTokens.isEmpty())
         assertEquals(replacement, store.tokens)
+        assertEquals(original, store.pendingLogout)
+    }
+
+    @Test
+    fun refreshedRevocationSurvivesLogoutFailureWithReplacementPair() = runTest {
+        val original = expiredTokens()
+        val replacement = freshTokens("replacement-access").copy(refreshToken = "replacement-refresh")
+        val store = FakeTokenStore(original)
+        val service = FakeService().apply {
+            refreshHandler = { replacement }
+            logoutFailure = ApiException(503, "offline")
+        }
+
+        capture<ApiException> { repository(service, store).logout() }
+
+        assertNull(store.tokens)
+        assertEquals(replacement, store.pendingLogout)
+        assertEquals(listOf(original.refreshToken), service.refreshTokens)
+        assertEquals(listOf(replacement.accessToken), service.logoutTokens)
+    }
+
+    @Test
+    fun unattemptedRevocationExpiresWithRefreshAuthority() = runTest {
+        val expired = freshTokens().copy(refreshTokenExpiresAt = "2000-01-01T00:00:00Z")
+        val store = FakeTokenStore(expired)
+        val service = FakeService()
+
+        repository(service, store, now = Instant.parse("2026-01-01T00:00:00Z")).logout()
+
+        assertNull(store.tokens)
+        assertNull(store.pendingLogout)
+        assertTrue(service.logoutTokens.isEmpty())
+        assertTrue(service.refreshTokens.isEmpty())
+    }
+
+    @Test
+    fun ordinaryLogoutUnauthorizedRefreshesAndRevokesReplacement() = runTest {
+        val original = freshTokens("old-access")
+        val replacement = freshTokens("fresh-access").copy(refreshToken = "fresh-refresh")
+        val store = FakeTokenStore(original)
+        val service = FakeService().apply {
+            var first = true
+            logoutHandler = {
+                if (first) {
+                    first = false
+                    throw ApiException(401, "access unauthorized")
+                }
+            }
+            refreshHandler = { replacement }
+        }
+
+        repository(service, store).logout()
+
+        assertNull(store.pendingLogout)
+        assertEquals(listOf("old-access", "fresh-access"), service.logoutTokens)
+        assertEquals(listOf(original.refreshToken), service.refreshTokens)
+    }
+
+    @Test
+    fun ambiguousRefreshIsNotDroppedAtOldExpiry() = runTest {
+        val expired = freshTokens().copy(refreshTokenExpiresAt = "2000-01-01T00:00:00Z")
+        val obligation = LogoutRevocation(
+            tokens = expired,
+            refreshOutcomeUnknown = true,
+        )
+        val store = FakeTokenStore(null).apply { installPending(obligation) }
+        val service = FakeService().apply {
+            refreshHandler = { throw ApiException(401, "reuse or invalid") }
+        }
+
+        repository(service, store, now = Instant.parse("2026-01-01T00:00:00Z")).retryPendingLogout()
+
+        assertEquals(listOf(expired.refreshToken), service.refreshTokens)
         assertNull(store.pendingLogout)
     }
 
@@ -337,14 +412,20 @@ class AuthRepositoryTest {
     }
 
     @Test
-    fun logoutUnauthorizedClearsTokens() = runTest {
-        val store = FakeTokenStore(freshTokens())
-        val service = FakeService().apply { logoutFailure = ApiException(401, "unauthorized") }
+    fun logoutUnauthorizedRefreshesBeforeTreatingSessionAsTerminal() = runTest {
+        val original = freshTokens()
+        val store = FakeTokenStore(original)
+        val service = FakeService().apply {
+            logoutFailure = ApiException(401, "unauthorized")
+            refreshHandler = { throw ApiException(401, "refresh unauthorized") }
+        }
 
         repository(service, store).logout()
 
         assertNull(store.tokens)
-        assertEquals(1, store.clearCalls)
+        assertNull(store.pendingLogout)
+        assertEquals(listOf(original.accessToken), service.logoutTokens)
+        assertEquals(listOf(original.refreshToken), service.refreshTokens)
     }
 
     @Test
@@ -401,7 +482,29 @@ class AuthRepositoryTest {
     }
 
     @Test
-    fun delayedLogoutCannotClearTokensFromImmediateNewSignIn() = runTest {
+    fun secondAccountLogoutCannotOverwriteOlderRevocationObligation() = runTest {
+        val accountA = freshTokens("account-a-access")
+        val accountB = freshTokens("account-b-access").copy(refreshToken = "account-b-refresh")
+        val store = FakeTokenStore(accountA)
+        val service = FakeService().apply {
+            logoutFailure = ApiException(503, "offline")
+            exchangeHandler = { accountB }
+        }
+        val repository = repository(service, store)
+
+        capture<ApiException> { repository.logout() }
+        repository.signIn(FakeGoogleCredentialProvider("account-b-id-token"), "device-b")
+        service.logoutFailure = null
+        repository.logout()
+
+        assertEquals(listOf(accountA.accessToken, accountB.accessToken), service.logoutTokens)
+        assertEquals(accountA, store.pendingLogout)
+        assertNull(store.tokens)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun concurrentSignInCannotLoseInFlightLogoutObligation() = runTest {
         val accountA = freshTokens()
         val accountB = freshTokens().copy(
             accessToken = "account-b-access",
@@ -421,19 +524,32 @@ class AuthRepositoryTest {
 
         val logout = async { repository.logout() }
         logoutStarted.await()
-        repository.signIn(FakeGoogleCredentialProvider("account-b-id-token"), "device-b")
+        val signIn = async {
+            repository.signIn(FakeGoogleCredentialProvider("account-b-id-token"), "device-b")
+        }
+        runCurrent()
+
+        assertEquals(accountB, store.tokens)
+        assertEquals(accountA, store.pendingLogout)
         releaseLogout.complete(Unit)
+        signIn.await()
         logout.await()
 
         assertEquals(listOf(accountA.accessToken), service.logoutTokens)
         assertEquals(accountB, store.tokens)
+        assertNull(store.pendingLogout)
         assertEquals(0, store.clearCalls)
     }
 
-    private fun repository(service: FakeService, store: FakeTokenStore) = AuthRepository(
+    private fun repository(
+        service: FakeService,
+        store: FakeTokenStore,
+        now: Instant = Instant.now(),
+    ) = AuthRepository(
         api = service,
         tokenVault = store,
         googleServerClientId = "client-id",
+        now = { now },
     )
 
     private fun freshTokens(accessToken: String = "fresh-access") = TokenPair(
@@ -462,32 +578,62 @@ class AuthRepositoryTest {
 
     private class FakeTokenStore(initial: TokenPair?) : TokenStore {
         var tokens = initial
-        var pendingLogout: TokenPair? = null
+        private val pendingRevocations = mutableListOf<LogoutRevocation>()
+        var pendingLogout: TokenPair?
+            get() = pendingRevocations.firstOrNull()?.tokens
+            set(value) {
+                pendingRevocations.clear()
+                if (value != null) pendingRevocations += LogoutRevocation(tokens = value)
+            }
         var unreadableCause: Throwable? = null
         var clearCalls = 0
         var writeCalls = 0
 
+        fun installPending(revocation: LogoutRevocation) {
+            pendingRevocations += revocation
+        }
+
         override fun read(): TokenPair? = tokens
 
         override fun state(): TokenStoreState = unreadableCause?.let(TokenStoreState::Unreadable)
-            ?: pendingLogout?.let(TokenStoreState::LogoutPending)
             ?: tokens?.let(TokenStoreState::Active)
+            ?: pendingRevocations.takeIf(List<*>::isNotEmpty)?.let(TokenStoreState::LogoutPending)
             ?: TokenStoreState.Empty
 
         override fun write(tokens: TokenPair) {
             this.tokens = tokens
-            pendingLogout = null
             writeCalls += 1
         }
 
         override fun markLogoutPending(tokens: TokenPair) {
+            retireForLogout(tokens)
+        }
+
+        override fun retireForLogout(tokens: TokenPair): LogoutRevocation {
             check(this.tokens == tokens)
-            pendingLogout = tokens
+            val revocation = LogoutRevocation(tokens = tokens)
+            pendingRevocations += revocation
+            this.tokens = null
+            return revocation
+        }
+
+        override fun pendingLogoutRevocations(): List<LogoutRevocation> = pendingRevocations.toList()
+
+        override fun replaceLogoutRevocation(
+            previous: LogoutRevocation,
+            replacement: LogoutRevocation,
+        ) {
+            val index = pendingRevocations.indexOfFirst { it.id == previous.id }
+            check(index >= 0)
+            pendingRevocations[index] = replacement
+        }
+
+        override fun completeLogoutRevocation(revocation: LogoutRevocation) {
+            pendingRevocations.removeAll { it.id == revocation.id }
         }
 
         override fun clear() {
             tokens = null
-            pendingLogout = null
             clearCalls += 1
         }
     }
