@@ -7,6 +7,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
@@ -179,7 +182,9 @@ class P24SignedOutNetworkNavigationTest {
     }
 
     private fun navigation(tab: MainTab): SemanticsNodeInteraction {
-        val matcher = hasContentDescription(label(tab.labelRes)) and hasClickAction()
+        val accessibleName = hasText(label(tab.labelRes)) or hasContentDescription(label(tab.labelRes))
+        val matcher = accessibleName and hasClickAction() and
+            SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab)
         composeRule.onAllNodes(matcher).assertCountEquals(1)
         return composeRule.onNode(matcher).assertIsDisplayed().assertIsEnabled()
             .assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(48.dp)

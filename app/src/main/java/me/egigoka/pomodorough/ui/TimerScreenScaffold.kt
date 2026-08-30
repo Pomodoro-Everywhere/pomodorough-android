@@ -32,6 +32,7 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -228,18 +229,21 @@ private fun SecondaryTabList(
     recentHistory: List<HistoryItem>,
     padding: PaddingValues,
 ) {
-    LazyColumn(
-        state = navigation.listState(),
-        modifier = Modifier.fillMaxSize().padding(padding),
-        contentPadding = PaddingValues(bottom = 20.dp),
-    ) {
-        secondaryHeader(state, contentActions)
-        when (navigation.activeTab) {
-            MainTab.Timer -> Unit
-            MainTab.Tasks -> taskTab(state, actions, mutationsEnabled)
-            MainTab.Pattern -> patternTab(state, actions, mutationsEnabled)
-            MainTab.Arrivals -> arrivalsTab(state, recentHistory)
-            MainTab.Network -> networkTab(state, actions, mutationsEnabled)
+    val activeTab = navigation.activeTab
+    key(activeTab) {
+        LazyColumn(
+            state = navigation.listState(),
+            modifier = Modifier.fillMaxSize().padding(padding),
+            contentPadding = PaddingValues(bottom = 20.dp),
+        ) {
+            secondaryHeader(state, contentActions)
+            when (activeTab) {
+                MainTab.Timer -> Unit
+                MainTab.Tasks -> taskTab(state, actions, mutationsEnabled)
+                MainTab.Pattern -> patternTab(state, actions, mutationsEnabled)
+                MainTab.Arrivals -> arrivalsTab(state, recentHistory)
+                MainTab.Network -> networkTab(state, actions, mutationsEnabled)
+            }
         }
     }
 }
