@@ -258,6 +258,7 @@ private fun CreateRoomCard(
     onNameChange: (String) -> Unit,
     onCreate: () -> Unit,
 ) {
+    val roomNameLabel = stringResource(R.string.room_name_optional)
     Surface(
         color = MaterialTheme.colorScheme.tertiaryContainer,
         contentColor = darkModeTextColor(Ink),
@@ -269,8 +270,8 @@ private fun CreateRoomCard(
                 value = roomName,
                 onValueChange = onNameChange,
                 enabled = enabled,
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text(stringResource(R.string.room_name_optional)) },
+                modifier = Modifier.fillMaxWidth().semantics { contentDescription = roomNameLabel },
+                label = { Text(roomNameLabel, Modifier.clearAndSetSemantics {}) },
                 supportingText = { Text(stringResource(R.string.copy_1_64_characters_when_set)) },
                 singleLine = true,
             )
@@ -291,6 +292,7 @@ private fun JoinRoomCard(
     onCodeChange: (String) -> Unit,
     onJoin: () -> Unit,
 ) {
+    val inviteLabel = stringResource(R.string.room_invite)
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant,
         contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -302,8 +304,8 @@ private fun JoinRoomCard(
                 value = joinCode,
                 onValueChange = onCodeChange,
                 enabled = enabled,
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text(stringResource(R.string.room_invite)) },
+                modifier = Modifier.fillMaxWidth().semantics { contentDescription = inviteLabel },
+                label = { Text(inviteLabel, Modifier.clearAndSetSemantics {}) },
                 placeholder = { Text(stringResource(R.string.pomodorough1)) },
                 minLines = 3,
                 maxLines = 6,

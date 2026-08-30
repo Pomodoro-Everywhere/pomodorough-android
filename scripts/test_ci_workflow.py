@@ -33,11 +33,11 @@ class CIWorkflowTests(unittest.TestCase):
         workflow = CI_WORKFLOW.read_text(encoding="utf-8")
 
         self.assertIn(
-            'CORE_COMMIT: "dda034612bd9a8b3d0f56959d9eef888980acc7b"',
+            'CORE_COMMIT: "440f5364f036d02d46abca048f09b893b0134791"',
             workflow,
         )
         self.assertIn(
-            'CORE_SHA256: "33cb3bc7477a8075a9613e45b309495e44d28f794e6b88362a8073d505309f5a"',
+            'CORE_SHA256: "4a58bd2b702e0d43d6f2262d21f7e940dfdf05cc911d6519b67c1b5e988d8b0b"',
             workflow,
         )
         self.assertIn("repository: Pomodoro-Everywhere/pomodorough-core", workflow)
@@ -139,7 +139,6 @@ class CIWorkflowTests(unittest.TestCase):
         self.assertIn('-e expectedLocale "$test_locale"', script)
         self.assertIn('-e class "$test_class"', script)
         self.assertIn('shard_count="${TEST_SHARD_COUNT:-8}"', script)
-        self.assertIn('expected_test_count="${EXPECTED_TEST_COUNT:-290}"', script)
         self.assertIn('-e numShards "$shard_count" -e shardIndex "$shard_index"', script)
         self.assertIn('instrumentation-shard-$shard_index.txt', script)
         self.assertIn('completed_tests=$((completed_tests + completed))', script)
@@ -161,6 +160,57 @@ class CIWorkflowTests(unittest.TestCase):
         self.assertNotIn('"${instrumentation_args[@]}"', script)
         self.assertIn("PomodoroughRtlAccessibilityTest", workflow := CI_WORKFLOW.read_text(encoding="utf-8"))
         self.assertIn("TEST_CLASS=${{ matrix.test-class }}", workflow)
+
+    def test_instrumentation_count_matches_source_inventory(self) -> None:
+        script = INSTRUMENTED_SCRIPT.read_text(encoding="utf-8")
+        default = re.search(r'expected_test_count="\$\{EXPECTED_TEST_COUNT:-(\d+)\}"', script)
+        self.assertIsNotNone(default)
+        inventory = []
+        for source_set in ("androidTest", "sharedTest"):
+            for path in sorted((ROOT / "app/src" / source_set / "java").rglob("*")):
+                if path.suffix not in (".kt", ".java"):
+                    continue
+                source = path.read_text(encoding="utf-8")
+                annotations = re.findall(r"^\s*@Test\b", source, re.MULTILINE)
+                # Current suite uses JUnit4 Kotlin methods. Fail if a new annotation
+                # shape needs inventory support instead of silently undercounting it.
+                methods = re.findall(
+                    r"^\s*@Test(?:\([^\n]*\))?\s*\n\s*fun\s+(\w+)\(",
+                    source, re.MULTILINE,
+                )
+                self.assertEqual(len(annotations), len(methods), str(path))
+                inventory.extend((path.relative_to(ROOT), method) for method in methods)
+        self.assertTrue(inventory)
+        self.assertEqual(len(inventory), len(set(inventory)))
+        self.assertEqual(int(default[1]), len(inventory), "Update runner's explicit inventory guard")
+
+    def test_instrumentation_count_guard_fails_closed(self) -> None:
+        script = INSTRUMENTED_SCRIPT.read_text(encoding="utf-8")
+        default = re.search(r'expected_test_count="\$\{EXPECTED_TEST_COUNT:-(\d+)\}"', script)
+        expected = int(default[1])
+        guard = script[script.index('echo "Instrumentation completed '):]
+        cases = (
+            (expected, expected, 0, "", True),
+            (expected - 1, expected - 1, 0, "", False),
+            (expected + 1, expected + 1, 0, "", False),
+            (0, 0, 0, "", False),
+            (expected - 1, expected, 0, "", False),
+            (expected, expected, 1, "", False),
+            (5, 5, 0, "FocusedTest", True),
+            (4, 5, 0, "FocusedTest", False),
+            (5, 5, 1, "FocusedTest", False),
+        )
+        for completed, announced, status, test_class, passes in cases:
+            with self.subTest(completed=completed, announced=announced, status=status, test_class=test_class):
+                setup = (
+                    f"completed_tests={completed}; announced_tests={announced}; "
+                    f"runner_status={status}; expected_test_count={expected}; test_class='{test_class}'\n"
+                )
+                result = subprocess.run(
+                    ["bash", "-euo", "pipefail", "-c", setup + guard],
+                    capture_output=True, text=True, check=False,
+                )
+                self.assertEqual(result.returncode == 0, passes, result.stdout + result.stderr)
 
     def test_release_smoke_depends_on_complete_connected_matrix(self) -> None:
         workflow = CI_WORKFLOW.read_text(encoding="utf-8")

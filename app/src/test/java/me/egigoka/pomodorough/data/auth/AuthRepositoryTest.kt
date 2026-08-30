@@ -254,6 +254,158 @@ class AuthRepositoryTest {
     }
 
     @Test
+    fun unauthorizedRequestCannotRetryWithAnotherAccountSession() = runTest {
+        val accountA = freshTokens("account-a-access")
+        val accountB = freshTokens("account-b-access").copy(refreshToken = "account-b-refresh")
+        val store = FakeTokenStore(accountA)
+        val service = FakeService().apply { exchangeHandler = { accountB } }
+        val repository = repository(service, store)
+        val requestStarted = CompletableDeferred<Unit>()
+        val releaseUnauthorized = CompletableDeferred<Unit>()
+        val payload = "account-a-queued-operation"
+        val attempts = mutableListOf<Pair<String, String>>()
+
+        val request = async {
+            capture<AuthenticationRequired> {
+                repository.authorized { token ->
+                    attempts += token to payload
+                    requestStarted.complete(Unit)
+                    releaseUnauthorized.await()
+                    throw ApiException(401, "expired")
+                }
+            }
+        }
+        requestStarted.await()
+        repository.clear()
+        repository.signIn(FakeGoogleCredentialProvider("account-b-id-token"), "device-b")
+        releaseUnauthorized.complete(Unit)
+        request.await()
+
+        assertEquals(listOf(accountA.accessToken to payload), attempts)
+        assertEquals(0, service.refreshCalls)
+        assertEquals(accountB, store.tokens)
+        assertEquals(1, store.writeCalls)
+        assertEquals(1, store.clearCalls)
+    }
+
+    @Test
+    fun unauthorizedRequestCannotRetryAfterSameAccountReloginWithIdenticalTokens() = runTest {
+        val tokens = freshTokens("account-a-access")
+        val store = FakeTokenStore(tokens)
+        val service = FakeService().apply { exchangeHandler = { tokens } }
+        val repository = repository(service, store)
+        val credentials = FakeGoogleCredentialProvider("account-a-id-token")
+        repository.signIn(credentials, "device-a")
+        val requestStarted = CompletableDeferred<Unit>()
+        val releaseUnauthorized = CompletableDeferred<Unit>()
+        val attempts = mutableListOf<String>()
+
+        val request = async {
+            capture<AuthenticationRequired> {
+                repository.authorized { token ->
+                    attempts += token
+                    requestStarted.complete(Unit)
+                    releaseUnauthorized.await()
+                    throw ApiException(401, "expired")
+                }
+            }
+        }
+        requestStarted.await()
+        repository.logout()
+        repository.signIn(credentials, "device-a")
+        releaseUnauthorized.complete(Unit)
+        request.await()
+
+        assertEquals(listOf(tokens.accessToken), attempts)
+        assertEquals(0, service.refreshCalls)
+        assertEquals(tokens, store.tokens)
+        assertEquals(listOf(tokens.accessToken), service.logoutTokens)
+        assertNull(store.pendingLogout)
+        assertEquals(2, store.writeCalls)
+        assertEquals(0, store.clearCalls)
+    }
+
+    @Test
+    fun delayedUnauthorizedRequestReusesDurableSameSessionRefresh() = runTest {
+        val original = freshTokens("old-access").copy(refreshToken = "old-refresh")
+        val rotated = freshTokens("rotated-access").copy(refreshToken = "rotated-refresh")
+        val store = FakeTokenStore(original)
+        val service = FakeService().apply { refreshHandler = { rotated } }
+        val repository = repository(service, store)
+        val requestStarted = CompletableDeferred<Unit>()
+        val releaseUnauthorized = CompletableDeferred<Unit>()
+        val attempts = mutableListOf<String>()
+
+        val request = async {
+            repository.authorized { token ->
+                attempts += token
+                if (token == original.accessToken) {
+                    requestStarted.complete(Unit)
+                    releaseUnauthorized.await()
+                    throw ApiException(401, "expired")
+                }
+                assertEquals(rotated, store.tokens)
+                "accepted"
+            }
+        }
+        requestStarted.await()
+        val concurrentResult = repository.authorized { token ->
+            if (token == original.accessToken) throw ApiException(401, "expired")
+            assertEquals(rotated, store.tokens)
+            token
+        }
+        releaseUnauthorized.complete(Unit)
+
+        assertEquals("accepted", request.await())
+        assertEquals(rotated.accessToken, concurrentResult)
+        assertEquals(listOf(original.accessToken, rotated.accessToken), attempts)
+        assertEquals(listOf(original.refreshToken), service.refreshTokens)
+        assertEquals(rotated, store.tokens)
+        assertEquals(1, store.writeCalls)
+        assertEquals(0, store.clearCalls)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun requestsWaitingForRefreshCannotEnterReplacementSession() = runTest {
+        val accountA = expiredTokens()
+        val accountB = freshTokens("account-b-access").copy(refreshToken = "account-b-refresh")
+        val store = FakeTokenStore(accountA)
+        val refreshStarted = CompletableDeferred<Unit>()
+        val releaseRefresh = CompletableDeferred<Unit>()
+        val service = FakeService().apply {
+            refreshHandler = {
+                refreshStarted.complete(Unit)
+                releaseRefresh.await()
+                freshTokens("account-a-rotated-access")
+            }
+            exchangeHandler = { accountB }
+        }
+        val repository = repository(service, store)
+        val attempts = mutableListOf<String>()
+
+        val first = async {
+            capture<AuthenticationRequired> { repository.authorized { attempts += it } }
+        }
+        refreshStarted.await()
+        val second = async {
+            capture<AuthenticationRequired> { repository.authorized { attempts += it } }
+        }
+        runCurrent()
+        repository.clear()
+        repository.signIn(FakeGoogleCredentialProvider("account-b-id-token"), "device-b")
+        releaseRefresh.complete(Unit)
+        first.await()
+        second.await()
+
+        assertTrue(attempts.isEmpty())
+        assertEquals(listOf(accountA.refreshToken), service.refreshTokens)
+        assertEquals(accountB, store.tokens)
+        assertEquals(1, store.writeCalls)
+        assertEquals(1, store.clearCalls)
+    }
+
+    @Test
     fun secondUnauthorizedResponseClearsSession() = runTest {
         val store = FakeTokenStore(freshTokens(accessToken = "old-access"))
         val service = FakeService().apply { refreshHandler = { freshTokens() } }

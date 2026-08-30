@@ -123,7 +123,7 @@ class AuthRepository(
             block(initial.tokens.accessToken) to initial
         } catch (error: ApiException) {
             if (error.statusCode != 401) throw error
-            val refreshed = refresh(initial.tokens.accessToken, force = true)
+            val refreshed = refresh(initial, force = true)
             try {
                 block(refreshed.tokens.accessToken) to refreshed
             } catch (retryError: ApiException) {
@@ -232,14 +232,15 @@ class AuthRepository(
         return if (isAccessFresh(current.tokens)) {
             current
         } else {
-            refresh(current.tokens.accessToken, force = false)
+            refresh(current, force = false)
         }
     }
 
-    private suspend fun refresh(previousAccessToken: String, force: Boolean): SessionSnapshot =
+    private suspend fun refresh(previous: SessionSnapshot, force: Boolean): SessionSnapshot =
         refreshMutex.withLock {
             val current = currentSession() ?: throw AuthenticationRequired()
-            if (current.tokens.accessToken != previousAccessToken ||
+            if (current.generation != previous.generation) throw AuthenticationRequired()
+            if (current.tokens.accessToken != previous.tokens.accessToken ||
                 (!force && isAccessFresh(current.tokens))
             ) {
                 return@withLock current
@@ -274,7 +275,8 @@ class AuthRepository(
         if (sessionGeneration != current.generation || tokenVault.read() != current.tokens) {
             return@synchronized null
         }
-        replaceSession(replacement)
+        tokenVault.write(replacement)
+        current.copy(tokens = replacement)
     }
 
     private fun clearSession(): SessionSnapshot? = synchronized(sessionLock) {

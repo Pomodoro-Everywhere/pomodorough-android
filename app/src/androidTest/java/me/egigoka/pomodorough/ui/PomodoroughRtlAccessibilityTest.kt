@@ -168,6 +168,7 @@ class PomodoroughRtlAccessibilityTest {
         composeRule.runOnIdle { state = state.copy(historyResolution = HistoryResolutionState(2, 3)) }
         assertHistoryChoice(context)
         composeRule.runOnIdle { assertEquals(BootstrapStrategy.Merge, resolved) }
+        assertRoomFieldsRemainLabeledAndEditable(context)
     }
 
     private fun assertConfiguredLocale(context: Context): LayoutDirection {
@@ -364,6 +365,22 @@ class PomodoroughRtlAccessibilityTest {
             if (scroll) node.performScrollTo() else node
         }.assertIsDisplayed().assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(48.dp)
 
+    private fun assertRoomFieldsRemainLabeledAndEditable(context: Context) {
+        listOf(
+            R.string.room_name_optional to "Accessible room",
+            R.string.room_invite to "pomodorough1:editable-invite-witness",
+        ).forEach { (label, value) ->
+            val field = composeRule.onNodeWithContentDescription(context.getString(label))
+                .performScrollTo().assertIsDisplayed()
+            field.performTextInput(value)
+            val semantics = field.fetchSemanticsNode().config
+            assertEquals(value, semantics[SemanticsProperties.EditableText].text)
+            assertTrue(semantics.contains(SemanticsActions.SetText))
+            assertPlatformAccessibility()
+            assertAccessibleEditableValue(context.getString(label), value)
+        }
+    }
+
     private fun assertPlatformAccessibility() {
         // Accessibility Framework sees Compose TextButton visual bounds, while semantics expose 48 dp targets.
         val validator = AccessibilityValidator()
@@ -374,6 +391,11 @@ class PomodoroughRtlAccessibilityTest {
         composeRule.enableAccessibilityChecks(validator)
         try {
             composeRule.onRoot().tryPerformAccessibilityChecks()
+        } catch (failure: Throwable) {
+            runCatching { accessibilityHierarchy() }
+                .onSuccess { failure.addSuppressed(AssertionError(it)) }
+                .onFailure { failure.addSuppressed(it) }
+            throw failure
         } finally {
             composeRule.disableAccessibilityChecks()
         }

@@ -423,7 +423,7 @@ class PomodoroughScreenTest {
         }
         composeRule.onNodeWithText("Room invites grant full read and write access.", substring = true)
             .assertExists()
-        composeRule.onNodeWithText("Room invite").performClick()
+        composeRule.onNodeWithContentDescription("Room invite").performClick()
         composeRule.onNodeWithText("JOIN ROOM").assertIsNotEnabled()
         assertNull(joined)
     }
