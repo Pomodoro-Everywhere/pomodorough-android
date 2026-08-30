@@ -16,6 +16,7 @@ import me.egigoka.pomodorough.data.local.IrohPeerEntity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -107,8 +108,9 @@ class IrohPeerSynchronizationTimeoutTest {
         val cancellation = CancellationException("service stopped")
         val fixture = PeerFixture { throw cancellation }
         val failure = runCatching { fixture.sync.syncNow() }.exceptionOrNull()
-        assertSame(cancellation, failure)
+        assertCancellationPropagated(cancellation, failure)
         assertEquals(listOf("stalled"), fixture.attempts)
+        assertTrue(fixture.statuses.isEmpty())
     }
 
     @Test
@@ -138,9 +140,47 @@ class IrohPeerSynchronizationTimeoutTest {
         val cancellation = CancellationException("storage cancelled")
         val fixture = PeerFixture {}
         fixture.peersFailure = cancellation
-        assertSame(cancellation, runCatching { fixture.sync.syncNow() }.exceptionOrNull())
+        assertCancellationPropagated(cancellation, runCatching { fixture.sync.syncNow() }.exceptionOrNull())
         assertTrue(fixture.attempts.isEmpty())
         assertTrue(fixture.statuses.isEmpty())
+    }
+
+    @Test
+    fun cancellationProvenanceAcceptsOriginalAndRecoveredForms() {
+        val cancellation = CancellationException("service stopped").apply {
+            initCause(IOException("original cause"))
+        }
+        val recovered = CancellationException(cancellation.message).apply { initCause(cancellation) }
+        assertCancellationPropagated(cancellation, cancellation)
+        assertCancellationPropagated(cancellation, recovered)
+    }
+
+    @Test
+    fun cancellationProvenanceRejectsMissingUnrelatedOrChangedFailures() {
+        val cancellation = CancellationException("service stopped")
+        val unrelated = CancellationException(cancellation.message)
+        val failures = listOf(
+            null,
+            unrelated,
+            IOException(cancellation.message),
+            IOException(cancellation.message, cancellation),
+            CancellationException("changed reason").apply { initCause(cancellation) },
+            CancellationException(cancellation.message).apply { initCause(unrelated) },
+            CancellationException(cancellation.message).apply {
+                initCause(IOException("unrelated wrapper", cancellation))
+            },
+        )
+        for (failure in failures) {
+            assertThrows(AssertionError::class.java) {
+                assertCancellationPropagated(cancellation, failure)
+            }
+        }
+    }
+
+    private fun assertCancellationPropagated(expected: CancellationException, actual: Throwable?) {
+        assertEquals(expected.javaClass, actual?.javaClass)
+        assertEquals(expected.message, actual?.message)
+        assertSame(expected, if (actual === expected) actual else actual?.cause)
     }
 }
 
