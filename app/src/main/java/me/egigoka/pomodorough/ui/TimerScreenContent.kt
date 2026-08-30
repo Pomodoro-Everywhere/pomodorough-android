@@ -356,7 +356,7 @@ internal fun MainNavigationBar(
 ) {
     val showLabels = LocalConfiguration.current.fontScale < 1.3f
     NavigationBar {
-        listOf(MainTab.Timer, MainTab.Tasks, MainTab.Pattern, MainTab.Arrivals).forEach { tab ->
+        MainTab.entries.forEach { tab ->
             val label = stringResource(tab.labelRes)
             NavigationBarItem(
                 selected = tab == active,

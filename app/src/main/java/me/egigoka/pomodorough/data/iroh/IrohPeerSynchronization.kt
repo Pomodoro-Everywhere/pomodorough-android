@@ -5,9 +5,12 @@ import computer.iroh.Endpoint
 import kotlin.math.min
 import kotlin.random.Random
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -46,6 +49,7 @@ internal class IrohPeerSynchronization(
     private val dependencies: IrohPeerSyncDependencies,
     private val onEvent: suspend (IrohPeerSyncEvent) -> Unit,
     private val random: Random,
+    private val exchangePeer: (suspend (Endpoint, IrohServiceContext, Long, IrohPeerEntity) -> Unit)? = null,
 ) {
     private val mutex = Mutex()
 
@@ -103,6 +107,7 @@ internal class IrohPeerSynchronization(
 
     private suspend fun knownPeers(roomId: String): List<IrohPeerEntity>? {
         return runCatching { dependencies.peers(roomId) }.getOrElse { error ->
+            if (error is CancellationException) throw error
             onEvent(IrohPeerSyncEvent.Status(
                 IrohConnectionStatus.UNAVAILABLE,
                 roomId = roomId,
@@ -120,13 +125,14 @@ internal class IrohPeerSynchronization(
     ): Boolean? {
         var synchronized = false
         for (peer in peers) {
+            currentCoroutineContext().ensureActive()
             if (owner != sessions.generation()) return null
             try {
                 syncPeer(endpoint, context, owner, peer)
                 synchronized = true
-            } catch (error: CancellationException) {
-                throw error
-            } catch (_: Exception) {
+            } catch (error: Exception) {
+                currentCoroutineContext().ensureActive()
+                if (error is CancellationException && error !is TimeoutCancellationException) throw error
                 if (runCatching { dependencies.snapshot(context.roomId).conflict }
                         .getOrNull() != null
                 ) break
@@ -142,6 +148,16 @@ internal class IrohPeerSynchronization(
         owner: Long,
         peer: IrohPeerEntity,
     ) = withTimeout(45_000L) {
+        val exchange = exchangePeer ?: ::exchangeWithPeer
+        exchange(endpoint, context, owner, peer)
+    }
+
+    private suspend fun exchangeWithPeer(
+        endpoint: Endpoint,
+        context: IrohServiceContext,
+        owner: Long,
+        peer: IrohPeerEntity,
+    ) {
         transport.withParsedTicket(peer.endpointTicket) { endpointId, ticket ->
             require(endpointId == peer.endpointId) { "Saved endpoint ticket identity changed" }
             onEvent(IrohPeerSyncEvent.Status(

@@ -559,6 +559,9 @@ class TimerRepository(
         if (pendingBootstrapResolution != null) restorePendingResolutionForSignedOut(pendingMessage)
         clearStaleOwnedTimer()
         authStatus = if (auth.hasTokens()) AuthStatus.Loading else AuthStatus.SignedOut
+        if (auth.credentialState() == AuthCredentialState.Unreadable) {
+            resolveCredentialStateForInitialization()
+        }
         if (authStatus == AuthStatus.SignedOut) restorePendingResolutionForSignedOut(pendingMessage)
         initialized.complete(Unit)
         publish()
@@ -1266,10 +1269,10 @@ class TimerRepository(
         timerId: String,
         notifier: suspend () -> Boolean,
     ): Boolean {
-        initialize()
+        ensureLocalInitialized()
         return actionMutex.withLock {
             val completedTimer = projection.timer
-            if (accountPublication.quarantined || completedTimer?.id != timerId ||
+            if (localWorkspaceAdmissionBlocked() || completedTimer?.id != timerId ||
                 completedTimer.status != TimerStatus.Completed
             ) return@withLock false
             alarmCoordinator.markCompletionAlert(timerId)
@@ -1402,10 +1405,14 @@ class TimerRepository(
         issueTaskOperation(TaskOperationType.Delete, task)
     }
 
-    override suspend fun finishExpiredTimer(): Boolean {
+    override suspend fun finishExpiredTimer(): Boolean = finishExpiredTimer(expectedTimerId = null)
+
+    internal suspend fun finishExpiredTimer(expectedTimerId: String?): Boolean {
         ensureLocalInitialized()
-        if (localMutationCorrupted || credentialRecoveryRequired || local.accountDeletionState != null) return false
-        val timer = expirableTimer() ?: return false
+        val timer = actionMutex.withLock {
+            if (localWorkspaceAdmissionBlocked()) return@withLock null
+            expirableTimer()?.takeIf { expectedTimerId == null || it.id == expectedTimerId }
+        } ?: return false
         replication?.initialize()
         if (replicationMode() != ReplicationMode.CENTRALIZED) reloadWorkspace(replicationMode())
         if (timer.status != TimerStatus.Running ||
@@ -1415,7 +1422,7 @@ class TimerRepository(
         return finishLocalTimer(
             onlyIfExpired = true,
             allowWhileLoading = true,
-            sourceTimer = timer,
+            expectedTimerId = expectedTimerId,
         )
     }
 
@@ -1428,21 +1435,30 @@ class TimerRepository(
     private suspend fun finishExpiredIrohTimer(timer: CanonicalTimer): Boolean = try {
         replication?.afterLocalMutation()
         reloadWorkspace(ReplicationMode.IROH)
-        val expiry = coreCompletion.expiry(
-            CoreExpiryInput(
-                beforeTimer = timer,
-                projectedTimer = projection.timer,
-                history = projection.history,
-                selectedPhase = settings.selectedPhase,
-                autoStartBreaks = settings.autoStartBreaks,
-                localDeviceId = local.deviceId,
-                ownedTimerId = local.ownedTimerId,
-                reference = Instant.ofEpochMilli(currentTimeMillis()),
-                zoneId = java.time.ZoneId.systemDefault(),
-            ),
-        )
-        expiry.generatedBreakPhase?.let { phase -> issueCommand(CommandType.Start, phase) }
-        expiry.expired
+        var saved = false
+        val expired = actionMutex.withLock {
+            if (localWorkspaceAdmissionBlocked()) return@withLock false
+            val expiry = coreCompletion.expiry(
+                CoreExpiryInput(
+                    beforeTimer = timer,
+                    projectedTimer = projection.timer,
+                    history = projection.history,
+                    selectedPhase = settings.selectedPhase,
+                    autoStartBreaks = settings.autoStartBreaks,
+                    localDeviceId = local.deviceId,
+                    ownedTimerId = local.ownedTimerId,
+                    reference = Instant.ofEpochMilli(currentTimeMillis()),
+                    zoneId = java.time.ZoneId.systemDefault(),
+                ),
+            )
+            expiry.generatedBreakPhase?.let { phase ->
+                saved = commitTimerCommand(CommandType.Start, phase)
+                if (!saved) return@withLock false
+            }
+            expiry.expired
+        }
+        if (saved) afterLocalMutation()
+        expired
     } catch (error: Exception) {
         conflict = error.message ?: appContext.getString(R.string.iroh_room_projection_could_not_be_refreshed)
         publish()
@@ -2241,12 +2257,13 @@ class TimerRepository(
     private suspend fun finishLocalTimer(
         onlyIfExpired: Boolean,
         allowWhileLoading: Boolean,
-        sourceTimer: CanonicalTimer? = null,
+        expectedTimerId: String? = null,
     ): Boolean {
         var saved = false
         actionMutex.withLock {
-            if (mutationsBlocked(allowWhileLoading)) return@withLock
-            val current = sourceTimer ?: projection.timer ?: return@withLock
+            if (localWorkspaceAdmissionBlocked(allowWhileLoading)) return@withLock
+            val current = (if (onlyIfExpired) expirableTimer() else projection.timer) ?: return@withLock
+            if (expectedTimerId != null && current.id != expectedTimerId) return@withLock
             if (!canFinishTimer(current, onlyIfExpired)) return@withLock
             val completionRequest = coreCompletion.commandRequest(
                 CoreCommandRequestInput(
@@ -2293,30 +2310,30 @@ class TimerRepository(
     }
 
     private suspend fun issueCommand(type: String, startingPhase: String? = null): Boolean {
-        var saved = false
-        actionMutex.withLock {
-            if (mutationsBlocked()) return@withLock
-            val state = timerMutationState()
-            if (!mutationCoordinator.acceptsCommand(state, type)) return@withLock
-            val reservation = reserveMutation(count = 1, withDeviceSequences = true)
-                ?: return@withLock
-            val mutation = plannedMutation {
-                mutationCoordinator.command(
-                    TimerCommandMutationInput(
-                        state = state,
-                        type = type,
-                        startingPhase = startingPhase,
-                        reservation = reservation,
-                        physicalNowMs = currentTimeMillis(),
-                    ),
-                )
-            } ?: return@withLock
-            val event = transitionCommitter.commit(RepositoryTimerCommandTransition(mutation))
-            installTimerMutation(event.plan)
-            saved = true
-        }
+        val saved = actionMutex.withLock { commitTimerCommand(type, startingPhase) }
         if (saved) afterLocalMutation()
         return saved
+    }
+
+    private suspend fun commitTimerCommand(type: String, startingPhase: String?): Boolean {
+        if (mutationsBlocked()) return false
+        val state = timerMutationState()
+        if (!mutationCoordinator.acceptsCommand(state, type)) return false
+        val reservation = reserveMutation(count = 1, withDeviceSequences = true) ?: return false
+        val mutation = plannedMutation {
+            mutationCoordinator.command(
+                TimerCommandMutationInput(
+                    state = state,
+                    type = type,
+                    startingPhase = startingPhase,
+                    reservation = reservation,
+                    physicalNowMs = currentTimeMillis(),
+                ),
+            )
+        } ?: return false
+        val event = transitionCommitter.commit(RepositoryTimerCommandTransition(mutation))
+        installTimerMutation(event.plan)
+        return true
     }
 
     private fun installTimerMutation(mutation: TimerCommandMutationPlan) {
@@ -2561,7 +2578,8 @@ class TimerRepository(
     suspend fun reloadWorkspace(mode: ReplicationMode = replicationMode()) {
         actionMutex.withLock {
             if (!initialized.isCompleted) return@withLock
-            if (accountNetworkBlocked()) return@withLock
+            if (localWorkspaceAdmissionBlocked()) return@withLock
+            if (mode == ReplicationMode.CENTRALIZED && accountNetworkBlocked()) return@withLock
             val stored = timerStore.loadWorkspace()
             local = stored.local
             pending = stored.pending.commands
@@ -3426,6 +3444,10 @@ class TimerRepository(
     private fun accountNetworkBlocked(): Boolean =
         !accountAdmissionResolved || accountPublication.quarantined || !::local.isInitialized ||
             local.accountDeletionState != null || credentialRecoveryRequired
+
+    private fun localWorkspaceAdmissionBlocked(allowWhileLoading: Boolean = true): Boolean =
+        !::local.isInitialized || mutationFailure != null || mutationsBlocked(allowWhileLoading) ||
+            auth.credentialState() !in setOf(AuthCredentialState.Empty, AuthCredentialState.Active)
 
     private fun mutationsBlocked(allowWhileLoading: Boolean = false): Boolean {
         return accountPublication.quarantined ||

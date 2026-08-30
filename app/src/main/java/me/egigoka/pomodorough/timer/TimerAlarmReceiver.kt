@@ -21,6 +21,7 @@ import me.egigoka.pomodorough.MainActivity
 import me.egigoka.pomodorough.PomodoroughApplication
 import me.egigoka.pomodorough.R
 import me.egigoka.pomodorough.data.CanonicalTimer
+import me.egigoka.pomodorough.data.TimerRepository
 import me.egigoka.pomodorough.data.TimerStatus
 
 internal fun interface ExpiredTimerCompleting {
@@ -148,6 +149,18 @@ internal suspend fun completeMatchingExpiredTimer(
     return if (currentTimerId() == expectedTimerId) finish() else false
 }
 
+internal suspend fun deliverTimerAlarm(
+    repository: TimerRepository,
+    timerId: String,
+    notifier: TimerCompletionNotifying,
+): TimerAlarmDeliveryResult = TimerAlarmDeliveryPolicy(
+    completion = ExpiredTimerCompleting { repository.finishExpiredTimer(timerId) },
+    notification = TimerCompletionNotifying {
+        repository.showCompletionAlert(timerId) { notifier.show() }
+    },
+    shouldNotify = { shouldPostCompletionAlert(repository.state.value.timer) },
+).deliver()
+
 class TimerAlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (isStopSoundAction(intent.action)) {
@@ -161,24 +174,11 @@ class TimerAlarmReceiver : BroadcastReceiver() {
                 val application = context.applicationContext as PomodoroughApplication
                 val timerId = timerId(intent) ?: application.timerRepository.state.value.timer?.id
                 if (timerId == null) return@launch
-                val result = TimerAlarmDeliveryPolicy(
-                    completion = ExpiredTimerCompleting {
-                        completeMatchingExpiredTimer(
-                            expectedTimerId = timerId,
-                            initialize = application.timerRepository::initialize,
-                            currentTimerId = { application.timerRepository.state.value.timer?.id },
-                            finish = application.timerRepository::finishExpiredTimer,
-                        )
-                    },
-                    notification = TimerCompletionNotifying {
-                        application.timerRepository.showCompletionAlert(timerId) {
-                            SystemTimerCompletionNotifier(context, timerId).show()
-                        }
-                    },
-                    shouldNotify = {
-                        shouldPostCompletionAlert(application.timerRepository.state.value.timer)
-                    },
-                ).deliver()
+                val result = deliverTimerAlarm(
+                    repository = application.timerRepository,
+                    timerId = timerId,
+                    notifier = SystemTimerCompletionNotifier(context, timerId),
+                )
                 if (result == TimerAlarmDeliveryResult.CompletedWithoutNotification) {
                     Log.w(Tag, "Timer completed without posting a notification")
                 }

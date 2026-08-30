@@ -6,11 +6,14 @@ import computer.iroh.EndpointTicket
 import computer.iroh.SecretKey
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -39,11 +42,15 @@ internal sealed interface IrohEndpointEvent {
 }
 
 internal class IrohEndpointLifecycle(
-    private val vault: IrohSecretVault,
+    private val binding: IrohEndpointBinding,
     private val onEvent: suspend (IrohEndpointEvent) -> Unit,
+    dispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) : IrohEndpointSessionSource {
+    constructor(vault: IrohSecretVault, onEvent: suspend (IrohEndpointEvent) -> Unit) :
+        this(IrohNativeEndpointBinding(vault), onEvent)
+
     private val lifecycleJob: Job = SupervisorJob()
-    private val scope = CoroutineScope(lifecycleJob + Dispatchers.IO)
+    private val scope = CoroutineScope(lifecycleJob + dispatcher)
     private val mutex = Mutex()
     private val closed = AtomicBoolean(false)
     private val owner = AtomicLong()
@@ -94,7 +101,7 @@ internal class IrohEndpointLifecycle(
     suspend fun currentEndpointTicket(): String {
         val current = endpoint?.takeUnless(Endpoint::isClosed)
             ?: throw IllegalStateException("Iroh endpoint is not running")
-        return createEndpointTicket(current).also { endpointTicket = it }
+        return binding.ticket(current).also { endpointTicket = it }
     }
 
     fun quarantine(roomId: String, quarantineOwner: Long) {
@@ -108,7 +115,7 @@ internal class IrohEndpointLifecycle(
         }
     }
 
-    private fun reuse(
+    private suspend fun reuse(
         nextContext: IrohServiceContext,
         startPeriodicSync: Boolean,
         periodicSync: suspend (Long) -> Unit,
@@ -118,25 +125,19 @@ internal class IrohEndpointLifecycle(
             acceptJob?.isActive != true
         ) return null
         nextContext.roomSecret.fill(0)
-        if (startPeriodicSync && syncJob == null) {
+        if (startPeriodicSync && syncJob?.isActive != true) {
+            syncJob?.cancelAndJoin()
+            currentCoroutineContext().ensureActive()
+            check(!closed.get()) { "Iroh endpoint lifecycle is closed" }
             val currentOwner = owner.get()
             syncJob = scope.launch { periodicSync(currentOwner) }
         }
-        return endpointTicket ?: createEndpointTicket(currentEndpoint).also { endpointTicket = it }
+        return endpointTicket ?: binding.ticket(currentEndpoint).also { endpointTicket = it }
     }
 
     private suspend fun bindEndpoint(nextContext: IrohServiceContext): Endpoint {
-        val builder = EndpointBuilder()
         return try {
-            val secret = endpointSecret()
-            try {
-                builder.applyN0()
-                builder.alpns(listOf(IrohProtocolV1.Alpn))
-                builder.secretKey(secret)
-                builder.bind()
-            } finally {
-                secret.fill(0)
-            }
+            binding.bind()
         } catch (error: Exception) {
             onEvent(IrohEndpointEvent.Status(
                 IrohConnectionStatus.UNAVAILABLE,
@@ -144,8 +145,6 @@ internal class IrohEndpointLifecycle(
                 message = error.message ?: "Iroh endpoint could not start",
             ))
             throw error
-        } finally {
-            builder.close()
         }
     }
 
@@ -153,7 +152,7 @@ internal class IrohEndpointLifecycle(
         bound: Endpoint,
         nextContext: IrohServiceContext,
     ): String = try {
-        createEndpointTicket(bound)
+        binding.ticket(bound)
     } catch (error: Exception) {
         runCatching { bound.shutdown() }
         bound.close()
@@ -208,6 +207,30 @@ internal class IrohEndpointLifecycle(
         }
         onEvent(IrohEndpointEvent.Stopped)
     }
+}
+
+internal interface IrohEndpointBinding {
+    suspend fun bind(): Endpoint
+    fun ticket(endpoint: Endpoint): String
+}
+
+private class IrohNativeEndpointBinding(private val vault: IrohSecretVault) : IrohEndpointBinding {
+    override suspend fun bind(): Endpoint {
+        val builder = EndpointBuilder()
+        return try {
+            val secret = endpointSecret()
+            try {
+                builder.applyN0()
+                builder.alpns(listOf(IrohProtocolV1.Alpn))
+                builder.secretKey(secret)
+                builder.bind()
+            } finally {
+                secret.fill(0)
+            }
+        } finally {
+            builder.close()
+        }
+    }
 
     private fun endpointSecret(): ByteArray {
         vault.endpointSecret()?.let { secret ->
@@ -229,7 +252,7 @@ internal class IrohEndpointLifecycle(
         }
     }
 
-    private fun createEndpointTicket(endpoint: Endpoint): String {
+    override fun ticket(endpoint: Endpoint): String {
         val address = endpoint.addr()
         return try {
             EndpointTicket.fromAddr(address).use(Any::toString)
