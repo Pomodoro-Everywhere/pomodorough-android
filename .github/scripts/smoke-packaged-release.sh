@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 shopt -s nullglob
+source "$(dirname "${BASH_SOURCE[0]}")/release-runtime-abi.sh"
 
 results_dir="release-smoke-results"
 runner_temp="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
@@ -50,7 +51,8 @@ unzip -Z1 "$unsigned_test_apk" > "$test_native_entries"
 for abi in arm64-v8a armeabi-v7a x86 x86_64; do
   grep -Fx "lib/$abi/libiroh_ffi.so" "$native_entries"
 done
-runtime_abi="$(adb shell getprop ro.product.cpu.abi | tr -d '\r')"
+runtime_abi="$(select_release_runtime_abi)"
+printf 'Requested runtime ABI: %s\n' "$runtime_abi" | tee "$results_dir/runtime-abi.txt"
 grep -Fx "lib/$runtime_abi/libiroh_ffi.so" "$native_entries"
 if grep -F 'libiroh_ffi.so' "$test_native_entries"; then
   echo "Release Iroh probe APK must not package the Iroh native library" >&2
@@ -76,8 +78,9 @@ test "$app_signer" = "$test_signer"
 
 adb uninstall me.egigoka.pomodorough.test >/dev/null 2>&1 || true
 adb uninstall me.egigoka.pomodorough >/dev/null 2>&1 || true
-adb install --no-incremental "$smoke_apk"
-adb install --no-incremental "$smoke_test_apk"
+adb install --no-incremental --abi "$runtime_abi" "$smoke_apk"
+adb install --no-incremental --abi "$runtime_abi" "$smoke_test_apk"
+verify_installed_release_abi "$runtime_abi" "$results_dir/installed-package.txt"
 installed_path="$(adb shell pm path me.egigoka.pomodorough | sed -n 's/^package://p' | tr -d '\r')"
 test -n "$installed_path"
 adb pull "$installed_path" "$installed_apk"
@@ -87,7 +90,7 @@ printf '%s\n' "$launch_output"
 grep -Fq 'Status: ok' <<< "$launch_output"
 
 set +e
-adb shell am instrument -w -r \
+adb shell am instrument -w -r --abi "$runtime_abi" -e expectedAbi "$runtime_abi" \
   me.egigoka.pomodorough.test/me.egigoka.pomodorough.releaseiroh.ReleaseIrohSmokeInstrumentation \
   | tee "$instrumentation_output"
 runner_status=${PIPESTATUS[0]}
@@ -96,4 +99,5 @@ set -e
 test "$runner_status" -eq 0
 grep -Fq 'INSTRUMENTATION_STATUS: numtests=1' "$instrumentation_output"
 grep -Fq 'INSTRUMENTATION_STATUS_CODE: 0' "$instrumentation_output"
+grep -Fxq "INSTRUMENTATION_STATUS: runtimeAbi=$runtime_abi" "$instrumentation_output"
 grep -Fq 'INSTRUMENTATION_CODE: -1' "$instrumentation_output"

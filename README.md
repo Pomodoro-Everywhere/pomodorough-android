@@ -150,9 +150,14 @@ bash .github/scripts/run-local-release-gate.sh
 ```
 
 The local gate runs unit tests, lint, debug and release builds, then all
-instrumented tests independently at 1.0x and 2.0x font scale. Hosted CI also
-runs `connectedDebugAndroidTest` on an API 36 Google APIs emulator. Run the local
-font-scale matrix before tagging so release verification covers both dimensions.
+instrumented tests independently at 1.0x and 2.0x font scale. Hosted CI runs the
+complete suite in English and the focused RTL/accessibility suite in `ar-XB`,
+each at both font scales on API 35 and 36 Google APIs emulators. Its direct
+instrumentation runner rejects incomplete or unexpectedly sized test runs.
+
+To exercise release packaging and every ABI probe without publishing a release,
+manually run the CI workflow with `upload-release-bundle=true`. A passing
+source build alone does not certify the connected or packaged-release gates.
 
 ## Release builds
 
@@ -165,9 +170,16 @@ and provenance attestations. Before comparing the bundles, CI normalizes only
 R8's diagnostic `buildTimeNs` metadata field; executable and resource payloads
 are compared unchanged.
 
-The API 36 release-smoke job copies the exact unsigned APK, applies a one-use
-runner-temporary CI test identity, clean-installs it on a fresh emulator, and
-launches `MainActivity`. That ephemeral signed copy and key are never published.
+Release-smoke jobs copy the exact unsigned APK, apply a one-use runner-temporary
+CI test identity, clean-install it on a fresh emulator, launch `MainActivity`,
+and complete a real two-endpoint Iroh bind/handshake using the minified target.
+The matrix executes x86 on API 30, x86_64 on API 36, and both armeabi-v7a and
+arm64-v8a through Android 11 Google APIs native-bridge translation. These ARM
+cells execute the packaged ARM libraries; they are not native ARM hardware tests.
+Installation and instrumentation explicitly select each ABI, then verify the
+installed ABI, process bitness, and native-library directory before handshaking.
+Each cell retains its ABI, installed-package report, instrumentation result, and
+device logs. That ephemeral signed copy and key are never published.
 Published artifacts cannot be installed or sent to Play until an authorized release
 applies the appropriate production/upload signature.
 

@@ -5,6 +5,13 @@ on:
     branches:
       - "**"
   pull_request:
+  workflow_dispatch:
+    inputs:
+      upload-release-bundle:
+        description: Exercise release packaging and ABI smoke tests without publishing
+        required: false
+        type: boolean
+        default: true
   workflow_call:
     inputs:
       upload-release-bundle:
@@ -42,7 +49,7 @@ jobs:
           python3 scripts/check_docs.py
           python3 scripts/check_protocol_fixture.py
           python3 scripts/check_workflow_pins.py
-          python3 -m unittest scripts/test_check_localization.py scripts/test_ci_workflow.py -v
+          python3 -m unittest scripts/test_check_localization.py scripts/test_ci_workflow.py scripts/test_release_runtime_abi.py -v
           python3 scripts/check_localization.py
 
       - name: Set up JDK
@@ -253,7 +260,7 @@ jobs:
           python3 scripts/check_docs.py
           python3 scripts/check_protocol_fixture.py
           python3 scripts/check_workflow_pins.py
-          python3 -m unittest scripts/test_check_localization.py scripts/test_ci_workflow.py -v
+          python3 -m unittest scripts/test_check_localization.py scripts/test_ci_workflow.py scripts/test_release_runtime_abi.py -v
           python3 scripts/check_localization.py
 
       - name: Set up JDK
@@ -297,7 +304,7 @@ jobs:
           retention-days: 14
 
   release-smoke:
-    name: Clean-install packaged release payload (API ${{ matrix.api-level }}, ${{ matrix.architecture }})
+    name: Clean-install packaged release payload (API ${{ matrix.api-level }}, ${{ matrix.runtime-abi }})
     if: inputs.upload-release-bundle
     needs: [verify, connected]
     runs-on: ubuntu-24.04
@@ -308,8 +315,18 @@ jobs:
         include:
           - api-level: 30
             architecture: x86
+            runtime-abi: x86
           - api-level: 36
             architecture: x86_64
+            runtime-abi: x86_64
+          # Android 11 Google APIs images execute ARM libraries through their native bridge.
+          # https://android-developers.googleblog.com/2020/03/run-arm-apps-on-android-emulator.html
+          - api-level: 30
+            architecture: x86
+            runtime-abi: armeabi-v7a
+          - api-level: 30
+            architecture: x86_64
+            runtime-abi: arm64-v8a
     steps:
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -356,13 +373,13 @@ jobs:
           profile: pixel_6
           cores: 2
           disable-animations: true
-          script: bash .github/scripts/smoke-packaged-release.sh
+          script: RUNTIME_ABI=${{ matrix.runtime-abi }} bash .github/scripts/smoke-packaged-release.sh
 
       - name: Retain release-Iroh instrumentation and diagnostics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: release-smoke-api-${{ matrix.api-level }}-${{ matrix.architecture }}
+          name: release-smoke-api-${{ matrix.api-level }}-${{ matrix.runtime-abi }}
           path: release-smoke-results/
           if-no-files-found: warn
           retention-days: 14

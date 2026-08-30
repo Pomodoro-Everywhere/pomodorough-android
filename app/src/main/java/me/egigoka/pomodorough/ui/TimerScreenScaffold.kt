@@ -769,6 +769,7 @@ private fun CorruptedResolutionAction(
         ResolutionRecovery.KeepRemote -> TextButton(
             onClick = { confirmation.value = BootstrapStrategy.KeepRemote },
             enabled = !resolution.submitting,
+            modifier = Modifier.heightIn(min = 48.dp),
         ) { Text(stringResource(R.string.review_keep_remote), fontWeight = FontWeight.Bold) }
         ResolutionRecovery.Repreview -> RecoveryPreviewButton(authStatus, resolution.submitting, actions)
         null -> Unit
@@ -786,6 +787,7 @@ private fun RecoveryPreviewButton(
             if (authStatus == AuthStatus.SignedIn) actions.onRecoverHistoryResolution() else actions.onSignIn()
         },
         enabled = !submitting && (authStatus == AuthStatus.SignedIn || authStatus == AuthStatus.SignedOut),
+        modifier = Modifier.heightIn(min = 48.dp),
     ) {
         Text(recoveryActionLabel(authStatus), fontWeight = FontWeight.Bold)
     }
@@ -802,13 +804,22 @@ private fun recoveryActionLabel(authStatus: AuthStatus): String = when (authStat
 @Composable
 private fun HistoryChoiceButtons(onSelect: (BootstrapStrategy) -> Unit) {
     Column(horizontalAlignment = Alignment.End) {
-        TextButton(onClick = { onSelect(BootstrapStrategy.ReplaceRemote) }) {
+        TextButton(
+            onClick = { onSelect(BootstrapStrategy.ReplaceRemote) },
+            modifier = Modifier.heightIn(min = 48.dp),
+        ) {
             Text(stringResource(R.string.keep_local))
         }
-        TextButton(onClick = { onSelect(BootstrapStrategy.KeepRemote) }) {
+        TextButton(
+            onClick = { onSelect(BootstrapStrategy.KeepRemote) },
+            modifier = Modifier.heightIn(min = 48.dp),
+        ) {
             Text(stringResource(R.string.keep_remote))
         }
-        TextButton(onClick = { onSelect(BootstrapStrategy.Merge) }) {
+        TextButton(
+            onClick = { onSelect(BootstrapStrategy.Merge) },
+            modifier = Modifier.heightIn(min = 48.dp),
+        ) {
             Text(stringResource(R.string.keep_both))
         }
     }
@@ -827,6 +838,7 @@ private fun SubmitResolutionButton(
         },
         enabled = !resolution.submitting &&
             (authStatus == AuthStatus.SignedIn || authStatus == AuthStatus.SignedOut),
+        modifier = Modifier.heightIn(min = 48.dp),
     ) {
         Text(
             submitResolutionLabel(authStatus, resolution.pendingStrategy, selected),
@@ -854,6 +866,6 @@ private fun HistoryResolutionDismiss(submitting: Boolean, onDismiss: () -> Unit)
     TextButton(
         onClick = onDismiss,
         enabled = !submitting,
-        modifier = Modifier.semantics { contentDescription = description },
+        modifier = Modifier.heightIn(min = 48.dp).semantics { contentDescription = description },
     ) { Text(stringResource(R.string.cancel)) }
 }

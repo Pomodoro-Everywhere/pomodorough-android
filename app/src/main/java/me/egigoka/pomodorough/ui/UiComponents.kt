@@ -155,7 +155,9 @@ internal fun MessageCard(
                 Text(title, style = MaterialTheme.typography.titleLarge)
                 Text(message, style = MaterialTheme.typography.bodyMedium)
             }
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.dismiss), color = darkModeTextColor(Ink)) }
+            TextButton(onClick = onDismiss, modifier = Modifier.heightIn(min = 48.dp)) {
+                Text(stringResource(R.string.dismiss), color = darkModeTextColor(Ink))
+            }
         }
     }
 }

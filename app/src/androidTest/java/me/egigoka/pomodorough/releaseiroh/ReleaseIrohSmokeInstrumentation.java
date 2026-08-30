@@ -3,6 +3,7 @@ package me.egigoka.pomodorough.releaseiroh;
 import android.app.Activity;
 import android.app.Instrumentation;
 import android.os.Bundle;
+import android.os.Process;
 import android.util.Log;
 import computer.iroh.Accepting;
 import computer.iroh.Connection;
@@ -26,10 +27,12 @@ public final class ReleaseIrohSmokeInstrumentation extends Instrumentation {
     private static final byte[] ALPN =
             "me.egigoka.pomodorough/sync/1".getBytes(StandardCharsets.UTF_8);
     private static final long TIMEOUT_SECONDS = 60L;
+    private String expectedAbi;
 
     @Override
     public void onCreate(Bundle arguments) {
         super.onCreate(arguments);
+        expectedAbi = arguments == null ? null : arguments.getString("expectedAbi");
         start();
     }
 
@@ -46,6 +49,7 @@ public final class ReleaseIrohSmokeInstrumentation extends Instrumentation {
 
         Throwable failure = null;
         try {
+            verifyRuntimeAbi();
             completeEndpointHandshake();
         } catch (Throwable error) {
             failure = error;
@@ -54,6 +58,7 @@ public final class ReleaseIrohSmokeInstrumentation extends Instrumentation {
         if (failure == null) {
             Bundle passed = statusBundle();
             passed.putString("stream", ".");
+            passed.putString("runtimeAbi", expectedAbi);
             sendStatus(0, passed);
             Bundle result = new Bundle();
             result.putString("stream", "\nOK (1 test)\n");
@@ -67,6 +72,23 @@ public final class ReleaseIrohSmokeInstrumentation extends Instrumentation {
             result.putString("stream", Log.getStackTraceString(failure));
             finish(Activity.RESULT_CANCELED, result);
         }
+    }
+
+    private void verifyRuntimeAbi() {
+        require(expectedAbi != null, "Runner must provide expectedAbi");
+        String libraryArchitecture = switch (expectedAbi) {
+            case "armeabi-v7a" -> "arm";
+            case "arm64-v8a" -> "arm64";
+            case "x86", "x86_64" -> expectedAbi;
+            default -> throw new IllegalArgumentException("Unsupported ABI: " + expectedAbi);
+        };
+        boolean expected64Bit = expectedAbi.equals("arm64-v8a") || expectedAbi.equals("x86_64");
+        require(Process.is64Bit() == expected64Bit, "Instrumentation process bitness mismatch");
+        String nativeDirectory = getTargetContext().getApplicationInfo().nativeLibraryDir;
+        require(nativeDirectory.endsWith("/" + libraryArchitecture),
+                "Target native library directory mismatch: " + nativeDirectory);
+        Log.i("ReleaseIrohSmoke", "ABI=" + expectedAbi + "; nativeLibraryDir=" + nativeDirectory
+                + "; process64Bit=" + Process.is64Bit());
     }
 
     private static void completeEndpointHandshake() throws Throwable {

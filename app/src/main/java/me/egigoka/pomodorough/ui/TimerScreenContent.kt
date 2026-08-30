@@ -281,7 +281,10 @@ private fun HeaderAuthAction(state: AppState, actions: AppHeaderActions) {
         AuthStatus.Loading -> HeaderTextButton(stringResource(R.string.checking), {}, enabled = false)
         AuthStatus.SignedOut -> {
             val reset = state.localAccountResetRequired
-            TextButton(onClick = if (reset) actions.onResetLocalAccount else actions.onSignIn) {
+            TextButton(
+                onClick = if (reset) actions.onResetLocalAccount else actions.onSignIn,
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) {
                 Text(
                     stringResource(if (reset) R.string.reset_local_account else R.string.sign_in),
                     color = darkModeTextColor(if (reset) MaterialTheme.colorScheme.error else Butter),
@@ -294,13 +297,14 @@ private fun HeaderAuthAction(state: AppState, actions: AppHeaderActions) {
 
 @Composable
 private fun HeaderTextButton(label: String, onClick: () -> Unit, enabled: Boolean) {
-    TextButton(onClick = onClick, enabled = enabled) {
+    TextButton(onClick = onClick, enabled = enabled, modifier = Modifier.heightIn(min = 48.dp)) {
         Text(label, color = darkModeTextColor(Lavender))
     }
 }
 
 @Composable
 private fun HeaderSyncRow(state: AppState) {
+    val accountLabel = headerAccountLabel(state)
     Row(verticalAlignment = Alignment.CenterVertically) {
         Surface(color = syncColor(state.syncStatus), contentColor = darkModeTextColor(Ink), shape = CircleShape) {
             Row(
@@ -313,15 +317,19 @@ private fun HeaderSyncRow(state: AppState) {
             }
         }
         Spacer(Modifier.width(12.dp))
-        Text(
-            text = headerAccountLabel(state),
-            modifier = Modifier.weight(1f),
-            color = darkModeTextColor(Cloud),
-            style = MaterialTheme.typography.bodyMedium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.End,
-        )
+        if (accountLabel.isBlank()) {
+            Spacer(Modifier.weight(1f))
+        } else {
+            Text(
+                text = accountLabel,
+                modifier = Modifier.weight(1f),
+                color = darkModeTextColor(Cloud),
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.End,
+            )
+        }
     }
 }
 
