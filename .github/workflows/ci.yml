@@ -111,7 +111,7 @@ jobs:
           python3 scripts/check_docs.py
           python3 scripts/check_protocol_fixture.py
           python3 scripts/check_workflow_pins.py
-          python3 -m unittest scripts/test_check_localization.py scripts/test_ci_workflow.py scripts/test_release_runtime_abi.py scripts/test_emulator_startup_configuration.py -v
+          python3 -m unittest scripts/test_check_localization.py scripts/test_ci_workflow.py scripts/test_release_runtime_abi.py scripts/test_emulator_startup_configuration.py scripts/test_android_emulator_lifecycle.py -v
           python3 scripts/check_localization.py
 
       - name: Set up JDK
@@ -330,7 +330,7 @@ jobs:
           python3 scripts/check_docs.py
           python3 scripts/check_protocol_fixture.py
           python3 scripts/check_workflow_pins.py
-          python3 -m unittest scripts/test_check_localization.py scripts/test_ci_workflow.py scripts/test_release_runtime_abi.py scripts/test_emulator_startup_configuration.py -v
+          python3 -m unittest scripts/test_check_localization.py scripts/test_ci_workflow.py scripts/test_release_runtime_abi.py scripts/test_emulator_startup_configuration.py scripts/test_android_emulator_lifecycle.py -v
           python3 scripts/check_localization.py
 
       - name: Set up JDK
@@ -353,6 +353,12 @@ jobs:
       - name: Assemble connected test APKs before emulator boot
         run: ./gradlew --no-daemon --stacktrace :app:assembleDebug :app:assembleDebugAndroidTest
 
+      - name: Set up emulator SDK
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+        with:
+          cmdline-tools-version: '14742923'
+          packages: platform-tools
+
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
@@ -361,20 +367,12 @@ jobs:
           sudo udevadm trigger --name-match=kvm
 
       - name: Run connected tests
-        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
-        with:
-          api-level: ${{ matrix.api-level }}
-          target: google_apis
-          arch: x86_64
-          profile: pixel_6
-          cores: 4
-          ram-size: 4096M
-          disable-animations: true
-          pre-emulator-launch-script: |
-            adb start-server
-            python3 .github/scripts/android-startup-diagnostics.py start --output "$STARTUP_DIAGNOSTICS"
-          script: |
-            FONT_SCALE=${{ matrix.font-scale }} TEST_LOCALE=${{ matrix.locale }} TEST_CLASS=${{ matrix.test-class }} .github/scripts/run-instrumented-tests.sh
+        run: |
+          python3 .github/scripts/run-android-emulator.py \
+            --api-level ${{ matrix.api-level }} --architecture x86_64 \
+            --output app/build/reports/androidTests/emulator-api-${{ matrix.api-level }}-font-${{ matrix.font-scale }}-locale-${{ matrix.locale }} \
+            --startup-diagnostics "$STARTUP_DIAGNOSTICS" \
+            -- env FONT_SCALE=${{ matrix.font-scale }} TEST_LOCALE=${{ matrix.locale }} TEST_CLASS=${{ matrix.test-class }} .github/scripts/run-instrumented-tests.sh
 
       - name: Finish Android startup diagnostics
         if: always()
@@ -445,6 +443,9 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+        with:
+          cmdline-tools-version: '14742923'
+          packages: platform-tools
 
       - name: Install Android build tools
         run: sdkmanager "build-tools;${ANDROID_BUILD_TOOLS_VERSION}"
@@ -457,24 +458,20 @@ jobs:
           sudo udevadm trigger --name-match=kvm
 
       - name: Ephemerally sign, clean-install, and launch packaged APK
-        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
-        with:
-          api-level: ${{ matrix.api-level }}
-          target: google_apis
-          arch: ${{ matrix.architecture }}
-          profile: pixel_6
-          cores: 4
-          ram-size: 4096M
-          disable-animations: true
-          pre-emulator-launch-script: adb start-server
-          script: RUNTIME_ABI=${{ matrix.runtime-abi }} bash .github/scripts/smoke-packaged-release.sh
+        run: |
+          python3 .github/scripts/run-android-emulator.py \
+            --api-level ${{ matrix.api-level }} --architecture ${{ matrix.architecture }} \
+            --output release-emulator-results \
+            -- env RUNTIME_ABI=${{ matrix.runtime-abi }} bash .github/scripts/smoke-packaged-release.sh
 
       - name: Retain release-Iroh instrumentation and diagnostics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-smoke-api-${{ matrix.api-level }}-${{ matrix.runtime-abi }}
-          path: release-smoke-results/
+          path: |
+            release-smoke-results/
+            release-emulator-results/
           if-no-files-found: error
           retention-days: 14
 

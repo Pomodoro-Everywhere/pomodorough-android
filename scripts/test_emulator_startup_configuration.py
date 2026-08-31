@@ -8,7 +8,8 @@ from pathlib import Path
 
 
 WORKFLOW = Path(__file__).resolve().parents[1] / ".github/workflows/ci.yml"
-EMULATOR_ACTION = "ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d"
+EMULATOR_COMMAND = "python3 .github/scripts/run-android-emulator.py"
+SDK_ACTION = "android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407"
 EMULATOR_STEPS = {
     "connected": "Run connected tests",
     "release-smoke": "Ephemerally sign, clean-install, and launch packaged APK",
@@ -37,7 +38,9 @@ class EmulatorStartupConfigurationTests(unittest.TestCase):
 
     def emulator(self, job: str) -> str:
         step = self.step(job, EMULATOR_STEPS[job])
-        self.assertIn(f"        uses: {EMULATOR_ACTION} # v2\n", step)
+        self.assertIn("        run: |\n", step)
+        self.assertEqual(step.count(EMULATOR_COMMAND), 1)
+        self.assertNotIn("uses:", step)
         return step
 
     def input_value(self, step: str, name: str) -> str:
@@ -45,56 +48,42 @@ class EmulatorStartupConfigurationTests(unittest.TestCase):
         self.assertEqual(len(values), 1, f"Expected exactly one input: {name}")
         return values[0]
 
-    def literal_commands(self, step: str, name: str) -> list[str]:
-        self.assertEqual(self.input_value(step, name), "|")
-        match = re.search(
-            rf"(?m)^          {re.escape(name)}: \|\n((?:            [^\n]*\n)+)",
-            step,
-        )
-        self.assertIsNotNone(match, f"Missing literal commands: {name}")
-        return [line[12:] for line in match.group(1).splitlines()]
-
-    def test_emulators_use_four_cores_on_same_host_class(self) -> None:
+    def test_emulators_use_owned_lifecycle_on_same_host_class(self) -> None:
         for job in EMULATOR_STEPS:
             with self.subTest(job=job):
                 self.assertIn("    runs-on: ubuntu-24.04\n", self.job(job))
-                self.assertEqual(self.input_value(self.emulator(job), "cores"), "4")
+                self.emulator(job)
 
-    def test_emulator_memory_is_explicit(self) -> None:
-        for job in EMULATOR_STEPS:
-            with self.subTest(job=job):
-                self.assertEqual(self.input_value(self.emulator(job), "ram-size"), "4096M")
-
-    def test_connected_starts_host_adb_before_passive_diagnostics(self) -> None:
-        self.assertEqual(
-            self.literal_commands(self.emulator("connected"), "pre-emulator-launch-script"),
-            [
-                "adb start-server",
-                'python3 .github/scripts/android-startup-diagnostics.py start --output "$STARTUP_DIAGNOSTICS"',
-            ],
-        )
-
-    def test_release_starts_host_adb_before_emulator_launch(self) -> None:
-        self.assertEqual(
-            self.input_value(self.emulator("release-smoke"), "pre-emulator-launch-script"),
-            "adb start-server",
-        )
-
-    def test_pinned_action_inputs_do_not_override_existing_boot_behavior(self) -> None:
-        expected = {
-            "api-level", "target", "arch", "profile", "cores", "ram-size",
-            "disable-animations", "pre-emulator-launch-script", "script",
-        }
+    def test_fixed_resources_cannot_be_overridden_by_workflow(self) -> None:
         for job in EMULATOR_STEPS:
             with self.subTest(job=job):
                 step = self.emulator(job)
-                self.assertCountEqual(re.findall(r"(?m)^          ([\w-]+):", step), expected)
-                self.assertEqual(self.input_value(step, "api-level"), "${{ matrix.api-level }}")
-                self.assertEqual(self.input_value(step, "target"), "google_apis")
-                self.assertEqual(self.input_value(step, "profile"), "pixel_6")
-                self.assertEqual(self.input_value(step, "disable-animations"), "true")
-        self.assertEqual(self.input_value(self.emulator("connected"), "arch"), "x86_64")
-        self.assertEqual(self.input_value(self.emulator("release-smoke"), "arch"), "${{ matrix.architecture }}")
+                self.assertNotRegex(step, r"--(?:cores|ram-size|memory|target|profile|emulator-options)\b")
+                self.assertNotIn("        env:", step)
+
+    def test_connected_passes_passive_diagnostics_to_lifecycle(self) -> None:
+        step = self.emulator("connected")
+        self.assertEqual(step.count('--startup-diagnostics "$STARTUP_DIAGNOSTICS"'), 1)
+        self.assertLess(step.index("--startup-diagnostics"), step.index("-- env "))
+        self.assertIn("--output app/build/reports/androidTests/emulator-api-", step)
+
+    def test_release_startup_evidence_survives_smoke_output_cleanup(self) -> None:
+        step = self.emulator("release-smoke")
+        self.assertEqual(step.count("--output release-emulator-results"), 1)
+        self.assertNotIn("--startup-diagnostics", step)
+        retention = self.step("release-smoke", "Retain release-Iroh instrumentation and diagnostics")
+        self.assertIn("            release-emulator-results/\n", retention)
+
+    def test_pinned_sdk_and_existing_guest_architectures_are_explicit(self) -> None:
+        for job, name in (("connected", "Set up emulator SDK"), ("release-smoke", "Set up Android SDK")):
+            with self.subTest(job=job):
+                setup = self.step(job, name)
+                self.assertIn(f"        uses: {SDK_ACTION} # v3\n", setup)
+                self.assertEqual(self.input_value(setup, "cmdline-tools-version"), "'14742923'")
+                self.assertEqual(self.input_value(setup, "packages"), "platform-tools")
+                self.assertLess(self.job(job).index(name), self.job(job).index(EMULATOR_STEPS[job]))
+        self.assertIn("--api-level ${{ matrix.api-level }} --architecture x86_64", self.emulator("connected"))
+        self.assertIn("--api-level ${{ matrix.api-level }} --architecture ${{ matrix.architecture }}", self.emulator("release-smoke"))
 
     def test_all_eight_connected_cells_remain_unchanged(self) -> None:
         matrix = self.job("connected").split("    steps:\n", 1)[0]
@@ -137,14 +126,37 @@ class EmulatorStartupConfigurationTests(unittest.TestCase):
             "TEST_CLASS=${{ matrix.test-class }} .github/scripts/run-instrumented-tests.sh"
         )
         release_command = "RUNTIME_ABI=${{ matrix.runtime-abi }} bash .github/scripts/smoke-packaged-release.sh"
-        self.assertEqual(self.literal_commands(self.emulator("connected"), "script"), [connected_command])
-        self.assertEqual(self.input_value(self.emulator("release-smoke"), "script"), release_command)
+        self.assertIn(f"            -- env {connected_command}\n", self.emulator("connected"))
+        self.assertIn(f"            -- env {release_command}\n", self.emulator("release-smoke"))
         for command in (connected_command, release_command):
             self.assertEqual(self.workflow.count(command), 1)
-        self.assertEqual(self.workflow.count(f"uses: {EMULATOR_ACTION}"), 2)
+        self.assertEqual(self.workflow.count(EMULATOR_COMMAND), 2)
+        self.assertNotIn("ReactiveCircus/android-emulator-runner@", self.workflow)
         self.assertNotRegex(self.workflow, r"(?i)continue-on-error|\bretr(?:y|ies)\b|\|\|\s*(?:true|:)")
         self.assertNotRegex(self.workflow, r"adb (?:kill-server|reconnect)|logcat[^\n]* -c\b")
         self.assertNotRegex(self.workflow, r"EXPECTED_TEST_COUNT|TEST_SHARD_COUNT|INSTRUMENTATION_TIMEOUT_SECONDS")
+
+    def test_lifecycle_command_blocks_have_no_additional_commands_or_options(self) -> None:
+        expected = {
+            "connected": [
+                "        run: |",
+                f"          {EMULATOR_COMMAND} \\",
+                "            --api-level ${{ matrix.api-level }} --architecture x86_64 \\",
+                "            --output app/build/reports/androidTests/emulator-api-${{ matrix.api-level }}-font-${{ matrix.font-scale }}-locale-${{ matrix.locale }} \\",
+                '            --startup-diagnostics "$STARTUP_DIAGNOSTICS" \\',
+                "            -- env FONT_SCALE=${{ matrix.font-scale }} TEST_LOCALE=${{ matrix.locale }} TEST_CLASS=${{ matrix.test-class }} .github/scripts/run-instrumented-tests.sh",
+            ],
+            "release-smoke": [
+                "        run: |",
+                f"          {EMULATOR_COMMAND} \\",
+                "            --api-level ${{ matrix.api-level }} --architecture ${{ matrix.architecture }} \\",
+                "            --output release-emulator-results \\",
+                "            -- env RUNTIME_ABI=${{ matrix.runtime-abi }} bash .github/scripts/smoke-packaged-release.sh",
+            ],
+        }
+        for job, lines in expected.items():
+            with self.subTest(job=job):
+                self.assertEqual(self.emulator(job).rstrip().splitlines(), lines)
 
     def test_prerequisite_gates_and_diagnostic_retention_remain_strict(self) -> None:
         connected = self.job("connected")
@@ -175,7 +187,8 @@ class EmulatorStartupConfigurationTests(unittest.TestCase):
     def test_documentation_checks_run_old_and_new_regressions_in_both_jobs(self) -> None:
         command = (
             "python3 -m unittest scripts/test_check_localization.py scripts/test_ci_workflow.py "
-            "scripts/test_release_runtime_abi.py scripts/test_emulator_startup_configuration.py -v"
+            "scripts/test_release_runtime_abi.py scripts/test_emulator_startup_configuration.py "
+            "scripts/test_android_emulator_lifecycle.py -v"
         )
         for job in ("verify", "connected"):
             with self.subTest(job=job):

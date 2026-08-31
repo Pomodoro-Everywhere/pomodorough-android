@@ -13,6 +13,7 @@ graphify-out/
 *.jks
 *.keystore
 release-smoke-results/
+release-emulator-results/
 dist/
 release-test/
 __pycache__/

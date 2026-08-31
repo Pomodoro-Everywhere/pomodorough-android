@@ -155,6 +155,16 @@ complete suite in English and the focused RTL/accessibility suite in `ar-XB`,
 each at both font scales on API 35 and 36 Google APIs emulators. Its direct
 instrumentation runner rejects incomplete or unexpectedly sized test runs.
 
+Hosted jobs use the checked-in `.github/scripts/run-android-emulator.py`
+lifecycle with a fresh Google APIs AVD, the `pixel_6` profile, four CPU cores,
+and 4096 MiB RAM. It starts ADB before launch and dismisses the keyguard through
+WindowManager rather than injecting a key into a launcher that may not yet have
+focus. Boot completion alone does not admit tests: existing readiness checks
+still reject retained ANRs, failed device observations, and unhealthy windows.
+Startup command output and emulator logs are retained even on failure. Packaged
+release startup evidence uses `release-emulator-results/`, separate from the
+smoke runner's recreated `release-smoke-results/` directory.
+
 To exercise release packaging and every ABI probe without publishing a release,
 manually run the CI workflow with `upload-release-bundle=true`. A passing
 source build alone does not certify the connected or packaged-release gates.
