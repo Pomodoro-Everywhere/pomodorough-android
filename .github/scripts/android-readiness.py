@@ -463,7 +463,7 @@ def input_display(header: str, children: list[str]) -> None:
                r"alpha=\d+(?:\.\d+)?, frame=\[-?\d+,-?\d+\]\[-?\d+,-?\d+\], globalScale=\d+(?:\.\d+)?, "
                r"applicationInfo.name=[^,\n]*, applicationInfo.token=(?:<null>|0x[0-9a-f]+), "
                r"touchableRegion=(?:<empty>|(?:\[-?\d+,-?\d+\]\[-?\d+,-?\d+\])+), ownerPid=-?\d+, ownerUid=-?\d+, "
-               r"dispatchingTimeout=\d+ms, token=0x[0-9a-f]+, touchOcclusionMode=\S+")
+               r"dispatchingTimeout=\d+ms, token=0x[0-9a-f]+, touchOcclusionMode=[^,\s]+(?:, canOccludePresentation)?")
     count = 0
     for child in children[1:]:
         record = re.fullmatch(pattern, child)

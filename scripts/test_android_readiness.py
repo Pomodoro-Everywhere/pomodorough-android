@@ -760,6 +760,101 @@ class FullDumpFramingTests(unittest.TestCase):
             READINESS.input_focus(input_snapshot("36").replace("responsive=true\n", "responsive=true\n      WaitQueue: <empty>\n"))
 
 
+class PresentationOcclusionGrammarTests(unittest.TestCase):
+    """Exact window line from CI 33371353785, artifact 9750373760, line 1492.
+
+    Member: reports/androidTests/diagnostics-font-1_0-locale-ar_XB/launched-m1a28squ/006.stdout
+    Member SHA256: c4704b6b82b98cd0d3e3e49fd67a1735977ecd384d22b2b2dcf7ccf89fccb7de
+    Member bytes: 77115; CRC32: a46fc3c9. Other records below are projections.
+    These grammar checks do not certify device health or native compatibility.
+    """
+
+    marker = ", canOccludePresentation"
+    main_activity_window = (
+        "      7: name=83460ad me.egigoka.pomodorough/me.egigoka.pomodorough.MainActivity, "
+        "id=139, displayId=0, inputConfig=0x0, alpha=1, frame=[0,0][1080,2400], globalScale=1, "
+        "applicationInfo.name=ActivityRecord{120361016 u0 me.egigoka.pomodorough/.MainActivity t8}, "
+        "applicationInfo.token=0x71dd4839f6b0, touchableRegion=[0,0][1080,2400], ownerPid=5268, "
+        "ownerUid=10216, dispatchingTimeout=5000ms, token=0x71dc9831e290, "
+        "touchOcclusionMode=BLOCK_UNTRUSTED, canOccludePresentation"
+    )
+
+    def projected_input(self, api):
+        return input_snapshot(api).replace("touchOcclusionMode=BLOCK_UNTRUSTED\n",
+                                           "touchOcclusionMode=BLOCK_UNTRUSTED" + self.marker + "\n")
+
+    def test_hosted_main_activity_window_accepts_exact_optional_marker(self):
+        first = next(line[4:] for line in INPUT.splitlines() if line.startswith("      0: name="))
+        preceding = [first.replace("  0: ", f"  {index}: ", 1) for index in range(7)]
+        for record in (self.main_activity_window, self.main_activity_window.removesuffix(self.marker)):
+            with self.subTest(record=record):
+                self.assertIsNone(READINESS.input_display("Display: 0", ["Windows:", *preceding, record[4:]]))
+
+    def test_presentation_marker_is_optional_in_both_projected_profiles(self):
+        for api in ("35", "36"):
+            for snapshot in (input_snapshot(api), self.projected_input(api)):
+                with self.subTest(api=api, snapshot=snapshot):
+                    self.assertEqual(READINESS.input_focus(snapshot), ("a1", HOME))
+
+    def test_presentation_marker_rejects_duplicate_malformed_and_unknown_tails(self):
+        tails = (self.marker + self.marker, ",canOccludePresentation", ",  canOccludePresentation",
+                 ",\tcanOccludePresentation", ", CanOccludePresentation", ", canOccludePresentationExtra",
+                 self.marker + "=true", self.marker + "=false", self.marker + "=", self.marker + " ",
+                 self.marker + ",", self.marker + ", unknown", ", unknown", ",unknown",
+                 ", unknown" + self.marker, ",unknown" + self.marker,
+                 ",canOccludePresentation" + self.marker, self.marker + ",canOccludePresentation",
+                 " canOccludePresentation", ", \n      canOccludePresentation")
+        tails += tuple(self.marker[:boundary] for boundary in range(1, len(self.marker)))
+        for api in ("35", "36"):
+            for tail in tails:
+                snapshot = input_snapshot(api).replace("touchOcclusionMode=BLOCK_UNTRUSTED\n",
+                                                       "touchOcclusionMode=BLOCK_UNTRUSTED" + tail + "\n")
+                message = "Unknown or unterminated dump text" if "\t" in tail else "Unknown or truncated input window record"
+                with self.subTest(api=api, tail=tail), self.assertRaisesRegex(
+                        READINESS.HealthFailure, message):
+                    READINESS.input_focus(snapshot)
+
+    def test_presentation_marker_keeps_required_fields_and_record_order_strict(self):
+        for api in ("35", "36"):
+            snapshot = self.projected_input(api)
+            record = next(line for line in snapshot.splitlines() if line.startswith("      0: name="))
+            mutations = (record.replace("touchOcclusionMode=BLOCK_UNTRUSTED", "touchOcclusionMode="),
+                         record.replace(", touchOcclusionMode=BLOCK_UNTRUSTED", ""),
+                         record.replace(", ownerUid=10101", ""), record.replace("ownerUid=10101", "ownerUid=unknown"),
+                         record.replace(", token=0x12", ""), record.replace("      0:", "      1:"),
+                         record + "\n" + record, record + "\n      canOccludePresentation",
+                         record.replace("touchOcclusionMode=BLOCK_UNTRUSTED" + self.marker,
+                                        "canOccludePresentation, touchOcclusionMode=BLOCK_UNTRUSTED"))
+            for mutation in mutations:
+                with self.subTest(api=api, mutation=mutation), self.assertRaisesRegex(
+                        READINESS.HealthFailure, "Unknown or truncated input window record"):
+                    READINESS.input_focus(snapshot.replace(record, mutation))
+
+    def test_presentation_marker_keeps_whole_framing_and_input_vetoes(self):
+        for api in ("35", "36"):
+            snapshot = self.projected_input(api)
+            lines = snapshot.splitlines(keepends=True)
+            for boundary in range(len(lines)):
+                with self.subTest(api=api, boundary=boundary), self.assertRaises(READINESS.HealthFailure):
+                    READINESS.input_focus("".join(lines[:boundary]))
+            mutations = (snapshot[:-1], snapshot + "unknown\n", "unknown\n" + snapshot, snapshot + snapshot,
+                         snapshot.replace("    Windows:\n", ""),
+                         snapshot.replace("  Configuration:", "  Configuration:\n  Configuration:"),
+                         snapshot.replace("DispatchEnabled: true", "DispatchEnabled: false"),
+                         snapshot.replace("DispatchFrozen: false", "DispatchFrozen: true"),
+                         snapshot.replace("FocusedDisplayId: 0", "FocusedDisplayId: 1"),
+                         snapshot.replace("responsive=true", "responsive=false"),
+                         snapshot.replace("status=NORMAL", "status=BROKEN"),
+                         snapshot.replace("com.example.launcher/.Home", "Application Not Responding: Messages"))
+            for mutation in mutations:
+                with self.subTest(api=api, mutation=mutation), self.assertRaises(READINESS.HealthFailure):
+                    READINESS.input_focus(mutation)
+            history = "\nInput Dispatcher State at time of last ANR:\n" + snapshot.split(
+                "Input Dispatcher State:\n", 1)[1].split("Input Manager Service (Java) State:\n", 1)[0]
+            with self.subTest(api=api), self.assertRaisesRegex(READINESS.HealthFailure, "Retained input ANR history"):
+                READINESS.input_focus(input_history(snapshot, history))
+
+
 class BoundedAdapterTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="android-readiness-test-")
@@ -790,6 +885,36 @@ class BoundedAdapterTests(unittest.TestCase):
                 self.assertTrue(READINESS.health_sample(self.session(), HOME))
         self.assertEqual(self.device.trace().count(["shell", "dumpsys", "window"]), 2)
         self.assertNotIn(["shell", "dumpsys", "window", "windows"], self.device.trace())
+
+    def test_presentation_marker_preserves_health_sample_vetoes(self):
+        inputs = INPUT.replace("touchOcclusionMode=BLOCK_UNTRUSTED\n",
+                               "touchOcclusionMode=BLOCK_UNTRUSTED, canOccludePresentation\n")
+        input_command = ["shell", "dumpsys", "input"]
+        window_command = ["shell", "dumpsys", "window"]
+        process_command = ["shell", "dumpsys", "activity", "processes"]
+        event_command = ["logcat", "-b", "events", "-d", "-v", "brief"]
+        self.device.add(input_command, inputs)
+        self.assertTrue(READINESS.health_sample(self.session(), HOME))
+        cases = ((window_command, window_snapshot(), window_snapshot(ownership=OWNERSHIP.replace(
+                     "package=com.example.launcher", "package=android"))),
+                 (process_command, PROCESSES, PROCESSES.replace("    pid=1201\n", "    pid=1201\n    bad=true\n")),
+                 (process_command, PROCESSES, PROCESSES.replace("    pid=1201\n", "    pid=1201\n    mNotResponding=true null\n")),
+                 (event_command, EVENTS, EVENTS + "I/am_anr( 1000): [0,1201,launcher]\n"),
+                 (event_command, EVENTS, EVENTS + "I/am_crash( 1000): [0,1201,launcher]\n"))
+        for command, healthy, unhealthy in cases:
+            self.device.add(command, unhealthy)
+            with self.subTest(command=command, unhealthy=unhealthy), self.assertRaises(READINESS.HealthFailure):
+                READINESS.health_sample(self.session(), HOME)
+            self.device.add(command, healthy)
+        self.device.add(input_command, inputs.replace("name='a1 ", "name='b2 "))
+        self.assertFalse(READINESS.health_sample(self.session(), HOME))
+        self.device.add(input_command, inputs, status=7)
+        with self.assertRaisesRegex(READINESS.HealthFailure, "Device command failed"):
+            READINESS.health_sample(self.session(), HOME)
+        self.device.add(input_command, inputs)
+        self.device.add(STORAGE_COMMAND, status=7)
+        with self.assertRaisesRegex(READINESS.HealthFailure, "Device command failed"):
+            READINESS.health_sample(self.session(), HOME)
 
     def test_background_metadata_does_not_hide_real_error_branches(self):
         records, tail = PROCESSES.split("  Total persistent processes:", 1)
