@@ -94,9 +94,9 @@ date -u '+%Y-%m-%dT%H:%M:%SZ' > "$diagnostics_dir/logcat-capture-start.txt"
 adb logcat -b all -v threadtime > "$diagnostics_dir/logcat-live.txt" \
   2> "$diagnostics_dir/logcat-live.stderr" &
 logcat_pid=$!
+require_android_health boot HOME --startup
 original_font_scale="$(device_command original-font shell settings get system font_scale | tr -d '\r')"
 font_scale_captured=1
-require_android_health boot HOME --startup
 device_command set-font shell settings put system font_scale "$font_scale"
 test "$(device_command verify-font shell settings get system font_scale | tr -d '\r')" = "$font_scale"
 

@@ -6,6 +6,10 @@ the same fresh, dedicated output directory. No ADB or device commands are run.
 Files and directory traversal are bounded per sample. The global byte budget
 reserves space for every lifecycle file and the observer's OS-limited stdio log.
 Proc reads are not atomic: identity validation and timestamp brackets expose races.
+Each selected process has a four-thread quota within the global 64-thread cap.
+Unused quotas are not redistributed, reducing QEMU depth even when it runs alone.
+Read, byte, directory-entry, deadline, or stop limits can still prevent process or
+thread observation; zero errors does not mean complete coverage.
 """
 
 from __future__ import annotations
@@ -36,6 +40,7 @@ MAX_READS = 512
 MAX_ENTRIES = 2048
 MAX_PROCESSES = 16
 MAX_THREADS = 64
+THREADS_PER_PROCESS = MAX_THREADS // MAX_PROCESSES
 MAX_FDS = 64
 MAX_ERRORS = 32
 STOP_WAIT = 10
@@ -272,8 +277,11 @@ class Sampler:
     def collect_threads(self, pid):
         identities = []
         for thread in self.numeric_entries(f"{pid}/task"):
-            if self.threads == 0 or self.reads <= 0:
+            if (len(identities) >= THREADS_PER_PROCESS or self.threads == 0
+                    or self.reads <= 0 or self.read_bytes <= 1):
                 self.limits.add("threads_or_reads")
+                if self.reads <= 0 or self.read_bytes <= 1:
+                    self.limits.add("read_budget")
                 break
             self.threads -= 1
             prefix = f"{pid}/task/{thread}"

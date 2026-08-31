@@ -632,6 +632,207 @@ class StartupDiagnosticsTests(unittest.TestCase):
             output.write("sample-0000.json", b"x" * (DIAGNOSTICS.FILE_BYTES + 1), DIAGNOSTICS.FILE_BYTES)
         self.assertFalse(output.exists("sample-0000.json"))
 
+    def assert_thread_coverage(self, snapshot, expected):
+        processes = snapshot["processes"]
+        self.assertEqual([len(process["threads"]) for process in processes], [count for _, _, count in expected])
+        self.assertEqual(len(processes), len(expected))
+        for process, (pid, comm, count) in zip(processes, expected):
+            self.assertTrue(process["valid"])
+            self.assertEqual(process["before"], process["after"])
+            self.assertEqual((process["before"]["pid"], process["before"]["comm"]), (int(pid), comm))
+            for offset, thread in enumerate(process["threads"]):
+                thread_pid = int(pid) + offset
+                self.assertTrue(thread["valid"])
+                self.assertEqual(thread["before"], thread["after"])
+                self.assertEqual(thread["before"]["pid"], thread_pid)
+                prefix = f"{pid}/task/{thread_pid}"
+                self.assertEqual(snapshot["files"][prefix + "/stat"], snapshot["files"][prefix + "/stat.after"])
+                self.assertEqual(snapshot["files"][prefix + "/schedstat"]["text"], "1 2 3\n")
+        self.assertLessEqual(sum(len(process["threads"]) for process in processes), DIAGNOSTICS.MAX_THREADS)
+        self.assertLessEqual(snapshot["read_operations"], DIAGNOSTICS.MAX_READS)
+        self.assertLessEqual(snapshot["read_bytes"], DIAGNOSTICS.MAX_READ_BYTES)
+        self.assertLessEqual(snapshot["directory_entries"], DIAGNOSTICS.MAX_ENTRIES)
+
+    def test_large_qemu_preserves_later_adb_thread_observations(self):
+        self.process_fixture("3801", "qemu-system-x86", threads=65)
+        self.process_fixture("3911", "adb", threads=6)
+        self.process_fixture("4103", "adb", threads=2)
+        (self.proc / "3911/fd/4").symlink_to("socket:[123]")
+        snapshot = self.snapshot()
+        self.assert_thread_coverage(snapshot, [("3801", "qemu-system-x86", 4), ("3911", "adb", 4), ("4103", "adb", 2)])
+        self.assertEqual(snapshot["processes"][1]["socket_links"], [{"fd": 4, "socket": "socket:[123]"}])
+        self.assertEqual(snapshot["limits"], ["threads_or_reads"])
+        self.assertEqual(snapshot["errors"], [])
+        self.assertEqual(snapshot["errors_dropped"], 0)
+
+    def test_reversed_pid_order_preserves_qemu_and_adb_thread_observations(self):
+        self.process_fixture("3911", "qemu-system-x86", threads=65)
+        self.process_fixture("3801", "adb", threads=65)
+        snapshot = self.snapshot()
+        self.assert_thread_coverage(snapshot, [("3801", "adb", 4), ("3911", "qemu-system-x86", 4)])
+        self.assertEqual(snapshot["limits"], ["threads_or_reads"])
+        self.assertEqual(snapshot["errors"], [])
+
+    def test_thread_quota_covers_all_sixteen_selected_processes(self):
+        expected = []
+        for index in range(17):
+            pid = str(30000 + index * 100)
+            comm = ("qemu-system-x86", "adb", "emulator")[index % 3]
+            self.process_fixture(pid, comm, threads=5)
+            if index < 16:
+                expected.append((pid, comm, 4))
+        snapshot = self.snapshot()
+        self.assert_thread_coverage(snapshot, expected)
+        self.assertEqual(sum(len(process["threads"]) for process in snapshot["processes"]), 64)
+        self.assertEqual(snapshot["limits"], ["processes_or_reads", "threads_or_reads"])
+        self.assertEqual(snapshot["errors"], [])
+
+    def test_quota_reports_omission_only_when_extra_thread_exists(self):
+        for threads in (0, 1, 4, 5):
+            with self.subTest(threads=threads):
+                self.process_fixture("901", "qemu-system-x86", threads=threads)
+                snapshot = self.snapshot()
+                self.assert_thread_coverage(snapshot, [("901", "qemu-system-x86", min(threads, 4))])
+                self.assertEqual(snapshot["limits"], ["threads_or_reads"] if threads > 4 else [])
+                self.assertEqual(snapshot["errors"], [])
+                self.assertEqual(snapshot["errors_dropped"], 0)
+
+    def test_unused_quota_is_not_redistributed_to_later_qemu(self):
+        self.process_fixture("901", "adb", threads=1)
+        self.process_fixture("1001", "qemu-system-x86", threads=65)
+        snapshot = self.snapshot()
+        self.assert_thread_coverage(snapshot, [("901", "adb", 1), ("1001", "qemu-system-x86", 4)])
+        self.assertEqual(snapshot["limits"], ["threads_or_reads"])
+
+    def test_later_process_and_thread_identity_races_remain_invalid(self):
+        self.process_fixture("901", "qemu-system-x86", threads=65)
+        self.process_fixture("1001", "adb", threads=5)
+        self.process_fixture("1101", "emulator", threads=5)
+        original = DIAGNOSTICS.read_regular
+        for path, comm in (("1001/stat", "adb"), ("1001/task/1001/stat", "worker")):
+            for disappeared in (False, True):
+                with self.subTest(path=path, disappeared=disappeared):
+                    reads = 0
+
+                    def changed(directory, current, limit):
+                        nonlocal reads
+                        if current == path:
+                            reads += 1
+                            if reads == 2:
+                                if disappeared:
+                                    raise FileNotFoundError(2, "fixture identity disappeared")
+                                return process_stat("1001", comm, 999).encode()
+                        return original(directory, current, limit)
+
+                    with mock.patch.object(DIAGNOSTICS, "read_regular", changed):
+                        snapshot = self.snapshot()
+                    process = snapshot["processes"][1]
+                    identity = process if comm == "adb" else process["threads"][0]
+                    self.assertFalse(identity["valid"])
+                    self.assertEqual(identity["before"]["starttime"], "100")
+                    if disappeared:
+                        self.assertIsNone(identity["after"])
+                        self.assertEqual(snapshot["files"][path + ".after"]["error"]["kind"], "FileNotFoundError")
+                    else:
+                        self.assertEqual(identity["after"]["starttime"], "999")
+                    if comm == "adb":
+                        self.assertEqual(process["reason"], "identity_changed_or_disappeared")
+                    else:
+                        self.assertTrue(process["valid"])
+                    self.assertEqual([len(process["threads"]) for process in snapshot["processes"]], [4, 4, 4])
+                    self.assertTrue(snapshot["processes"][0]["valid"])
+                    self.assertTrue(snapshot["processes"][2]["valid"])
+
+    def test_dead_first_process_does_not_consume_later_thread_quotas(self):
+        self.process_fixture("901", "qemu-system-x86", threads=65)
+        self.process_fixture("1001", "qemu-system-x86", threads=65)
+        self.process_fixture("1101", "adb", threads=5)
+        (self.proc / "901/stat").unlink()
+        snapshot = self.snapshot()
+        dead = snapshot["processes"][0]
+        self.assertFalse(dead["valid"])
+        self.assertIsNone(dead["before"])
+        self.assertIsNone(dead["after"])
+        self.assertEqual(dead["reason"], "identity_unavailable_or_comm_changed")
+        self.assertNotIn("threads", dead)
+        self.assertEqual(snapshot["files"]["901/stat"]["error"]["kind"], "FileNotFoundError")
+        self.assert_thread_coverage({**snapshot, "processes": snapshot["processes"][1:]},
+                                    [("1001", "qemu-system-x86", 4), ("1101", "adb", 4)])
+
+    def test_exhausted_thread_budgets_report_omission_without_reads(self):
+        self.process_fixture(threads=5)
+        cases = (("threads", 0, {"threads_or_reads"}),
+                 ("reads", 0, {"threads_or_reads", "read_budget"}),
+                 ("read_bytes", 0, {"threads_or_reads", "read_budget"}),
+                 ("read_bytes", 1, {"threads_or_reads", "read_budget"}),
+                 ("entries", 0, {"directory_entries"}))
+        for budget, remaining, expected in cases:
+            with self.subTest(budget=budget, remaining=remaining):
+                sampler = DIAGNOSTICS.Sampler(self.proc, self.clock.now + 30)
+                self.addCleanup(os.close, sampler.root)
+                setattr(sampler, budget, remaining)
+                before = sampler.reads, sampler.read_bytes, sampler.threads
+                with mock.patch.object(DIAGNOSTICS, "read_regular") as read:
+                    self.assertEqual(sampler.collect_threads("901"), [])
+                read.assert_not_called()
+                self.assertEqual(sampler.limits, expected)
+                self.assertEqual((sampler.reads, sampler.read_bytes, sampler.threads), before)
+                self.assertEqual(sampler.errors, [])
+
+    def test_partial_thread_budget_exhaustion_retains_invalid_identity(self):
+        self.process_fixture(threads=5)
+        stat_bytes = len(process_stat("901", "worker").encode())
+        cases = (("reads", 1, True), ("reads", 2, True),
+                 ("read_bytes", stat_bytes + 1, True), ("read_bytes", 2, False))
+        for budget, remaining, complete_before in cases:
+            with self.subTest(budget=budget, remaining=remaining):
+                sampler = DIAGNOSTICS.Sampler(self.proc, self.clock.now + 30)
+                self.addCleanup(os.close, sampler.root)
+                setattr(sampler, budget, remaining)
+                identities = sampler.collect_threads("901")
+                self.assertEqual(len(identities), 1)
+                self.assertEqual(identities[0]["before"] is not None, complete_before)
+                self.assertIsNone(identities[0]["after"])
+                self.assertFalse(identities[0]["valid"])
+                self.assertEqual(sampler.files["901/task/901/stat.after"]["error"]["kind"], "read_budget")
+                self.assertTrue({"threads_or_reads", "read_budget"}.issubset(sampler.limits))
+                self.assertGreaterEqual(sampler.reads, 0)
+                self.assertGreaterEqual(sampler.read_bytes, 0)
+                self.assertEqual(sampler.threads, DIAGNOSTICS.MAX_THREADS - 1)
+                if not complete_before:
+                    self.assertTrue(sampler.files["901/task/901/stat"]["truncated"])
+                    self.assertIn("file_bytes", sampler.limits)
+
+    def test_directory_exhaustion_can_prevent_later_adb_thread_observation(self):
+        self.process_fixture("901", "qemu-system-x86", threads=5)
+        self.process_fixture("1001", "adb", threads=5)
+        budget = sum(1 for _ in self.proc.iterdir()) + 5
+        self.patch(DIAGNOSTICS, "MAX_ENTRIES", budget)
+        snapshot = self.snapshot()
+        self.assertEqual(snapshot["directory_entries"], budget)
+        self.assertEqual(snapshot["limits"], ["directory_entries", "threads_or_reads"])
+        self.assert_thread_coverage(snapshot, [("901", "qemu-system-x86", 4), ("1001", "adb", 0)])
+        self.assertIn("1001/schedstat", snapshot["files"])
+        self.assertFalse(any(path.startswith("1001/task/") for path in snapshot["files"]))
+        self.assertEqual(snapshot["errors"], [])
+
+    def test_zero_observer_errors_do_not_imply_full_thread_coverage(self):
+        self.process_fixture("901", "qemu-system-x86", threads=65)
+        self.process_fixture("1001", "adb", threads=5)
+        output = self.start_fixture(max_samples=2, interval=2)
+        self.assertEqual(DIAGNOSTICS.observe(output, self.proc), 0)
+        self.assertEqual(DIAGNOSTICS.stop(output), 0)
+        manifest = output.load("manifest.json")
+        self.assertEqual(manifest["schema"], 1)
+        self.assertEqual(manifest["bounds"]["threads_per_sample"], 64)
+        result = output.load("done.json")
+        self.assertEqual(result["observed_errors"], 0)
+        self.assertEqual(result["health_assessment"], "not_performed")
+        for sequence in range(2):
+            snapshot = json.loads((self.output_path / f"sample-{sequence:04d}.json").read_bytes())
+            self.assert_thread_coverage(snapshot, [("901", "qemu-system-x86", 4), ("1001", "adb", 4)])
+            self.assertEqual(snapshot["limits"], ["threads_or_reads"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -343,7 +343,9 @@ jobs:
         uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
 
       - name: Check Android readiness adapter
-        run: python3 -m unittest scripts/test_android_readiness.py -v
+        run: |
+          python3 -m unittest scripts/test_android_readiness.py -v
+          python3 -m unittest discover -s scripts -p test_android_startup_phase.py -v
 
       - name: Check Android startup diagnostics
         run: python3 -m unittest scripts/test_android_startup_diagnostics.py scripts/test_android_diagnostic_capture.py -v

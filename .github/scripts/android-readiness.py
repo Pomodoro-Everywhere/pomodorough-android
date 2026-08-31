@@ -51,6 +51,7 @@ class DeviceSession:
         self.directory = Path(tempfile.mkdtemp(prefix=f"{phase}-", dir=output))
         self.deadline = time.monotonic() + seconds
         self.sequence = 0
+        self.startup_home = False
         self.record("phase", {"phase": phase, "started_at": time.time(), "budget": seconds,
                               "grammar": "retained-api35-api36-bounded-observations-v3",
                               "history_policy": "reject-retained-errors-not-active-error-proof"})
@@ -317,7 +318,7 @@ def window_owners(snapshot: str) -> dict[str, tuple[int, str]]:
     return owners
 
 
-def window_focus(snapshot: str) -> tuple[str, str] | None:
+def window_focus(snapshot: str, *, startup_home: bool = False) -> tuple[str, str] | None:
     ownership = full_window_ownership(snapshot)
     focus, historical_anr = current_display_focus(snapshot)
     owners = window_owners(ownership)
@@ -330,6 +331,10 @@ def window_focus(snapshot: str) -> tuple[str, str] | None:
         raise HealthFailure(f"Unsupported or obstructing focused window: {focus}")
     component = canonical_component(match[2])
     owner = owners.get(focus)
+    if component == "com.android.settings/com.android.settings.FallbackHome":
+        if startup_home and owner == (1000, "com.android.settings"):
+            return None
+        raise HealthFailure("Fallback HOME requires authenticated startup HOME context")
     if owner is None or owner[0] < 10000 or owner[1] != component.split("/")[0]:
         raise HealthFailure("Focused window owner is unknown or not the expected application owner")
     return match[1], component
@@ -708,7 +713,7 @@ def health_sample(session: DeviceSession, expected: str) -> bool:
     processes = session.snapshot("shell", "dumpsys", "activity", "processes")
     events = session.snapshot("logcat", "-b", "events", "-d", "-v", "brief")
     require_clean_events(events)
-    window = window_focus(windows)
+    window = window_focus(windows, startup_home=session.startup_home)
     focused_input = input_focus(inputs)
     require_process_health(processes)
     return boot == "1" and window is not None and window == focused_input and window[1] == expected
@@ -733,7 +738,11 @@ def wait_for_health(session: DeviceSession, expected: str, startup: bool) -> Non
             if current_home != expected:
                 healthy_since = None
                 expected = current_home
-        healthy = health_sample(session, expected)
+        session.startup_home = startup and follow_home
+        try:
+            healthy = health_sample(session, expected)
+        finally:
+            session.startup_home = False
         if follow_home:
             healthy = resolve_home(session) == expected and not transient_home(expected) and healthy
         now = time.monotonic()

@@ -355,6 +355,27 @@ def runner_function(name: str) -> str:
     return match[0] + "\n"
 
 
+def install_runner_boot_clock(device):
+    launcher = device.bin / "python3"
+    launcher.unlink()
+    launcher.write_text(f"""#!{sys.executable}
+import importlib.util
+from pathlib import Path
+import sys
+
+spec = importlib.util.spec_from_file_location("runner_clock_fixture", {str(Path(__file__).resolve())!r})
+fixture = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(fixture)
+if len(sys.argv) < 2 or Path(sys.argv[1]).resolve() != fixture.ADAPTER.resolve():
+    raise SystemExit("Unexpected fake runner Python command")
+sys.argv = sys.argv[1:]
+if sys.argv[3:] == ["wait", "boot", "HOME", "--startup"]:
+    fixture.READINESS.time = fixture.Clock()
+raise SystemExit(fixture.READINESS.main())
+""")
+    launcher.chmod(0o700)
+
+
 def process_metadata_snapshot(package: str) -> str:
     snapshot = PROCESSES.replace("com.example.launcher", package)
     snapshot = snapshot.replace("/system/Launcher.apk", f"/data/app/~~token/{package}-token/base.apk")
@@ -1341,12 +1362,31 @@ exit {original}
     def test_initial_query_failure_still_retains_evidence_without_restore_or_install(self):
         self.device.add(["logcat", "-b", "all", "-v", "threadtime"], stream=True)
         self.device.add(["shell", "settings", "get", "system", "font_scale"], status=7)
+        install_runner_boot_clock(self.device)
         result = self.shell(f'/bin/bash "{RUNNER}"')
         self.assertEqual(result.returncode, 1)
         trace = self.device.trace()
         self.assertIn(["shell", "dumpsys", "window"], trace)
         self.assertFalse(any("install" in command or "instrument" in command for command in trace))
         self.assertFalse(any(command[:4] == ["shell", "settings", "put", "system"] for command in trace))
+        font_read = ["shell", "settings", "get", "system", "font_scale"]
+        self.assertEqual(trace.count(font_read), 1)
+        self.assertEqual(trace[:trace.index(font_read)].count(["shell", "dumpsys", "window"]), 5)
+        self.assertFalse(any(command[:4] == ["shell", "settings", "delete", "system"] for command in trace))
+        diagnostics, = self.root.glob("app/build/reports/androidTests/diagnostics-*")
+        boot, = diagnostics.glob("boot-*")
+        self.assertEqual(json.loads((boot / "result.json").read_text()), {"status": "passed"})
+        self.assertEqual(json.loads((boot / "phase.json").read_text())["budget"], 600)
+        samples = [json.loads(member.read_text()) for member in sorted(boot.glob("sample-*.json"))]
+        self.assertEqual([sample["monotonic"] for sample in samples], [0, 20, 40, 60, 80])
+        self.assertEqual([sample["healthy"] for sample in samples], [True] * 5)
+        self.assertEqual([sample["expected"] for sample in samples], [HOME] * 5)
+        original_font, = diagnostics.glob("original-font-*")
+        self.assertEqual(json.loads((original_font / "001.json").read_text())["status"], 7)
+        self.assertEqual(json.loads((original_font / "result.json").read_text())["status"], "failed")
+        cleanup, = diagnostics.glob("failure-*")
+        self.assertEqual(json.loads((cleanup / "result.json").read_text()), {"status": "collected"})
+        self.assertTrue((diagnostics / "logcat-live.txt").is_file())
 
     def test_successful_run_with_dead_log_capture_is_failure(self):
         script = runner_function("cleanup") + """logcat_pid=99999999
