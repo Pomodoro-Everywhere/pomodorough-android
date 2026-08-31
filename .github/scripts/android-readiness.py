@@ -61,12 +61,15 @@ class DeviceSession:
     def capture(self, arguments: list[str], required: bool = True) -> bytes:
         self.sequence += 1
         stem = self.directory / f"{self.sequence:03d}"
+        started_at, started_monotonic = time.time(), time.monotonic()
         budget = min(10, self.deadline - time.monotonic())
         with stem.with_suffix(".stdout").open("wb") as stdout:
             with stem.with_suffix(".stderr").open("wb") as stderr:
                 status = run_bounded(["adb", *arguments], stdout, stderr, budget)
         self.record(stem.name, {"command": ["adb", *arguments], "status": status,
-                                "budget": max(0, budget), "finished_at": time.time()})
+                                "budget": max(0, budget), "started_at": started_at,
+                                "started_monotonic": started_monotonic,
+                                "finished_at": time.time(), "finished_monotonic": time.monotonic()})
         if arguments == ["exec-out", "screencap", "-p"] and status == 0:
             stem.with_suffix(".png").hardlink_to(stem.with_suffix(".stdout"))
         if required and status:
@@ -768,6 +771,9 @@ def collect_diagnostics(session: DeviceSession) -> None:
     except HealthFailure as failure:
         session.record("home-unavailable", {"error": str(failure)})
     commands = [
+        ["shell", "date", "+%s.%N"],
+        ["shell", "cat", "/proc/uptime"],
+        ["shell", "dumpsys", "activity", "exit-info", "com.google.android.gms"],
         ["shell", "dumpsys", "window"],
         ["shell", "dumpsys", "input"],
         ["shell", "dumpsys", "activity", "processes"],

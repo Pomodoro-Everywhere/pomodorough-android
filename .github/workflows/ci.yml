@@ -280,6 +280,8 @@ jobs:
     name: Connected API ${{ matrix.api-level }} · ${{ matrix.font-scale }}x font · ${{ matrix.locale }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    env:
+      STARTUP_DIAGNOSTICS: app/build/reports/androidTests/startup-api-${{ matrix.api-level }}-font-${{ matrix.font-scale }}-locale-${{ matrix.locale }}
     strategy:
       fail-fast: false
       matrix:
@@ -343,6 +345,9 @@ jobs:
       - name: Check Android readiness adapter
         run: python3 -m unittest scripts/test_android_readiness.py -v
 
+      - name: Check Android startup diagnostics
+        run: python3 -m unittest scripts/test_android_startup_diagnostics.py scripts/test_android_diagnostic_capture.py -v
+
       - name: Assemble connected test APKs before emulator boot
         run: ./gradlew --no-daemon --stacktrace :app:assembleDebug :app:assembleDebugAndroidTest
 
@@ -362,8 +367,14 @@ jobs:
           profile: pixel_6
           cores: 2
           disable-animations: true
+          pre-emulator-launch-script: python3 .github/scripts/android-startup-diagnostics.py start --output "$STARTUP_DIAGNOSTICS"
           script: |
             FONT_SCALE=${{ matrix.font-scale }} TEST_LOCALE=${{ matrix.locale }} TEST_CLASS=${{ matrix.test-class }} .github/scripts/run-instrumented-tests.sh
+
+      - name: Finish Android startup diagnostics
+        if: always()
+        timeout-minutes: 1
+        run: python3 .github/scripts/android-startup-diagnostics.py stop --output "$STARTUP_DIAGNOSTICS"
 
       - name: Retain connected reports, screenshots, and diagnostics
         if: always()
