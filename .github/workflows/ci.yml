@@ -340,6 +340,12 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
 
+      - name: Check Android readiness adapter
+        run: python3 -m unittest scripts/test_android_readiness.py -v
+
+      - name: Assemble connected test APKs before emulator boot
+        run: ./gradlew --no-daemon --stacktrace :app:assembleDebug :app:assembleDebugAndroidTest
+
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
@@ -357,7 +363,6 @@ jobs:
           cores: 2
           disable-animations: true
           script: |
-            ./gradlew --no-daemon --stacktrace :app:assembleDebug :app:assembleDebugAndroidTest
             FONT_SCALE=${{ matrix.font-scale }} TEST_LOCALE=${{ matrix.locale }} TEST_CLASS=${{ matrix.test-class }} .github/scripts/run-instrumented-tests.sh
 
       - name: Retain connected reports, screenshots, and diagnostics

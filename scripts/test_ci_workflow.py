@@ -161,6 +161,37 @@ class CIWorkflowTests(unittest.TestCase):
         self.assertIn("PomodoroughRtlAccessibilityTest", workflow := CI_WORKFLOW.read_text(encoding="utf-8"))
         self.assertIn("TEST_CLASS=${{ matrix.test-class }}", workflow)
 
+    def test_connected_assembly_precedes_emulator_with_identical_targets(self) -> None:
+        workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+        connected = workflow.split("  connected:", 1)[1].split("\n  release-smoke:", 1)[0]
+        command = "./gradlew --no-daemon --stacktrace :app:assembleDebug :app:assembleDebugAndroidTest"
+        self.assertEqual(connected.count(command), 1)
+        self.assertLess(connected.index(command), connected.index("- name: Run connected tests"))
+        self.assertIn("python3 -m unittest scripts/test_android_readiness.py -v", connected)
+        self.assertIn("target: google_apis", connected)
+        self.assertIn("arch: x86_64", connected)
+        self.assertIn("profile: pixel_6", connected)
+        self.assertIn("cores: 2", connected)
+        self.assertIn("fail-fast: false", connected)
+
+    def test_runner_gates_active_windows_without_dismissing_or_clearing_evidence(self) -> None:
+        script = INSTRUMENTED_SCRIPT.read_text(encoding="utf-8")
+        self.assertLess(script.index("trap cleanup EXIT"), script.index('original_font_scale="$(device_command'))
+        self.assertLess(script.index("adb logcat -b all -v threadtime"), script.index("require_android_health boot"))
+        self.assertIn("require_android_health boot HOME --startup", script)
+        self.assertIn("require_android_health configured HOME --startup", script)
+        self.assertIn("require_android_health launched me.egigoka.pomodorough/.MainActivity", script)
+        self.assertIn('require_android_health "$phase-home" HOME', script)
+        self.assertLess(script.index('prepare_instrumentation "$output_file"'),
+                        script.index('execute_instrumentation "$output_file"'))
+        self.assertLess(script.index("    collect_failure_diagnostics\n"),
+                        script.index("  restore_font_scale || restore_status=$?"))
+        self.assertLess(script.index('tee -a "$runner_output"'),
+                        script.index('echo "Instrumentation runner failed'))
+        for prohibited in ("logcat -c", "logcat -b events -c", "input keyevent", "input tap",
+                           "pm disable", "wait_for_android_idle", "previous_anr_count"):
+            self.assertNotIn(prohibited, script)
+
     def test_instrumentation_count_matches_source_inventory(self) -> None:
         script = INSTRUMENTED_SCRIPT.read_text(encoding="utf-8")
         default = re.search(r'expected_test_count="\$\{EXPECTED_TEST_COUNT:-(\d+)\}"', script)

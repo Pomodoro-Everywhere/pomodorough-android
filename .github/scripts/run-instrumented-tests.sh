@@ -15,104 +15,104 @@ results_dir="app/build/outputs/androidTest-results/direct-font-$scale_slug-local
 diagnostics_dir="app/build/reports/androidTests/diagnostics-font-$scale_slug-locale-$locale_slug"
 screenshots_dir="app/build/reports/androidTests/screenshots-font-$scale_slug-locale-$locale_slug"
 runner_output="$results_dir/instrumentation-output.txt"
-original_font_scale="$(adb shell settings get system font_scale | tr -d '\r')"
+readiness_adapter="$(dirname "${BASH_SOURCE[0]}")/android-readiness.py"
+original_font_scale=""
+font_scale_captured=0
+logcat_pid=""
 
 if [[ ! "$instrumentation_timeout_seconds" =~ ^[1-9][0-9]*$ ]]; then
   echo "INSTRUMENTATION_TIMEOUT_SECONDS must be a positive integer" >&2
   exit 1
 fi
 
-wait_for_android_idle() {
-  local deadline=$((SECONDS + 600))
-  local previous_anr_count=-1
-  local stable_checks=0
+device_command() {
+  python3 "$readiness_adapter" --output "$diagnostics_dir" command "$@"
+}
 
-  adb wait-for-device
-  adb shell settings put global device_provisioned 1
-  adb shell settings put secure user_setup_complete 1
-  adb logcat -b events -c
-
-  while ((SECONDS < deadline)); do
-    if [[ "$(adb shell getprop sys.boot_completed | tr -d '\r')" == "1" ]] \
-      && adb shell pm path android >/dev/null \
-      && adb shell 'mkdir -p /sdcard/Android && touch /sdcard/Android/.pomodorough-ci-ready && rm /sdcard/Android/.pomodorough-ci-ready'; then
-      anr_count="$(adb logcat -b events -d -v brief | grep -c 'am_anr' || true)"
-      if [[ "$anr_count" == "$previous_anr_count" ]]; then
-        stable_checks=$((stable_checks + 1))
-      else
-        stable_checks=0
-      fi
-      previous_anr_count="$anr_count"
-
-      if [[ $stable_checks -ge 4 ]]; then
-        echo "Android remained ready without new ANRs for 80 seconds"
-        return 0
-      fi
-    else
-      previous_anr_count=-1
-      stable_checks=0
-    fi
-    sleep 20
-  done
-
-  echo "Android did not reach a stable ready state within 10 minutes" >&2
-  return 1
+require_android_health() {
+  python3 "$readiness_adapter" --output "$diagnostics_dir" wait "$@" || return $?
+  if ! kill -0 "$logcat_pid" 2>/dev/null; then
+    echo "Device log capture exited before readiness completed" >&2
+    return 1
+  fi
 }
 
 restore_font_scale() {
+  if [[ $font_scale_captured -eq 0 ]]; then
+    return 0
+  fi
   if [[ -z "$original_font_scale" || "$original_font_scale" == "null" ]]; then
-    adb shell settings delete system font_scale >/dev/null
+    device_command restore-font shell settings delete system font_scale >/dev/null
   else
-    adb shell settings put system font_scale "$original_font_scale"
+    device_command restore-font shell settings put system font_scale "$original_font_scale"
   fi
 }
 
 collect_failure_diagnostics() {
-  mkdir -p "$diagnostics_dir"
-  adb shell pm list instrumentation > "$diagnostics_dir/instrumentation.txt"
-  adb shell dumpsys activity exit-info me.egigoka.pomodorough.test \
-    > "$diagnostics_dir/test-process-exit-info.txt"
-  adb shell dumpsys activity exit-info me.egigoka.pomodorough \
-    > "$diagnostics_dir/app-process-exit-info.txt"
-  adb shell dumpsys dropbox --print data_app_crash \
-    > "$diagnostics_dir/data-app-crashes.txt"
-  adb logcat -b all -d -v threadtime > "$diagnostics_dir/logcat.txt"
+  python3 "$readiness_adapter" --output "$diagnostics_dir" diagnostics "${1:-failure}"
+}
+
+stop_log_capture() {
+  if [[ -z "$logcat_pid" ]]; then
+    return 0
+  fi
+  kill "$logcat_pid" 2>/dev/null || true
+  for _ in {1..10}; do
+    kill -0 "$logcat_pid" 2>/dev/null || break
+    sleep 0.1
+  done
+  kill -KILL "$logcat_pid" 2>/dev/null || true
+  wait "$logcat_pid" 2>/dev/null || true
 }
 
 cleanup() {
   local exit_status=$?
   trap - EXIT
   set +e
+  if [[ $exit_status -eq 0 && -n "$logcat_pid" ]] && ! kill -0 "$logcat_pid" 2>/dev/null; then
+    echo "Device log capture exited unexpectedly" >&2
+    exit_status=1
+  fi
   if [[ $exit_status -ne 0 ]]; then
     collect_failure_diagnostics
   fi
-  restore_font_scale
-  return "$exit_status"
+  local restore_status=0
+  restore_font_scale || restore_status=$?
+  stop_log_capture
+  if [[ $exit_status -eq 0 ]]; then
+    exit_status=$restore_status
+  fi
+  exit "$exit_status"
 }
 
 trap cleanup EXIT
-wait_for_android_idle
-adb shell settings put system font_scale "$font_scale"
-test "$(adb shell settings get system font_scale | tr -d '\r')" = "$font_scale"
 rm -rf "$results_dir"
 rm -rf "$diagnostics_dir"
 rm -rf "$screenshots_dir"
-mkdir -p "$results_dir"
-mkdir -p "$screenshots_dir"
-adb logcat -c
+mkdir -p "$results_dir" "$diagnostics_dir" "$screenshots_dir"
+date -u '+%Y-%m-%dT%H:%M:%SZ' > "$diagnostics_dir/logcat-capture-start.txt"
+adb logcat -b all -v threadtime > "$diagnostics_dir/logcat-live.txt" \
+  2> "$diagnostics_dir/logcat-live.stderr" &
+logcat_pid=$!
+original_font_scale="$(device_command original-font shell settings get system font_scale | tr -d '\r')"
+font_scale_captured=1
+require_android_health boot HOME --startup
+device_command set-font shell settings put system font_scale "$font_scale"
+test "$(device_command verify-font shell settings get system font_scale | tr -d '\r')" = "$font_scale"
 
-adb uninstall me.egigoka.pomodorough.test >/dev/null 2>&1 || true
-adb uninstall "$package_name" >/dev/null 2>&1 || true
-adb install -r "$app_apk"
-adb install -r "$test_apk"
-wait_for_android_idle
-adb shell cmd locale set-app-locales "$package_name" --user 0 --locales "$test_locale"
-locale_output="$(adb shell cmd locale get-app-locales "$package_name" --user 0 | tr -d '\r')"
+device_command uninstall-tests uninstall me.egigoka.pomodorough.test >/dev/null 2>&1 || true
+device_command uninstall-app uninstall "$package_name" >/dev/null 2>&1 || true
+device_command install-app install -r "$app_apk"
+device_command install-tests install -r "$test_apk"
+device_command set-locale shell cmd locale set-app-locales "$package_name" --user 0 --locales "$test_locale"
+locale_output="$(device_command verify-locale shell cmd locale get-app-locales "$package_name" --user 0 | tr -d '\r')"
 expected_locale_line="Locales for $package_name for user 0 are [$test_locale]"
 test "$locale_output" = "$expected_locale_line"
-adb shell am start -W -n me.egigoka.pomodorough/.MainActivity >/dev/null
-adb exec-out screencap -p > "$screenshots_dir/launch.png"
-adb shell pm list instrumentation | grep -F \
+require_android_health configured HOME --startup
+device_command launch shell am start -W -n me.egigoka.pomodorough/.MainActivity >/dev/null
+device_command launch-screenshot exec-out screencap -p > "$screenshots_dir/launch.png"
+require_android_health launched me.egigoka.pomodorough/.MainActivity
+device_command instrumentation-registration shell pm list instrumentation | grep -F \
   'instrumentation:me.egigoka.pomodorough.test/androidx.test.runner.AndroidJUnitRunner'
 
 runner_status=0
@@ -139,15 +139,14 @@ bounded_force_stop() {
   wait "$adb_pid"
 }
 
-run_instrumentation() {
-  local output_file="$1"
-  shift
-  if ! adb shell am force-stop "$package_name"; then
+prepare_instrumentation() {
+  local phase="$(basename "$1" .txt)"
+  if ! device_command "$phase-stop" shell am force-stop "$package_name"; then
     echo "Failed to force-stop target process" >&2
     return 1
   fi
   local prior_pid
-  if ! prior_pid="$(adb shell "pidof '$package_name' || true" | tr -d '\r')"; then
+  if ! prior_pid="$(device_command "$phase-pid" shell "pidof '$package_name' || true" | tr -d '\r')"; then
     echo "Failed to query target PID after force-stop" >&2
     return 1
   fi
@@ -155,7 +154,49 @@ run_instrumentation() {
     echo "Target process remained alive after force-stop" >&2
     return 1
   fi
+  require_android_health "$phase-home" HOME
+}
 
+watch_instrumentation() {
+  local instrumentation_pid="$1"
+  local timeout_marker="$2"
+  sleep "$instrumentation_timeout_seconds"
+  if kill -0 "$instrumentation_pid" 2>/dev/null; then
+    : > "$timeout_marker"
+    kill "$instrumentation_pid" 2>/dev/null || true
+    for _ in {1..20}; do
+      kill -0 "$instrumentation_pid" 2>/dev/null || break
+      sleep 0.1
+    done
+    kill -KILL "$instrumentation_pid" 2>/dev/null || true
+    bounded_force_stop "$package_name" || true
+  fi
+}
+
+observe_instrumentation_process() {
+  local instrumentation_pid="$1"
+  local output_file="$2"
+  local target_pid=""
+  for _ in {1..300}; do
+    if ! target_pid="$(device_command running-pid shell "pidof '$package_name' || true" | tr -d '\r')"; then
+      return 1
+    fi
+    if [[ -n "$target_pid" ]]; then
+      printf '%s\n' "$target_pid" > "$output_file.pid"
+      return 0
+    fi
+    if ! kill -0 "$instrumentation_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.2
+  done
+  echo "Instrumentation target PID was not observed for $output_file" >&2
+  return 1
+}
+
+execute_instrumentation() {
+  local output_file="$1"
+  shift
   set +e
   adb shell am instrument -w -r -e expectedLocale "$test_locale" "$@" \
     me.egigoka.pomodorough.test/androidx.test.runner.AndroidJUnitRunner \
@@ -163,38 +204,10 @@ run_instrumentation() {
   local instrumentation_pid=$!
   local timeout_marker="$output_file.timeout"
   rm -f "$timeout_marker"
-  (
-    sleep "$instrumentation_timeout_seconds"
-    if kill -0 "$instrumentation_pid" 2>/dev/null; then
-      : > "$timeout_marker"
-      kill "$instrumentation_pid" 2>/dev/null || true
-      for _ in {1..20}; do
-        kill -0 "$instrumentation_pid" 2>/dev/null || break
-        sleep 0.1
-      done
-      kill -KILL "$instrumentation_pid" 2>/dev/null || true
-      bounded_force_stop "$package_name" || true
-    fi
-  ) &
+  watch_instrumentation "$instrumentation_pid" "$timeout_marker" &
   local watchdog_pid=$!
-  local target_pid=""
   local status=0
-  for _ in {1..300}; do
-    if ! target_pid="$(adb shell "pidof '$package_name' || true" 2>/dev/null | tr -d '\r')"; then
-      status=1
-      break
-    fi
-    if [[ -n "$target_pid" ]]; then
-      break
-    fi
-    if ! kill -0 "$instrumentation_pid" 2>/dev/null; then
-      break
-    fi
-    sleep 0.2
-  done
-  if [[ -n "$target_pid" ]]; then
-    printf '%s\n' "$target_pid" > "$output_file.pid"
-  fi
+  observe_instrumentation_process "$instrumentation_pid" "$output_file" || status=$?
   wait "$instrumentation_pid"
   local instrumentation_status=$?
   kill "$watchdog_pid" 2>/dev/null || true
@@ -207,10 +220,12 @@ run_instrumentation() {
     status=$instrumentation_status
   fi
   set -e
-  if [[ -z "$target_pid" ]]; then
-    echo "Instrumentation target PID was not observed for $output_file" >&2
-    status=1
-  fi
+  return "$status"
+}
+
+verify_instrumentation_result() {
+  local output_file="$1"
+  local status="$2"
   local announced
   local completed
   announced="$(grep -m 1 '^INSTRUMENTATION_STATUS: numtests=' "$output_file" \
@@ -220,6 +235,10 @@ run_instrumentation() {
   if [[ "$announced" =~ ^[1-9][0-9]*$ ]]; then
     announced_tests=$((announced_tests + announced))
   fi
+  if ! tee -a "$runner_output" < "$output_file"; then
+    echo "Failed to append $output_file to $runner_output" >&2
+    return 1
+  fi
   if [[ ! "$announced" =~ ^[1-9][0-9]*$ ]] \
     || [[ "$completed" -ne "$announced" ]] \
     || [[ $status -ne 0 ]] \
@@ -228,8 +247,16 @@ run_instrumentation() {
     echo "Instrumentation runner failed for $output_file ($completed/${announced:-0} tests)" >&2
     return 1
   fi
-  if ! tee -a "$runner_output" < "$output_file"; then
-    echo "Failed to append $output_file to $runner_output" >&2
+}
+
+run_instrumentation() {
+  local output_file="$1"
+  shift
+  prepare_instrumentation "$output_file" || return $?
+  local status=0
+  execute_instrumentation "$output_file" "$@" || status=$?
+  if ! verify_instrumentation_result "$output_file" "$status"; then
+    collect_failure_diagnostics "$(basename "$output_file" .txt)-failure" || true
     return 1
   fi
 }
@@ -259,7 +286,7 @@ else
     fi
   done
 fi
-adb exec-out screencap -p > "$screenshots_dir/after-tests.png" || true
+device_command after-tests-screenshot exec-out screencap -p > "$screenshots_dir/after-tests.png" || true
 
 echo "Instrumentation completed $completed_tests/$announced_tests tests across ${shard_count:-1} shard(s)"
 if [[ $runner_status -ne 0 ]]; then
