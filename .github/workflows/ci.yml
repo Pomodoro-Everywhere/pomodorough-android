@@ -111,7 +111,7 @@ jobs:
           python3 scripts/check_docs.py
           python3 scripts/check_protocol_fixture.py
           python3 scripts/check_workflow_pins.py
-          python3 -m unittest scripts/test_check_localization.py scripts/test_ci_workflow.py scripts/test_release_runtime_abi.py -v
+          python3 -m unittest scripts/test_check_localization.py scripts/test_ci_workflow.py scripts/test_release_runtime_abi.py scripts/test_emulator_startup_configuration.py -v
           python3 scripts/check_localization.py
 
       - name: Set up JDK
@@ -330,7 +330,7 @@ jobs:
           python3 scripts/check_docs.py
           python3 scripts/check_protocol_fixture.py
           python3 scripts/check_workflow_pins.py
-          python3 -m unittest scripts/test_check_localization.py scripts/test_ci_workflow.py scripts/test_release_runtime_abi.py -v
+          python3 -m unittest scripts/test_check_localization.py scripts/test_ci_workflow.py scripts/test_release_runtime_abi.py scripts/test_emulator_startup_configuration.py -v
           python3 scripts/check_localization.py
 
       - name: Set up JDK
@@ -367,9 +367,12 @@ jobs:
           target: google_apis
           arch: x86_64
           profile: pixel_6
-          cores: 2
+          cores: 4
+          ram-size: 4096M
           disable-animations: true
-          pre-emulator-launch-script: python3 .github/scripts/android-startup-diagnostics.py start --output "$STARTUP_DIAGNOSTICS"
+          pre-emulator-launch-script: |
+            adb start-server
+            python3 .github/scripts/android-startup-diagnostics.py start --output "$STARTUP_DIAGNOSTICS"
           script: |
             FONT_SCALE=${{ matrix.font-scale }} TEST_LOCALE=${{ matrix.locale }} TEST_CLASS=${{ matrix.test-class }} .github/scripts/run-instrumented-tests.sh
 
@@ -460,8 +463,10 @@ jobs:
           target: google_apis
           arch: ${{ matrix.architecture }}
           profile: pixel_6
-          cores: 2
+          cores: 4
+          ram-size: 4096M
           disable-animations: true
+          pre-emulator-launch-script: adb start-server
           script: RUNTIME_ABI=${{ matrix.runtime-abi }} bash .github/scripts/smoke-packaged-release.sh
 
       - name: Retain release-Iroh instrumentation and diagnostics

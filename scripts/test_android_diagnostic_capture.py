@@ -74,7 +74,7 @@ class StartupWorkflowTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         connected = workflow.split("  connected:\n", 1)[1].split("  release-smoke:\n", 1)[0]
         adapter = "python3 .github/scripts/android-startup-diagnostics.py"
-        self.assertIn(f'pre-emulator-launch-script: {adapter} start --output "$STARTUP_DIAGNOSTICS"', connected)
+        self.assertIn(f'pre-emulator-launch-script: |\n            adb start-server\n            {adapter} start --output "$STARTUP_DIAGNOSTICS"', connected)
         self.assertIn("STARTUP_DIAGNOSTICS: app/build/reports/androidTests/startup-api-", connected)
         self.assertIn("scripts/test_android_diagnostic_capture.py -v", connected)
         finish = connected.split("      - name: Finish Android startup diagnostics\n", 1)[1]
@@ -93,9 +93,9 @@ class StartupWorkflowTests(unittest.TestCase):
         self.assertEqual(connected.count("- api-level:"), 8)
         self.assertEqual(connected.count('test-class: ""'), 4)
         self.assertEqual(connected.count("test-class: me.egigoka.pomodorough.ui.PomodoroughRtlAccessibilityTest"), 4)
-        self.assertIn("          cores: 2\n          disable-animations: true", connected)
+        self.assertIn("          cores: 4\n          ram-size: 4096M\n          disable-animations: true", connected)
         self.assertIn("          target: google_apis\n          arch: x86_64\n          profile: pixel_6", connected)
-        for forbidden in ("ADB_TRACE", "emulator-options:", "ram-size:", "emulator-build:",
+        for forbidden in ("ADB_TRACE", "emulator-options:", "emulator-build:",
                           "continue-on-error:", "retry", "kill-server", "reconnect"):
             self.assertNotIn(forbidden, connected)
         self.assertIn("FONT_SCALE=${{ matrix.font-scale }} TEST_LOCALE=${{ matrix.locale }} "

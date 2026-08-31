@@ -171,7 +171,7 @@ class CIWorkflowTests(unittest.TestCase):
         self.assertIn("target: google_apis", connected)
         self.assertIn("arch: x86_64", connected)
         self.assertIn("profile: pixel_6", connected)
-        self.assertIn("cores: 2", connected)
+        self.assertIn("cores: 4\n          ram-size: 4096M", connected)
         self.assertIn("fail-fast: false", connected)
 
     def test_runner_gates_active_windows_without_dismissing_or_clearing_evidence(self) -> None:
@@ -393,7 +393,8 @@ class CIWorkflowTests(unittest.TestCase):
 
         emulator_runner_count = workflow.count("ReactiveCircus/android-emulator-runner@")
         self.assertEqual(2, emulator_runner_count)
-        self.assertEqual(emulator_runner_count, workflow.count("          cores: 2"))
+        self.assertEqual(emulator_runner_count, workflow.count("          cores: 4"))
+        self.assertEqual(emulator_runner_count, workflow.count("          ram-size: 4096M"))
 
         script = SMOKE_SCRIPT.read_text(encoding="utf-8")
         self.assertTrue(script.startswith("#!/usr/bin/env bash\nset -euo pipefail\n"))
