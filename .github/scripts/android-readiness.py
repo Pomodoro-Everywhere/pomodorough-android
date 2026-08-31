@@ -8,11 +8,14 @@ doDump/dumpWindowsNoHeaderLocked (be42921e05ba3d1946efc090054cd4a498f22b80),
 RootWindowContainer traversal (e7627bd73223e4f20a49a92acf42f4275aaa8c5e),
 DisplayContent.dump (android16-release blob deee44dd7f617b01197bd859689bb8eca5c76cb2),
 and InputDispatcher.dump/dumpDispatchStateLocked
-(18c754e18499acce28e8be58846879075ade72a7). These mixed-revision, tool-rendered
-source observations are NOT authenticated API 35/36 dumps or compatibility proof.
+(18c754e18499acce28e8be58846879075ade72a7). Full framing also follows the eight
+retained API 35/36 captures from hosted run 33357184785; offline replay is NOT
+native health or release acceptance. Policy boot/system and current display
+awake/screen/draw signals replace absent legacy-field assumptions, not equivalent
+mDisplayFrozen/waitingForConfig semantics.
 
 Only relevant sections are interpreted. Unrelated delegated record payloads,
-the input-service prefix and outer window-service sections are opaque.
+payloads inside framed input-service and outer window-service sections are opaque.
 Source-emitted following sections and postambles reject ordinary prefix
 truncation; they cannot detect arbitrary
 interior record deletion, forged output, power cuts after collection, or future
@@ -49,7 +52,7 @@ class DeviceSession:
         self.deadline = time.monotonic() + seconds
         self.sequence = 0
         self.record("phase", {"phase": phase, "started_at": time.time(), "budget": seconds,
-                              "grammar": "source-bounded-observations-unvalidated-api35-api36-v2",
+                              "grammar": "retained-api35-api36-bounded-observations-v3",
                               "history_policy": "reject-retained-errors-not-active-error-proof"})
 
     def record(self, name: str, value: object) -> None:
@@ -103,17 +106,38 @@ def run_bounded(command: list[str], stdout, stderr, budget: float) -> int:
 
 
 def canonical_component(value: str) -> str:
-    if not re.fullmatch(r"[A-Za-z_][\w.]*/\.?[A-Za-z_][\w.$]*", value):
+    package_name = r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*"
+    activity_name = r"[A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*"
+    if not re.fullmatch(rf"{package_name}/\.?{activity_name}", value):
         raise HealthFailure(f"Unknown component grammar: {value!r}")
     package, activity = value.split("/")
     return f"{package}/{package + activity if activity.startswith('.') else activity}"
 
 
+def resolved_component(snapshot: str) -> str:
+    integer = r"(?:0|-?[1-9][0-9]{0,9})"
+    metadata = (rf"priority=(?P<priority>{integer}) preferredOrder=(?P<order>{integer}) "
+                rf"match=0x[0-9a-f]{{1,8}} specificIndex=(?P<index>{integer}) isDefault=(?:true|false)\n")
+    match = re.fullmatch(rf"(?:{metadata})?(?P<component>[^\n]+)\n", snapshot)
+    if match is None:
+        raise HealthFailure("Unknown component grammar in incomplete or ambiguous HOME resolver response")
+    if any(match[name] is not None and not -2147483648 <= int(match[name]) <= 2147483647
+           for name in ("priority", "order", "index")):
+        raise HealthFailure("Out-of-range HOME resolver metadata")
+    return canonical_component(match["component"])
+
+
 def resolve_home(session: DeviceSession) -> str:
-    return canonical_component(session.text(
+    return resolved_component(session.snapshot(
         "shell", "cmd", "package", "resolve-activity", "--brief", "--user", "0",
         "-a", "android.intent.action.MAIN", "-c", "android.intent.category.HOME",
     ))
+
+
+def transient_home(component: str) -> bool:
+    package = component.split("/")[0]
+    return package in ("com.google.android.googlesdksetup", "com.google.android.setupwizard",
+                       "com.android.provision") or component == "com.android.settings/com.android.settings.FallbackHome"
 
 
 def single_field(snapshot: str, name: str, separator: str = "=") -> str:
@@ -152,6 +176,7 @@ def ordered_fields(snapshot: str, patterns: tuple[str, ...]) -> list[re.Match]:
 
 def current_display_focus(snapshot: str) -> tuple[str, bool]:
     dump_text(snapshot)
+    snapshot = snapshot.removeprefix("\n")
     if not snapshot.startswith("WINDOW MANAGER LAST ANR (dumpsys window lastanr)\n"):
         raise HealthFailure("Unknown full window dump prefix")
     history = section_between(snapshot, "WINDOW MANAGER LAST ANR (dumpsys window lastanr)",
@@ -167,7 +192,6 @@ def current_display_focus(snapshot: str) -> tuple[str, bool]:
     if headers != ["0"]:
         raise HealthFailure("Unknown or unsupported current display traversal")
     ordered_fields(displays, (r"Display: mDisplayId=0(?: \(organized\))?",
-                             r"(?:mHasSetIgnoreOrientationRequest=true )?ignoreOrientationRequest=(?:true|false)",
                              r"mLayoutSeq=\d+", r"mCurrentFocus=.+", r"mFocusedApp=.+",
                              r"mHoldScreenWindow=.+", r"mObscuringWindow=.+",
                              r"mLastWakeLockHoldingWindow=.+", r"mLastWakeLockObscuringWindow=.+",
@@ -187,22 +211,82 @@ def window_postamble(snapshot: str) -> str:
     header = "WINDOW MANAGER WINDOWS (dumpsys window windows)\n"
     if not snapshot.startswith(header) or snapshot.count(header) != 1:
         raise HealthFailure("Unknown scoped window dump header")
-    fields = ordered_fields(snapshot, (
-        r"mGlobalConfiguration=.+", r"mHasPermanentDpad=(?:true|false)", r"mTopFocusedDisplayId=0",
-        r"mInTouchMode=(?:true|false)", r"mBlurEnabled=(?:true|false)", r"mLastDisplayFreezeDuration=.+",
-        r"mLastWakeLockHoldingWindow=.+ mLastWakeLockObscuringWindow=.+",
-        r"mSystemBooted=true mDisplayEnabled=true", r"mTransactionSequence=\d+",
-        r"mDisplayFrozen=false windows=0 client=false apps=0 mRotation=\S+ mLastOrientation=-?\d+",
-        r"waitingForConfig=false", r"Animation settings: disabled=(?:true|false) "
-        r"window=\d+(?:\.\d+)? transition=\d+(?:\.\d+)? animator=\d+(?:\.\d+)?"))
+    fields = ordered_fields(snapshot, (r"mGlobalConfiguration=.+", r"mHasPermanentDpad=(?:true|false)",
+                                      r"mTopFocusedDisplayId=0", r"WINDOW MANAGER TRACE \(dumpsys window trace\)"))
     if snapshot[fields[-1].end():].strip():
-        raise HealthFailure("Unknown window trailer or active recents animation")
-    final_region = snapshot[fields[-5].end():fields[-1].end()]
-    for line in final_region.splitlines():
-        if line.strip() and not re.fullmatch(r" *(?:mLayoutNeeded on displays=\d+|mTransactionSequence=\d+|"
-                                           r"mDisplayFrozen=.*|waitingForConfig=false|Animation settings:.*)", line):
-            raise HealthFailure("Unknown window postamble structure")
+        raise HealthFailure("Unknown window section trailer")
+    require_legacy_window_fields(snapshot)
     return snapshot[len(header):fields[0].start()]
+
+
+def require_legacy_window_fields(snapshot: str) -> None:
+    patterns = {
+        "mDisplayFrozen": r"mDisplayFrozen=false windows=0 client=false apps=0 mRotation=\S+ mLastOrientation=-?\d+",
+        "waitingForConfig": r"waitingForConfig=false",
+        "mDisplayEnabled": r"mDisplayEnabled=true",
+        "mSystemBooted": r"mSystemBooted=true mDisplayEnabled=true",
+        "mInTouchMode": r"mInTouchMode=(?:true|false)",
+        "mTransactionSequence": r"mTransactionSequence=\d+",
+        "Animation settings": r"Animation settings: disabled=(?:true|false) window=\d+(?:\.\d+)? "
+                              r"transition=\d+(?:\.\d+)? animator=\d+(?:\.\d+)?",
+    }
+    for name, pattern in patterns.items():
+        prefix = r"[^\n]*?(?<!\S)" if name in ("mDisplayFrozen", "waitingForConfig", "mDisplayEnabled") else " *"
+        lines = re.findall(rf"^{prefix}{re.escape(name)}[^\n]*$", snapshot, re.MULTILINE)
+        if name == "mDisplayEnabled":
+            pattern = r"(?:mSystemBooted=true )?mDisplayEnabled=true"
+        if len(lines) > 1 or any(re.fullmatch(rf" *{pattern}", line) is None for line in lines):
+            raise HealthFailure(f"Active or malformed legacy window field: {name}")
+
+
+def full_window_ownership(snapshot: str) -> str:
+    dump_text(snapshot)
+    prefix = "WINDOW MANAGER LAST ANR (dumpsys window lastanr)\n"
+    if not snapshot.removeprefix("\n").startswith(prefix):
+        raise HealthFailure("Unknown full window dump prefix")
+    policy_header = "WINDOW MANAGER POLICY STATE (dumpsys window policy)"
+    policy = section_between(snapshot, policy_header, "WINDOW MANAGER ANIMATOR STATE (dumpsys window animator)")
+    require_window_signals(policy, ("mSafeMode=false mSystemReady=true mSystemBooted=true",))
+    current = snapshot[snapshot.index(policy_header):]
+    sections = (policy_header, "WINDOW MANAGER ANIMATOR STATE (dumpsys window animator)",
+                "WINDOW MANAGER SESSIONS (dumpsys window sessions)",
+                "WINDOW MANAGER DISPLAY CONTENTS (dumpsys window displays)",
+                "WINDOW MANAGER TOKENS (dumpsys window tokens)",
+                "WINDOW MANAGER WINDOWS (dumpsys window windows)", "WINDOW MANAGER TRACE (dumpsys window trace)",
+                "WINDOW MANAGER LOGGING (dumpsys window logging)",
+                "WINDOW MANAGER HIGH REFRESH RATE BLACKLIST (dumpsys window refresh)",
+                "INSTALLED PACKAGES HAVING APP-SPECIFIC CONFIGURATIONS",
+                "WINDOW MANAGER CONSTANTS (dumpsys window constants):", "SystemPerformanceHinter:",
+                "TrustedPresentationListenerController:", "SensitiveContentPackages:", "ScreenRecordingCallbackController:")
+    ordered_fields(current, tuple(re.escape(header) for header in sections))
+    if re.findall(r"^(?:WINDOW MANAGER|INSTALLED PACKAGES)[^\n]*", current, re.MULTILINE) != list(sections[:11]):
+        raise HealthFailure("Unknown or duplicate current window sections")
+    tail = current.split("ScreenRecordingCallbackController:\n", 1)[1]
+    if tail != "  Registered callbacks:\n  Last invoked states:\n":
+        raise HealthFailure("Unsupported or incomplete window callback trailer")
+    require_legacy_window_fields(current)
+    require_display_readiness(current)
+    return sections[5] + "\n" + section_between(current, sections[5], sections[6]) + sections[6] + "\n"
+
+
+def require_window_signals(snapshot: str, patterns: tuple[str, ...]) -> None:
+    ordered_fields(snapshot, patterns)
+    for pattern in patterns:
+        for name in re.findall(r"(\w+)=", pattern):
+            if len(re.findall(rf"(?<!\S){name}\w*\b", snapshot)) != 1:
+                raise HealthFailure(f"Ambiguous or malformed window readiness signal: {name}")
+
+
+def require_display_readiness(snapshot: str) -> None:
+    display = section_between(snapshot, "WINDOW MANAGER DISPLAY CONTENTS (dumpsys window displays)",
+                              "WINDOW MANAGER TOKENS (dumpsys window tokens)")
+    policy = section_between(display, "  DisplayPolicy", "  DisplayRotation")
+    require_window_signals(policy, ("mAwake=true mScreenOnEarly=true mScreenOnFully=true",
+                                    "mKeyguardDrawComplete=true mWindowManagerDrawComplete=true"))
+    orientation = re.findall(r"^ *ignoreOrientationRequest[^\n]*$", display, re.MULTILINE)
+    if len(orientation) > 1 or any(re.fullmatch(r" *ignoreOrientationRequest=(?:true|false)", line) is None
+                                 for line in orientation):
+        raise HealthFailure("Malformed display orientation request flag")
 
 
 def window_owners(snapshot: str) -> dict[str, tuple[int, str]]:
@@ -230,7 +314,8 @@ def window_owners(snapshot: str) -> dict[str, tuple[int, str]]:
     return owners
 
 
-def window_focus(snapshot: str, ownership: str) -> tuple[str, str] | None:
+def window_focus(snapshot: str) -> tuple[str, str] | None:
+    ownership = full_window_ownership(snapshot)
     focus, historical_anr = current_display_focus(snapshot)
     owners = window_owners(ownership)
     if historical_anr:
@@ -247,14 +332,64 @@ def window_focus(snapshot: str, ownership: str) -> tuple[str, str] | None:
     return match[1], component
 
 
-def input_sections(snapshot: str) -> tuple[list[tuple[str, list[str]]], bool]:
+def input_envelope(snapshot: str) -> tuple[str, str]:
     dump_text(snapshot)
+    if not snapshot.startswith("INPUT MANAGER (dumpsys input)\n"):
+        raise HealthFailure("Unknown full input dump prefix")
+    prefix = section_between(snapshot, "INPUT MANAGER (dumpsys input)", "Input Dispatcher State:")
+    headers = [line for line in prefix.splitlines() if line and not line.startswith(" ")]
+    common = ["Input properties:", "Input Manager State:", "Event Hub State:"]
+    reader = [header for header in headers if re.fullmatch(r"Input Reader State \(Nums of device: \d+\):", header)]
+    if len(reader) != 1:
+        raise HealthFailure("Missing or ambiguous input reader framing")
+    common += reader + ["UnwantedInteractionBlocker:", "PointerChoreographer:"]
+    suffix = ["Input Processor State:", "InputDeviceMetricsCollector:"]
+    if headers == common + suffix + ["InputFilter:"]:
+        version = "36"
+    elif len(headers) == len(common) + 2 + len(suffix) and headers[:len(common)] == common and headers[-2:] == suffix:
+        if not re.fullmatch(r"show touches: (?:true|false)\nstylus pointer icon enabled: (?:true|false)",
+                            "\n".join(headers[len(common):-2])):
+            raise HealthFailure("Malformed input pointer configuration")
+        version = "35"
+    else:
+        raise HealthFailure("Unsupported or incomplete native input envelope")
+    try:
+        current = section_between(snapshot, "Input Dispatcher State:", "Input Manager Service (Java) State:")
+    except HealthFailure as failure:
+        raise HealthFailure("Missing, duplicate or reordered input sections") from failure
+    java = snapshot.split("Input Manager Service (Java) State:\n", 1)[1]
+    input_java_envelope(java, version)
+    return current, version
+
+
+def input_java_envelope(snapshot: str, version: str) -> None:
+    patterns = (r"Gesture Monitors \(implemented as spy windows\):", r"mAdditionalDisplayInputProperties:",
+                r"BatteryController:", r"KbdBacklightController: 0 keyboard backlights",
+                r"KeyboardLedController: 0 keyboard mic mute lights")
+    if version == "36":
+        patterns += (r"KeyboardLedController: 0 keyboard volume mute lights", r"KeyboardGlyphManager: 0 glyph maps",
+                     r"KeyGestureController:", r"Last handled KeyGestureEvents: *", r"KeyCombination rules:",
+                     r"AppLaunchShortcutManager:", r"InputGestureManager:")
+    headers = [line[2:] for line in snapshot.splitlines() if re.match(r"^  \S", line)]
+    if len(headers) != len(patterns) or any(re.fullmatch(pattern, header) is None
+                                          for header, pattern in zip(headers, patterns)):
+        raise HealthFailure("Unknown or incomplete Java input sections")
+    if any(line.strip() and not line.startswith("  ") for line in snapshot.splitlines()):
+        raise HealthFailure("Unknown Java input trailer")
+    terminal = "    Custom Gestures:\n" if version == "36" else "  KeyboardLedController: 0 keyboard mic mute lights\n"
+    if not snapshot.endswith(terminal) or snapshot.count(terminal) != 1:
+        raise HealthFailure("Missing or ambiguous version-bound input completion")
+    if version == "36":
+        gestures = section_between(snapshot, "  InputGestureManager:", "    Custom Gestures:")
+        ordered_fields(gestures, (r"System Shortcuts:",))
+
+
+def input_sections(snapshot: str) -> tuple[list[tuple[str, list[str]]], bool, str]:
+    current, version = input_envelope(snapshot)
     history_header = "\nInput Dispatcher State at time of last ANR:\n"
-    current, separator, history = snapshot.partition(history_header)
-    headers = list(re.finditer(r"^Input Dispatcher State:\n", current, re.MULTILINE))
-    if len(headers) != 1 or (separator and not history.strip()):
-        raise HealthFailure("Missing or ambiguous input dispatcher envelope")
-    current = current[headers[0].end():]
+    current, separator, history = current.partition(history_header)
+    if history_header in history or (separator and not history.strip()):
+        raise HealthFailure("Missing or ambiguous input history envelope")
     sections = []
     for line in current.splitlines():
         if re.fullmatch(r"  \S.*", line):
@@ -263,7 +398,7 @@ def input_sections(snapshot: str) -> tuple[list[tuple[str, list[str]]], bool]:
             sections[-1][1].append(line[4:])
         elif line.strip():
             raise HealthFailure("Unknown input section/trailer")
-    return sections, bool(separator)
+    return sections, bool(separator), version
 
 
 def input_section_shape(header: str, children: list[str], pattern: str, empty: str,
@@ -288,22 +423,26 @@ def input_queue(header: str, children: list[str], name: str, empty: str = "<empt
         raise HealthFailure(f"Malformed {name} entry")
 
 
-def input_connections(header: str, children: list[str]) -> None:
+def input_connections(header: str, children: list[str], version: str) -> None:
     if header == "Connections: <none>" and not children:
         return
     if header != "Connections:" or not children:
         raise HealthFailure("Malformed input connections")
     records = []
+    identifiers = set()
     for child in children:
-        if re.fullmatch(r"\d+: channelName='[^']*', windowName='[^']*', status=NORMAL, "
-                        r"monitor=(?:true|false), responsive=true", child):
+        match = re.fullmatch(r"(\d+): channelName='[^']*', status=NORMAL, "
+                             r"monitor=(?:true|false), responsive=true", child)
+        if match and match[1] not in identifiers:
+            identifiers.add(match[1])
             records.append([])
         elif child.startswith("  ") and records:
             records[-1].append(child[2:])
         else:
             raise HealthFailure("Unknown or unresponsive input connection")
     for queues in records:
-        if queues != ["OutboundQueue: <empty>", "WaitQueue: <empty>"]:
+        expected = ["OutboundQueue: <empty>", "WaitQueue: <empty>"] if version == "35" else []
+        if queues != expected:
             raise HealthFailure("Unsupported nonempty or malformed input connection queues")
 
 
@@ -314,21 +453,23 @@ def input_display(header: str, children: list[str]) -> None:
         raise HealthFailure("Unknown input display header")
     if children == ["Windows: <none>"]:
         return
+    if children and re.fullmatch(r"logicalSize=\d+x\d+", children[0]):
+        if len(children) < 3 or not re.fullmatch(r"    transform \([^\n]+\) \([^\n]+\)", children[1]):
+            raise HealthFailure("Incomplete input display transform")
+        children = children[2:]
     if not children or children[0] != "Windows:":
         raise HealthFailure("Unknown input window list")
-    pattern = (r"  (\d+): name='[^']*', id=-?\d+, displayId=-?\d+, portalToDisplayId=-?\d+, "
-               r"paused=(?:true|false), focusable=(?:true|false), hasWallpaper=(?:true|false), "
-               r"visible=(?:true|false), alpha=\d+\.\d+, flags=.+, type=.+, "
-               r"frame=\[-?\d+,-?\d+\]\[-?\d+,-?\d+\], globalScale=\d+\.\d+, "
-               r"applicationInfo=.*, touchableRegion=.*, inputFeatures=.*, ownerPid=-?\d+, "
-               r"ownerUid=-?\d+, dispatchingTimeout=\d+ms, trustedOverlay=(?:true|false), "
-               r"hasToken=(?:true|false), touchOcclusionMode=\S+")
+    pattern = (r"  (\d+): name=[^,\n]+, id=-?\d+, displayId=-?\d+, inputConfig=[^,\n]+, "
+               r"alpha=\d+(?:\.\d+)?, frame=\[-?\d+,-?\d+\]\[-?\d+,-?\d+\], globalScale=\d+(?:\.\d+)?, "
+               r"applicationInfo.name=[^,\n]*, applicationInfo.token=(?:<null>|0x[0-9a-f]+), "
+               r"touchableRegion=(?:<empty>|(?:\[-?\d+,-?\d+\]\[-?\d+,-?\d+\])+), ownerPid=-?\d+, ownerUid=-?\d+, "
+               r"dispatchingTimeout=\d+ms, token=0x[0-9a-f]+, touchOcclusionMode=\S+")
     count = 0
     for child in children[1:]:
         record = re.fullmatch(pattern, child)
         if record and int(record[1]) == count:
             count += 1
-        elif child.startswith("    ") and count:
+        elif count and (child.startswith("    ") or re.fullmatch(r" *(?:transform \([^\n]+\) \([^\n]+\))", child)):
             continue
         else:
             raise HealthFailure("Unknown or truncated input window record")
@@ -339,7 +480,7 @@ def input_display(header: str, children: list[str]) -> None:
 def input_monitors(header: str, children: list[str]) -> None:
     if header == "Monitors: <none>" and not children:
         return
-    if re.fullmatch(r"(?:Global|Gesture) monitors in display -?\d+:", header) is None:
+    if re.fullmatch(r"(?:Global|Gesture) monitors on display -?\d+:", header) is None:
         raise HealthFailure("Unknown input monitor header")
     for index, child in enumerate(children):
         if re.fullmatch(rf"{index}: '[^']*', *", child) is None:
@@ -347,7 +488,7 @@ def input_monitors(header: str, children: list[str]) -> None:
 
 
 def input_touch_states(header: str, children: list[str]) -> None:
-    if header == "TouchStates: <no displays touched>" and not children:
+    if header in ("TouchStates: <no displays touched>", "TouchStatesByDisplay: <no displays touched>") and not children:
         return
     state = r"-?\d+: down=(?:true|false), split=(?:true|false), deviceId=-?\d+, source=0x[0-9a-f]{8}\n"
     window = r"    \d+: name='[^']*', pointerIds=0x[0-9a-f]+, targetFlags=0x[0-9a-f]+\n"
@@ -359,67 +500,110 @@ def input_touch_states(header: str, children: list[str]) -> None:
         raise HealthFailure("Unknown or incomplete input touch states")
 
 
-def validate_input_section(header: str, children: list[str]) -> int:
+def validate_input_section(header: str, children: list[str], version: str) -> str:
     scalar_patterns = (r"DispatchEnabled: (?:true|false)", r"DispatchFrozen: (?:true|false)",
                        r"InputFilterEnabled: (?:true|false)", r"FocusedDisplayId: -?\d+")
-    for rank, pattern in enumerate(scalar_patterns):
+    for pattern in scalar_patterns:
         if re.fullmatch(pattern, header) and not children:
-            return rank
+            return header.split(":", 1)[0]
     shapes = (("FocusedApplications", "<none>", r"displayId=-?\d+, name='[^']*', dispatchingTimeout=\d+ms"),
               ("FocusedWindows", "<none>", r"displayId=-?\d+(?:, name='[^']+'| has focused token without a window')"),
-              ("mPendingFocusRequests", "<none>", r"displayId=-?\d+, token->.+, focusedToken->.+"))
-    for rank, (name, empty, pattern) in enumerate(shapes, 4):
+              ("FocusRequests", "<none>", r"displayId=-?\d+, name='[^']+' result='(?:OK|NO_WINDOW)'"))
+    for name, empty, pattern in shapes:
         if header.startswith(name + ":"):
             input_section_shape(header, children, name, empty, pattern)
-            return rank
-    return validate_input_tail(header, children)
+            return name
+    return validate_input_tail(header, children, version)
 
 
-def validate_input_tail(header: str, children: list[str]) -> int:
+def validate_input_tail(header: str, children: list[str], version: str) -> str:
     if header.startswith(("TouchStates:", "TouchStatesByDisplay:")):
         input_touch_states(header, children)
-        return 7
+        return "TouchStates"
     if header.startswith(("Display:", "Displays:")):
         input_display(header, children)
-        return 8
+        return "Display"
     if header.startswith(("Monitors:", "Global monitors ", "Gesture monitors ")):
         input_monitors(header, children)
-        return 9
-    for name, rank in (("RecentQueue", 10), ("InboundQueue", 12)):
+        return "Monitors"
+    for name in ("RecentQueue", "InboundQueue"):
         if header.startswith(name + ":"):
             input_queue(header, children, name)
-            return rank
+            return name
     if header.startswith("PendingEvent:"):
         input_section_shape(header, children, "PendingEvent", "<none>", r"\S.*?, age=-?\d+ms")
         if len(children) > 1:
             raise HealthFailure("Multiple pending input events")
-        return 11
-    if header.startswith("ReplacedKeys:"):
-        input_section_shape(header, children, "ReplacedKeys", "<empty>",
-                            r"originalKeyCode=-?\d+, deviceId=-?\d+ -> newKeyCode=-?\d+")
-        return 13
+        return "PendingEvent"
     if header.startswith("Connections:"):
-        input_connections(header, children)
-        return 14
+        input_connections(header, children, version)
+        return "Connections"
     if re.fullmatch(r"AppSwitch: (?:not pending|pending, due in -?\d+ms)", header) and not children:
-        return 15
-    if header == "Configuration:" and len(children) == 2:
-        if re.fullmatch(r"KeyRepeatDelay: \d+ms", children[0]) and re.fullmatch(r"KeyRepeatTimeout: \d+ms", children[1]):
-            return 16
+        return "AppSwitch"
+    if header == "Configuration:":
+        input_configuration(children, version)
+        return "Configuration"
+    return validate_input_current_fields(header, children, version)
+
+
+def input_configuration(children: list[str], version: str) -> None:
+    snapshot = "\n".join(children) + "\n"
+    aggregator = "LatencyAggregatorWithHistograms:" if version == "36" else "LatencyAggregator:"
+    ordered_fields(snapshot, (r"KeyRepeatDelay: \d+ms", r"KeyRepeatTimeout: \d+ms", r"LatencyTracker:",
+                              re.escape(aggregator), r"mLastSlowEventTime=-?\d+",
+                              r"mNumEventsSinceLastSlowEventReport = \d+", r"mNumSkippedSlowEvents = \d+"))
+    headers = [line for line in children if line and not line.startswith(" ")]
+    if headers != children[:2] + ["LatencyTracker:", aggregator]:
+        raise HealthFailure("Unknown input configuration sections")
+    if not re.fullmatch(r"  mNumSkippedSlowEvents = \d+", children[-1]):
+        raise HealthFailure("Incomplete input latency telemetry")
+
+
+def validate_input_current_fields(header: str, children: list[str], version: str) -> str:
+    scalars = {"Pointer Capture Requested: false": "PointerCapture", "Current Window with Pointer Capture: None": "CaptureWindow",
+               "CommandQueue: <empty>": "CommandQueue", "InputTracer: Enabled": "InputTracer"}
+    if version == "36":
+        scalars["CursorStatesByDisplay: <no displays touched by cursor>"] = "CursorStates"
+        if re.fullmatch(r"mMaximumObscuringOpacityForTouch: (?:0\.\d+|1\.0+)", header) and not children:
+            return "MaximumOpacity"
+        if header == "DisplayTopologyGraph:" and children == ["PrimaryDisplayId: -1", "TopologyGraph:", "", "DisplaysDensity:", ""]:
+            return "DisplayTopology"
+    if header in scalars and not children:
+        return scalars[header]
+    if header == "TouchModePerDisplay:" and children:
+        if all(re.fullmatch(r"Display: -?\d+ TouchMode: [01]", child) for child in children):
+            if len(children) == len(set(child.split(" TouchMode:")[0] for child in children)):
+                return "TouchMode"
     raise HealthFailure(f"Unknown input section: {header}")
 
 
-def input_focus(snapshot: str) -> tuple[str, str] | None:
-    sections, historical_anr = input_sections(snapshot)
-    ranks = [validate_input_section(header, children) for header, children in sections]
+def input_section_order(sections: list[tuple[str, list[str]]], version: str) -> None:
+    ranks = [validate_input_section(header, children, version) for header, children in sections]
     collapsed = [rank for index, rank in enumerate(ranks)
-                 if not index or rank not in (8, 9) or rank != ranks[index - 1]]
+                 if not index or rank not in ("Display", "Monitors") or rank != ranks[index - 1]]
+    expected = ["DispatchEnabled", "DispatchFrozen", "InputFilterEnabled", "FocusedDisplayId",
+                "FocusedApplications", "FocusedWindows", "FocusRequests", "PointerCapture", "CaptureWindow", "TouchStates"]
+    if version == "36":
+        expected += ["CursorStates", "Display", "MaximumOpacity", "DisplayTopology", "Monitors", "Connections"]
+    else:
+        expected += ["Display", "Monitors"]
+    expected += ["RecentQueue", "PendingEvent", "InboundQueue", "CommandQueue"]
+    if version == "35":
+        expected += ["Connections"]
+    if "AppSwitch" in ranks:
+        expected += ["AppSwitch"]
+    expected += ["TouchMode", "Configuration", "InputTracer"]
     headers = [header for header, _ in sections]
-    if collapsed != list(range(17)) or len(headers) != len(set(headers)):
+    if collapsed != expected or len(headers) != len(set(headers)):
         raise HealthFailure("Missing, duplicate or reordered input sections")
     if any(empty in headers and ranks.count(rank) != 1 for empty, rank in
-           (("Displays: <none>", 8), ("Monitors: <none>", 9))):
+           (("Displays: <none>", "Display"), ("Monitors: <none>", "Monitors"))):
         raise HealthFailure("Conflicting empty input sections")
+
+
+def input_focus(snapshot: str) -> tuple[str, str] | None:
+    sections, historical_anr, version = input_sections(snapshot)
+    input_section_order(sections, version)
     if historical_anr:
         raise HealthFailure("Retained input ANR history rejected by policy; not an active-error inference")
     for rank, expected in ((0, "DispatchEnabled: true"), (1, "DispatchFrozen: false"), (3, "FocusedDisplayId: 0")):
@@ -447,7 +631,7 @@ def process_records(snapshot: str) -> list[str]:
     if snapshot[terminal.end():].strip() or len(re.findall(r"^ *mForceBackgroundCheck\S*", snapshot, re.MULTILINE)) != 1:
         raise HealthFailure("Unknown process trailer")
     traversal = snapshot[len(header):terminal.start()]
-    following = re.search(r"^  (?:Isolated process list \(sorted by uid\):|Active instrumentation:|"
+    following = re.search(r"^  (?:OOM levels:|Isolated process list \(sorted by uid\):|Active instrumentation:|"
                           r"UID states:|UID validation:|Raw LRU list \(dumpsys activity lru\):|"
                           r"Process LRU list \(sorted by oom_adj, \d+ total, non-act at \d+, non-svc at \d+\):|"
                           r"PID mappings:|Total persistent processes: \d+)\n",
@@ -499,12 +683,11 @@ def health_sample(session: DeviceSession, expected: str) -> bool:
     session.text("shell", "mkdir -p /sdcard/Android && touch /sdcard/Android/.pomodorough-ci-ready "
                  "&& rm /sdcard/Android/.pomodorough-ci-ready")
     windows = session.snapshot("shell", "dumpsys", "window")
-    ownership = session.snapshot("shell", "dumpsys", "window", "windows")
     inputs = session.snapshot("shell", "dumpsys", "input")
     processes = session.snapshot("shell", "dumpsys", "activity", "processes")
     events = session.text("logcat", "-b", "events", "-d", "-v", "brief")
     require_clean_events(events)
-    window = window_focus(windows, ownership)
+    window = window_focus(windows)
     focused_input = input_focus(inputs)
     require_process_health(processes)
     return boot == "1" and window is not None and window == focused_input and window[1] == expected
@@ -518,15 +701,24 @@ def wait_for_health(session: DeviceSession, expected: str, startup: bool) -> Non
     api = session.text("shell", "getprop", "ro.build.version.sdk")
     if api not in ("35", "36"):
         raise HealthFailure(f"Unsupported Android API: {api!r}")
-    expected = resolve_home(session) if expected == "HOME" else canonical_component(expected)
+    follow_home = expected == "HOME"
+    expected = resolve_home(session) if follow_home else canonical_component(expected)
     session.record("expected", {"component": expected, "api": api})
     healthy_since = None
     observations = 0
     while time.monotonic() < session.deadline:
+        if follow_home:
+            current_home = resolve_home(session)
+            if current_home != expected:
+                healthy_since = None
+                expected = current_home
         healthy = health_sample(session, expected)
+        if follow_home:
+            healthy = resolve_home(session) == expected and not transient_home(expected) and healthy
         now = time.monotonic()
         observations += 1
-        session.record(f"sample-{observations:03d}", {"healthy": healthy, "monotonic": now})
+        session.record(f"sample-{observations:03d}", {"healthy": healthy, "monotonic": now,
+                                                    "expected": expected})
         if now >= session.deadline:
             break
         if not healthy:

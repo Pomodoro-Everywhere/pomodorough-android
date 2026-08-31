@@ -1,4 +1,4 @@
-"""Source-shaped projections, never native/API compatibility fixtures.
+"""Framing projections and exact resolver fixtures, never native health proof.
 
 Provenance (parent-retained numbered web renderings, not raw authenticated bytes):
 https://android.googlesource.com/platform/frameworks/base/+/be42921e05ba3d1946efc090054cd4a498f22b80/services/core/java/com/android/server/wm/WindowManagerService.java
@@ -17,6 +17,13 @@ https://raw.githubusercontent.com/aosp-mirror/platform_frameworks_base/android-1
   dump 737-755, conditional flags/dialog slots/bad, per parent's inspected excerpt.
 https://android.googlesource.com/platform/frameworks/base/+/refs/heads/main/services/core/java/com/android/server/am/ProcessRecord.java
   dump 397-496, error/services/providers/receivers/optimizer/windows delegation.
+
+Resolver fixtures below retain exact stdout from hosted run 33357184785.
+The full-envelope projections follow those retained API 35/36 command outputs.
+They omit delegated payloads and are not raw captures. Separate replay streams
+all 24 full originals with SHA256/CRC verification; no failed device is certified
+healthy. Policy/current-display readiness does not prove legacy freeze/config
+semantics. Optional legacy fields here retain earlier negative fixture coverage.
 
 Unrelated delegated payloads are omitted from these projections, not asserted
 absent in Android. Footer/next-section evidence detects prefix truncation, not
@@ -46,9 +53,14 @@ SPEC = importlib.util.spec_from_file_location("android_readiness", ADAPTER)
 READINESS = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(READINESS)
 HOME = "com.example.launcher/com.example.launcher.Home"
+HOSTED_LAUNCHER = ("priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=true\n"
+                   "com.google.android.apps.nexuslauncher/.NexusLauncherActivity\n")
+HOSTED_SETUP = ("priority=3 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=true\n"
+               "com.google.android.googlesdksetup/.DefaultActivity\n")
 WINDOW = """WINDOW MANAGER LAST ANR (dumpsys window lastanr)
   <no ANR has occurred since boot>
 WINDOW MANAGER POLICY STATE (dumpsys window policy)
+    mSafeMode=false mSystemReady=true mSystemBooted=true
 WINDOW MANAGER ANIMATOR STATE (dumpsys window animator)
 WINDOW MANAGER SESSIONS (dumpsys window sessions)
 WINDOW MANAGER DISPLAY CONTENTS (dumpsys window displays)
@@ -65,6 +77,10 @@ WINDOW MANAGER DISPLAY CONTENTS (dumpsys window displays)
   mLastWakeLockObscuringWindow=null
   Display areas in top down Z order:
   Task display areas in top down Z order:
+  DisplayPolicy
+    mAwake=true mScreenOnEarly=true mScreenOnFully=true
+    mKeyguardDrawComplete=true mWindowManagerDrawComplete=true
+  DisplayRotation
 WINDOW MANAGER TOKENS (dumpsys window tokens)
 """
 OWNERSHIP = """WINDOW MANAGER WINDOWS (dumpsys window windows)
@@ -82,8 +98,31 @@ OWNERSHIP = """WINDOW MANAGER WINDOWS (dumpsys window windows)
   mDisplayFrozen=false windows=0 client=false apps=0 mRotation=0 mLastOrientation=-1
   waitingForConfig=false
   Animation settings: disabled=true window=0.0 transition=0.0 animator=0.0
+WINDOW MANAGER TRACE (dumpsys window trace)
 """
-INPUT = """Input Dispatcher State:
+WINDOW_TAIL = """WINDOW MANAGER LOGGING (dumpsys window logging)
+WINDOW MANAGER HIGH REFRESH RATE BLACKLIST (dumpsys window refresh)
+INSTALLED PACKAGES HAVING APP-SPECIFIC CONFIGURATIONS
+WINDOW MANAGER CONSTANTS (dumpsys window constants):
+SystemPerformanceHinter:
+TrustedPresentationListenerController:
+SensitiveContentPackages:
+ScreenRecordingCallbackController:
+  Registered callbacks:
+  Last invoked states:
+"""
+INPUT = """INPUT MANAGER (dumpsys input)
+Input properties:
+Input Manager State:
+Event Hub State:
+Input Reader State (Nums of device: 14):
+UnwantedInteractionBlocker:
+PointerChoreographer:
+show touches: false
+stylus pointer icon enabled: true
+Input Processor State:
+InputDeviceMetricsCollector:
+Input Dispatcher State:
   DispatchEnabled: true
   DispatchFrozen: false
   InputFilterEnabled: false
@@ -92,24 +131,42 @@ INPUT = """Input Dispatcher State:
     displayId=0, name='ActivityRecord{aa com.example.launcher/.Home}', dispatchingTimeout=5000ms
   FocusedWindows:
     displayId=0, name='a1 com.example.launcher/.Home'
-  mPendingFocusRequests: <none>
+  FocusRequests: <none>
+  Pointer Capture Requested: false
+  Current Window with Pointer Capture: None
   TouchStates: <no displays touched>
   Display: 0
+    logicalSize=1080x2400
+        transform (ROT_0) (IDENTITY)
     Windows:
-      0: name='a1 com.example.launcher/.Home', id=1, displayId=0, portalToDisplayId=-1, paused=false, focusable=true, hasWallpaper=false, visible=true, alpha=1.00, flags=0x0, type=APPLICATION, frame=[0,0][1080,2400], globalScale=1.000000, applicationInfo=Home, touchableRegion=[0,0][1080,2400], inputFeatures=0x0, ownerPid=1201, ownerUid=10101, dispatchingTimeout=5000ms, trustedOverlay=false, hasToken=true, touchOcclusionMode=BLOCK_UNTRUSTED
+      0: name=a1 com.example.launcher/.Home, id=1, displayId=0, inputConfig=0x0, alpha=1, frame=[0,0][1080,2400], globalScale=1, applicationInfo.name=Home, applicationInfo.token=0x12, touchableRegion=[0,0][1080,2400], ownerPid=1201, ownerUid=10101, dispatchingTimeout=5000ms, token=0x12, touchOcclusionMode=BLOCK_UNTRUSTED
   Monitors: <none>
   RecentQueue: <empty>
   PendingEvent: <none>
   InboundQueue: <empty>
-  ReplacedKeys: <empty>
+  CommandQueue: <empty>
   Connections:
-    1: channelName='a1 com.example.launcher/.Home', windowName='a1 com.example.launcher/.Home', status=NORMAL, monitor=false, responsive=true
+    1: channelName='a1 com.example.launcher/.Home', status=NORMAL, monitor=false, responsive=true
       OutboundQueue: <empty>
       WaitQueue: <empty>
   AppSwitch: not pending
+  TouchModePerDisplay:
+    Display: 0 TouchMode: 1
   Configuration:
     KeyRepeatDelay: 50ms
     KeyRepeatTimeout: 500ms
+    LatencyTracker:
+    LatencyAggregator:
+      mLastSlowEventTime=0
+      mNumEventsSinceLastSlowEventReport = 0
+      mNumSkippedSlowEvents = 0
+  InputTracer: Enabled
+Input Manager Service (Java) State:
+  Gesture Monitors (implemented as spy windows):
+  mAdditionalDisplayInputProperties:
+  BatteryController:
+  KbdBacklightController: 0 keyboard backlights
+  KeyboardLedController: 0 keyboard mic mute lights
 """
 PROCESSES = """ACTIVITY MANAGER RUNNING PROCESSES (dumpsys activity processes)
   All known processes:
@@ -166,6 +223,35 @@ class Clock:
         self.now += seconds
 
 
+def window_snapshot(display=WINDOW, ownership=OWNERSHIP):
+    return display + ownership + WINDOW_TAIL
+
+
+def input_history(snapshot, history):
+    return snapshot.replace("Input Manager Service (Java) State:\n",
+                            history + "Input Manager Service (Java) State:\n")
+
+
+def input_snapshot(api):
+    if api == "35":
+        return INPUT
+    snapshot = INPUT.replace("show touches: false\nstylus pointer icon enabled: true\n", "")
+    snapshot = snapshot.replace("InputDeviceMetricsCollector:\n", "InputDeviceMetricsCollector:\nInputFilter:\n")
+    snapshot = snapshot.replace("  TouchStates:", "  TouchStatesByDisplay:")
+    snapshot = snapshot.replace("  Display: 0\n", "  CursorStatesByDisplay: <no displays touched by cursor>\n  Display: 0\n")
+    topology = ("  mMaximumObscuringOpacityForTouch: 0.800000\n  DisplayTopologyGraph:\n"
+                "    PrimaryDisplayId: -1\n    TopologyGraph:\n    \n    DisplaysDensity:\n    \n")
+    snapshot = snapshot.replace("  Monitors: <none>\n", topology + "  Monitors: <none>\n")
+    connection = snapshot.split("  Connections:\n")[1].split("  AppSwitch:")[0]
+    snapshot = snapshot.replace("  Connections:\n" + connection, "")
+    connection = connection.replace("      OutboundQueue: <empty>\n      WaitQueue: <empty>\n", "")
+    snapshot = snapshot.replace("  RecentQueue:", "  Connections:\n" + connection + "  RecentQueue:")
+    snapshot = snapshot.replace("LatencyAggregator:", "LatencyAggregatorWithHistograms:")
+    return snapshot + ("  KeyboardLedController: 0 keyboard volume mute lights\n  KeyboardGlyphManager: 0 glyph maps\n"
+                       "  KeyGestureController:\n  Last handled KeyGestureEvents: \n  KeyCombination rules:\n"
+                       "  AppLaunchShortcutManager:\n  InputGestureManager:\n    System Shortcuts:\n    Custom Gestures:\n")
+
+
 class FakeDevice:
     def __init__(self, root: Path, api: str = "35"):
         self.root = root
@@ -181,9 +267,8 @@ class FakeDevice:
         self.add(["shell", "mkdir -p /sdcard/Android && touch /sdcard/Android/.pomodorough-ci-ready "
                   "&& rm /sdcard/Android/.pomodorough-ci-ready"], "")
         self.add(["shell", "cmd", "package", "resolve-activity", "--brief", "--user", "0",
-                  "-a", "android.intent.action.MAIN", "-c", "android.intent.category.HOME"], HOME)
-        for command, content in ((["shell", "dumpsys", "window"], WINDOW),
-                                 (["shell", "dumpsys", "window", "windows"], OWNERSHIP),
+                  "-a", "android.intent.action.MAIN", "-c", "android.intent.category.HOME"], HOME + "\n")
+        for command, content in ((["shell", "dumpsys", "window"], window_snapshot()),
                                  (["shell", "dumpsys", "input"], INPUT),
                                  (["shell", "dumpsys", "activity", "processes"], PROCESSES),
                                  (["logcat", "-b", "events", "-d", "-v", "brief"], EVENTS)):
@@ -229,11 +314,68 @@ def process_metadata_snapshot(package: str) -> str:
     return snapshot.replace("    compat=", metadata + "    compat=")
 
 
+class ResolverGrammarTests(unittest.TestCase):
+    def test_original_hosted_resolver_stdout_and_component_only_form(self):
+        expected = ("com.google.android.apps.nexuslauncher/com.google.android.apps.nexuslauncher.NexusLauncherActivity",
+                    "com.google.android.googlesdksetup/com.google.android.googlesdksetup.DefaultActivity")
+        for snapshot, component in zip((HOSTED_LAUNCHER, HOSTED_SETUP), expected):
+            with self.subTest(snapshot=snapshot):
+                self.assertEqual(READINESS.resolved_component(snapshot), component)
+                self.assertEqual(READINESS.resolved_component(snapshot.split("\n", 1)[1]), component)
+        self.assertEqual(READINESS.resolved_component(HOME + "\n"), HOME)
+
+    def test_resolver_metadata_requires_complete_exact_field_grammar(self):
+        metadata, component = HOSTED_LAUNCHER.split("\n", 1)
+        fields = metadata.split(" ")
+        cases = [metadata.replace(field, "") for field in fields]
+        cases += [metadata + " " + field for field in fields]
+        cases += [" ".join(reversed(fields)), metadata.replace("priority=0", "priority=unknown"),
+                  metadata.replace("preferredOrder=0", "preferredOrder=+0"),
+                  metadata.replace("match=0x108000", "match=108000"),
+                  metadata.replace("specificIndex=-1", "specificIndex=1.0"),
+                  metadata.replace("priority=0", "priority=2147483648"),
+                  metadata.replace("preferredOrder=0", "preferredOrder=-2147483649"),
+                  metadata.replace("specificIndex=-1", "specificIndex=000"),
+                  metadata.replace("priority=0", "priority=-0"),
+                  metadata.replace("match=0x108000", "match=0x100000000"),
+                  metadata.replace("isDefault=true", "isDefault=True"),
+                  metadata.replace("isDefault=true", "isDefault=trueExtra"),
+                  metadata + " unknown=true", "Error: resolver failed", "DUMP TIMEOUT", "arbitrary prefix"]
+        for invalid in cases:
+            with self.subTest(metadata=invalid), self.assertRaises(READINESS.HealthFailure):
+                READINESS.resolved_component(invalid + "\n" + component)
+
+    def test_resolver_rejects_ambiguous_truncated_foreign_and_error_output(self):
+        metadata, component = HOSTED_LAUNCHER.split("\n", 1)
+        cases = ("", metadata + "\n", HOSTED_LAUNCHER[:-1], HOSTED_LAUNCHER + component,
+                 HOSTED_LAUNCHER + HOSTED_SETUP, component + metadata + "\n", "\n" + HOSTED_LAUNCHER,
+                 HOSTED_LAUNCHER + "\n", HOSTED_LAUNCHER + "Error: failed\n", "Error: failed\n" + component,
+                 metadata + "\n\n" + component, " " + component, component.replace("/", "/\t"),
+                 component.replace("/", "/\x00"), component.replace("/", "/\r"),
+                 "No activity found\n", "android/com.android.internal.app.ResolverActivity\n" + component,
+                 component + "com.foreign.app/.Main\n", component.replace("com.google", "com..google"),
+                 component.replace("/.Nexus", "/..Nexus"), component.replace("com.google", "com.googlé"),
+                 component.replace("/.NexusLauncherActivity", "/"), component.replace("/", "//"))
+        for snapshot in cases:
+            with self.subTest(snapshot=snapshot), self.assertRaises(READINESS.HealthFailure):
+                READINESS.resolved_component(snapshot)
+        for boundary in range(len(HOSTED_LAUNCHER)):
+            with self.subTest(boundary=boundary), self.assertRaises(READINESS.HealthFailure):
+                READINESS.resolved_component(HOSTED_LAUNCHER[:boundary])
+
+    def test_supported_metadata_values_do_not_select_or_rewrite_component(self):
+        snapshot = HOSTED_LAUNCHER.replace("priority=0", "priority=-1").replace("preferredOrder=0", "preferredOrder=3")
+        snapshot = snapshot.replace("match=0x108000", "match=0xffffffff").replace("isDefault=true", "isDefault=false")
+        self.assertEqual(READINESS.resolved_component(snapshot), READINESS.resolved_component(HOSTED_LAUNCHER))
+        self.assertEqual(READINESS.resolved_component("com.foreign.app/org.example.Main$Nested\n"),
+                         "com.foreign.app/org.example.Main$Nested")
+
+
 class DumpGrammarTests(unittest.TestCase):
     """Mixed-revision source projections, not authenticated Android dump fixtures."""
 
     def test_source_shaped_focus_and_conditional_process_error_omission(self):
-        self.assertEqual(READINESS.window_focus(WINDOW, OWNERSHIP), ("a1", HOME))
+        self.assertEqual(READINESS.window_focus(window_snapshot(WINDOW, OWNERSHIP)), ("a1", HOME))
         self.assertEqual(READINESS.input_focus(INPUT), ("a1", HOME))
         READINESS.require_process_health(PROCESSES)
         READINESS.require_clean_events(EVENTS)
@@ -249,21 +391,21 @@ class DumpGrammarTests(unittest.TestCase):
         )
         for snapshot in cases:
             with self.subTest(snapshot=snapshot), self.assertRaises(READINESS.HealthFailure):
-                READINESS.window_focus(snapshot, OWNERSHIP)
+                READINESS.window_focus(window_snapshot(snapshot, OWNERSHIP))
         for ownership in (OWNERSHIP.replace("package=com.example.launcher", "package=android"),
                           OWNERSHIP.replace("mOwnerUid=10101", "mOwnerUid=1000"),
                           OWNERSHIP.replace("appop=NONE", "unknown-owner-field=NONE"),
                           OWNERSHIP.replace("Window #0", "unsupported record")):
             with self.subTest(ownership=ownership), self.assertRaises(READINESS.HealthFailure):
-                READINESS.window_focus(WINDOW, ownership)
+                READINESS.window_focus(window_snapshot(WINDOW, ownership))
 
     def test_hidden_dialog_text_does_not_override_actual_focus(self):
         hidden = ("  Window #1 Window{bb u0 Application Not Responding: Messages}:\n"
                   "    mOwnerUid=1000 showForAllUsers=false package=android appop=NONE\n")
         ownership = OWNERSHIP.replace("  mGlobalConfiguration=", hidden + "  mGlobalConfiguration=")
-        self.assertEqual(READINESS.window_focus(WINDOW, ownership), ("a1", HOME))
-        self.assertIsNone(READINESS.window_focus(WINDOW.replace(
-            "mCurrentFocus=Window{a1 u0 com.example.launcher/.Home}", "mCurrentFocus=null"), ownership))
+        self.assertEqual(READINESS.window_focus(window_snapshot(WINDOW, ownership)), ("a1", HOME))
+        self.assertIsNone(READINESS.window_focus(window_snapshot(WINDOW.replace(
+            "mCurrentFocus=Window{a1 u0 com.example.launcher/.Home}", "mCurrentFocus=null"), ownership)))
 
     def test_input_obstructions_duplicates_and_truncation_fail_closed(self):
         entry = "    displayId=0, name='a1 com.example.launcher/.Home'"
@@ -284,8 +426,8 @@ class DumpGrammarTests(unittest.TestCase):
             READINESS.input_focus(INPUT.replace(entry, "    <none>"))
 
     def test_source_shaped_input_lists_and_optional_forms(self):
-        monitors = ("  Global monitors in display 0:\n    0: 'global', \n"
-                    "  Gesture monitors in display 0:\n    0: 'gesture', \n")
+        monitors = ("  Global monitors on display 0:\n    0: 'global', \n"
+                    "  Gesture monitors on display 0:\n    0: 'gesture', \n")
         touch = ("  TouchStatesByDisplay:\n"
                  "    0: down=false, split=false, deviceId=1, source=0x00001002\n"
                  "      Windows:\n        0: name='home', pointerIds=0x1, targetFlags=0x0\n"
@@ -369,7 +511,7 @@ class DumpGrammarTests(unittest.TestCase):
             READINESS.require_process_health(records + second + "    bad=true\n  Total persistent processes:" + tail)
         for snapshot, parser in ((complete, READINESS.require_process_health), (INPUT, READINESS.input_focus),
                                  (OWNERSHIP, READINESS.window_owners),
-                                 (WINDOW, lambda value: READINESS.window_focus(value, OWNERSHIP))):
+                                 (WINDOW, lambda value: READINESS.window_focus(window_snapshot(value, OWNERSHIP)))):
             lines = snapshot.splitlines(keepends=True)
             for boundary in range(len(lines)):
                 with self.subTest(parser=parser, boundary=boundary), self.assertRaises(READINESS.HealthFailure):
@@ -396,23 +538,24 @@ class DumpGrammarTests(unittest.TestCase):
         READINESS.require_process_health(PROCESSES)
         opaque = INPUT.replace("  Monitors:", "        transform delegated payload\n  Monitors:")
         self.assertEqual(READINESS.input_focus(opaque), ("a1", HOME))
-        self.assertEqual(READINESS.window_focus(WINDOW + "uninterpreted token payload\n", OWNERSHIP), ("a1", HOME))
+        self.assertEqual(READINESS.window_focus(window_snapshot(WINDOW + "uninterpreted token payload\n", OWNERSHIP)), ("a1", HOME))
         for snapshot, parser in (("unknown\n" + PROCESSES, READINESS.require_process_health),
                                  ("unknown\n" + OWNERSHIP, READINESS.window_owners),
-                                 ("unknown\n" + WINDOW, lambda value: READINESS.window_focus(value, OWNERSHIP)),
+                                 ("unknown\n" + WINDOW, lambda value: READINESS.window_focus(window_snapshot(value, OWNERSHIP))),
                                  ("unknown" + INPUT, READINESS.input_focus),
                                  (INPUT.replace("  DispatchEnabled:", "  Unknown\n  DispatchEnabled:"), READINESS.input_focus)):
             with self.subTest(snapshot=snapshot), self.assertRaises(READINESS.HealthFailure):
                 parser(snapshot)
 
     def test_current_input_cannot_borrow_historical_fields(self):
-        history = "\nInput Dispatcher State at time of last ANR:\n" + INPUT.split("\n", 1)[1]
+        history = "\nInput Dispatcher State at time of last ANR:\n" + INPUT.split("Input Dispatcher State:\n", 1)[1].split(
+            "Input Manager Service (Java) State:\n", 1)[0]
         with self.assertRaisesRegex(READINESS.HealthFailure, "Retained input ANR history.*not an active-error"):
-            READINESS.input_focus(INPUT + history)
+            READINESS.input_focus(input_history(INPUT, history))
         for missing in ("  DispatchEnabled: true\n", "  FocusedWindows:\n    displayId=0, name='a1 com.example.launcher/.Home'\n",
                         "    KeyRepeatTimeout: 500ms\n"):
             with self.subTest(missing=missing), self.assertRaises(READINESS.HealthFailure) as failure:
-                READINESS.input_focus(INPUT.replace(missing, "") + history)
+                READINESS.input_focus(input_history(INPUT.replace(missing, ""), history))
             self.assertNotIn("Retained input ANR", str(failure.exception))
 
     def test_window_history_is_not_current_focus_or_active_error_proof(self):
@@ -423,10 +566,10 @@ class DumpGrammarTests(unittest.TestCase):
         self.assertEqual(READINESS.current_display_focus(snapshot),
                          ("Window{a1 u0 com.example.launcher/.Home}", True))
         with self.assertRaisesRegex(READINESS.HealthFailure, "Retained window ANR history.*not an active-error"):
-            READINESS.window_focus(snapshot, OWNERSHIP)
+            READINESS.window_focus(window_snapshot(snapshot, OWNERSHIP))
         missing = snapshot.rsplit("  mCurrentFocus=Window{a1 u0 com.example.launcher/.Home}\n", 1)
         with self.assertRaises(READINESS.HealthFailure):
-            READINESS.window_focus("".join(missing), OWNERSHIP)
+            READINESS.window_focus(window_snapshot("".join(missing), OWNERSHIP))
 
     def test_inline_no_focus_requires_complete_current_sections(self):
         no_focus = INPUT.replace("  FocusedWindows:\n    displayId=0, name='a1 com.example.launcher/.Home'",
@@ -443,6 +586,87 @@ class DumpGrammarTests(unittest.TestCase):
         for snapshot in cases:
             with self.subTest(snapshot=snapshot), self.assertRaises(READINESS.HealthFailure):
                 READINESS.require_clean_events(snapshot)
+
+
+class FullDumpFramingTests(unittest.TestCase):
+    def test_retained_profiles_and_current_display_signals(self):
+        snapshot = window_snapshot().replace("  ignoreOrientationRequest=false\n", "")
+        for leading in ("", "\n"):
+            with self.subTest(leading=leading):
+                self.assertEqual(READINESS.window_focus(leading + snapshot), ("a1", HOME))
+        for api in ("35", "36"):
+            with self.subTest(api=api):
+                self.assertEqual(READINESS.input_envelope(input_snapshot(api))[1], api)
+                self.assertEqual(READINESS.input_focus(input_snapshot(api)), ("a1", HOME))
+        READINESS.require_process_health(PROCESSES.replace("  Total persistent processes: 0\n", "  OOM levels:\n"))
+        self.assertEqual(READINESS.input_focus(INPUT.replace("show touches: false", "show touches: true")), ("a1", HOME))
+
+    def test_window_readiness_missing_active_duplicate_and_malformed_reject(self):
+        snapshot = window_snapshot()
+        fields = ("mSafeMode=false", "mSystemReady=true", "mSystemBooted=true", "mAwake=true",
+                  "mScreenOnEarly=true", "mScreenOnFully=true", "mKeyguardDrawComplete=true", "mWindowManagerDrawComplete=true")
+        for field in fields:
+            name, value = field.split("=")
+            for replacement in ("", name + "=unknown", name + ("=false" if value == "true" else "=true"),
+                                field + " " + name + "Extra=true"):
+                with self.subTest(field=field, replacement=replacement), self.assertRaises(READINESS.HealthFailure):
+                    READINESS.window_focus(snapshot.replace(field, replacement, 1))
+        for line in ("mDisplayFrozen=true", "mDisplayFrozen false", "waitingForConfig=true", "waitingForConfigExtra=false",
+                     "mDisplayEnabled=false", "other mDisplayFrozen=true", "other waitingForConfig=false"):
+            with self.subTest(line=line), self.assertRaises(READINESS.HealthFailure):
+                READINESS.window_focus(snapshot.replace("  mGlobalConfiguration=", "  " + line + "\n  mGlobalConfiguration="))
+
+    def test_full_window_completion_and_no_owner_or_policy_borrowing(self):
+        snapshot = window_snapshot()
+        for boundary in range(len(snapshot.splitlines())):
+            with self.subTest(boundary=boundary), self.assertRaises(READINESS.HealthFailure):
+                READINESS.window_focus("\n".join(snapshot.splitlines()[:boundary]) + "\n")
+        for mutation in ("unknown\n" + snapshot, "\n\n" + snapshot, snapshot + "unknown\n", snapshot[:-1], snapshot + snapshot,
+                         snapshot.replace("  DisplayPolicy\n", "  UnknownPolicy\n"),
+                         snapshot.replace("mOwnerUid=10101", "mOwnerUid=1000"),
+                         snapshot.replace("package=com.example.launcher", "package=com.foreign.app"),
+                         snapshot.replace("Window #0 Window{a1", "Window #0 Window{bb"),
+                         snapshot.replace("  DisplayRotation\n", "  DisplayRotation\n" + OWNERSHIP),
+                         snapshot.replace("  mAwake=true", "  mAwake=false") + snapshot):
+            with self.subTest(mutation=mutation), self.assertRaises(READINESS.HealthFailure):
+                READINESS.window_focus(mutation)
+
+    def test_version_bound_input_completion_and_cross_profile_rejection(self):
+        for api in ("35", "36"):
+            snapshot = input_snapshot(api)
+            for boundary in range(len(snapshot.splitlines())):
+                with self.subTest(api=api, boundary=boundary), self.assertRaises(READINESS.HealthFailure):
+                    READINESS.input_focus("\n".join(snapshot.splitlines()[:boundary]) + "\n")
+            mutations = (snapshot[:-1], snapshot + "unknown\n", "unknown\n" + snapshot, snapshot + snapshot,
+                         snapshot.replace("Input Manager State:", "Unknown Input State:"),
+                         snapshot.replace("  Configuration:", "  Configuration:\n  Configuration:"),
+                         snapshot.replace("  KeyboardLedController: 0 keyboard mic mute lights\n", ""),
+                         snapshot.replace("mNumSkippedSlowEvents = 0", "mNumSkippedSlowEvents = unknown"),
+                         snapshot.replace("Input Dispatcher State:\n", "Input Dispatcher State:\nDUMP TIMEOUT\n"))
+            for mutation in mutations:
+                with self.subTest(api=api, mutation=mutation), self.assertRaises(READINESS.HealthFailure):
+                    READINESS.input_focus(mutation)
+        dispatcher = "Input Dispatcher State:\n"
+        for native, tail in ((INPUT, input_snapshot("36")), (input_snapshot("36"), INPUT)):
+            with self.subTest(native=native), self.assertRaises(READINESS.HealthFailure):
+                READINESS.input_focus(native.split(dispatcher)[0] + dispatcher + tail.split(dispatcher)[1])
+
+    def test_both_input_profiles_reject_active_malformed_and_ambiguous_states(self):
+        for api in ("35", "36"):
+            snapshot = input_snapshot(api)
+            mutations = (("DispatchEnabled: true", "DispatchEnabled: false"), ("DispatchFrozen: false", "DispatchFrozen: true"),
+                         ("responsive=true", "responsive=false"), ("status=NORMAL", "status=BROKEN"),
+                         ("responsive=true", "responsive=unknown"), ("ownerUid=10101", "ownerUid=unknown"),
+                         ("touchableRegion=[0,0][1080,2400]", "touchableRegion=unknown"),
+                         ("FocusRequests: <none>", "FocusRequests: unknown"),
+                         ("    1: channelName=", "    1: channelName=truncated\n    1: channelName="),
+                         ("CommandQueue: <empty>", "CommandQueue: length=1"),
+                         ("Current Window with Pointer Capture: None", "Current Window with Pointer Capture: unknown"))
+            for before, after in mutations:
+                with self.subTest(api=api, before=before), self.assertRaises(READINESS.HealthFailure):
+                    READINESS.input_focus(snapshot.replace(before, after))
+        with self.assertRaises(READINESS.HealthFailure):
+            READINESS.input_focus(input_snapshot("36").replace("responsive=true\n", "responsive=true\n      WaitQueue: <empty>\n"))
 
 
 class BoundedAdapterTests(unittest.TestCase):
@@ -467,6 +691,14 @@ class BoundedAdapterTests(unittest.TestCase):
                 self.assertEqual(len(list(session.directory.glob("sample-*.json"))), 2)
         self.assertTrue(all(command in [json.loads(key) for key in self.device.rules]
                             for command in self.device.trace()))
+
+    def test_health_sample_uses_one_coherent_full_window_capture(self):
+        for api in ("35", "36"):
+            with self.subTest(api=api):
+                self.device.add(["shell", "dumpsys", "input"], input_snapshot(api))
+                self.assertTrue(READINESS.health_sample(self.session(), HOME))
+        self.assertEqual(self.device.trace().count(["shell", "dumpsys", "window"]), 2)
+        self.assertNotIn(["shell", "dumpsys", "window", "windows"], self.device.trace())
 
     def test_background_metadata_does_not_hide_real_error_branches(self):
         records, tail = PROCESSES.split("  Total persistent processes:", 1)
@@ -493,6 +725,91 @@ class BoundedAdapterTests(unittest.TestCase):
             READINESS.wait_for_health(session, "HOME", True)
             self.assertEqual(clock.now, 80)
             self.assertEqual(len(list(session.directory.glob("sample-*.json"))), 5)
+
+    def test_original_hosted_resolver_uses_raw_snapshot_and_rejects_failed_capture(self):
+        command = next(json.loads(key) for key in self.device.rules if "resolve-activity" in key)
+        for snapshot in (HOSTED_LAUNCHER, HOSTED_SETUP, HOSTED_LAUNCHER.replace("\n", "\r\n")):
+            with self.subTest(snapshot=snapshot):
+                self.device.add(command, snapshot)
+                self.assertEqual(READINESS.resolve_home(self.session()),
+                                 READINESS.resolved_component(snapshot.replace("\r\n", "\n")))
+        for snapshot, status in ((HOSTED_LAUNCHER[:-1], 0), (HOSTED_LAUNCHER, 1),
+                                 (HOSTED_LAUNCHER + "\n", 0), (b"\xff\n", 0)):
+            with self.subTest(snapshot=snapshot, status=status), self.assertRaises(READINESS.HealthFailure):
+                self.device.add(command, snapshot, status=status)
+                READINESS.resolve_home(self.session())
+
+    def test_dynamic_home_never_accepts_setup_or_stale_launcher(self):
+        clock = Clock()
+        setup = READINESS.resolved_component(HOSTED_SETUP)
+        launcher = READINESS.resolved_component(HOSTED_LAUNCHER)
+        command = next(json.loads(key) for key in self.device.rules if "resolve-activity" in key)
+        self.device.add(command, HOSTED_SETUP)
+        original_resolver = READINESS.resolve_home
+
+        def resolve(session):
+            self.device.add(command, HOSTED_SETUP if clock.now < 40 else HOSTED_LAUNCHER)
+            return original_resolver(session)
+
+        with mock.patch.object(READINESS, "time", clock), mock.patch.object(READINESS, "resolve_home", side_effect=resolve):
+            with mock.patch.object(READINESS, "health_sample", return_value=True) as sample:
+                session = self.session(600)
+                READINESS.wait_for_health(session, "HOME", True)
+        self.assertEqual(clock.now, 120)
+        self.assertEqual(session.deadline, 600)
+        self.assertEqual([call.args[1] for call in sample.call_args_list], [setup] * 2 + [launcher] * 5)
+        observations = [json.loads(path.read_text()) for path in sorted(session.directory.glob("sample-*.json"))]
+        self.assertEqual([item["healthy"] for item in observations], [False] * 2 + [True] * 5)
+        self.assertEqual([item["expected"] for item in observations], [setup] * 2 + [launcher] * 5)
+
+    def test_home_identity_change_resets_stability_including_during_last_sample(self):
+        for during_sample in (False, True):
+            clock = Clock()
+            alternate = "com.example.other/com.example.other.Home"
+            current = [HOME]
+
+            def resolve(session):
+                if not during_sample and clock.now >= 80:
+                    current[0] = alternate
+                return current[0]
+
+            def sample(session, expected):
+                if during_sample and clock.now == 80:
+                    current[0] = alternate
+                return True
+
+            with self.subTest(during_sample=during_sample), mock.patch.object(READINESS, "time", clock):
+                with mock.patch.object(READINESS, "resolve_home", side_effect=resolve):
+                    with mock.patch.object(READINESS, "health_sample", side_effect=sample):
+                        session = self.session(600)
+                        READINESS.wait_for_health(session, "HOME", True)
+                self.assertEqual(clock.now, 180 if during_sample else 160)
+                self.assertEqual(session.deadline, 600)
+
+    def test_persistent_setup_and_fallback_home_exhaust_deadline_without_bypassing_health(self):
+        homes = (READINESS.resolved_component(HOSTED_SETUP),
+                 "com.google.android.setupwizard/com.google.android.setupwizard.SetupWizardActivity",
+                 "com.android.provision/com.android.provision.DefaultActivity",
+                 "com.android.settings/com.android.settings.FallbackHome")
+        for home in homes:
+            with self.subTest(home=home), mock.patch.object(READINESS, "time", Clock()) as clock:
+                with mock.patch.object(READINESS, "resolve_home", return_value=home):
+                    with mock.patch.object(READINESS, "health_sample", return_value=True) as sample:
+                        with self.assertRaisesRegex(READINESS.HealthFailure, "absolute deadline"):
+                            READINESS.wait_for_health(self.session(30), "HOME", False)
+                        self.assertEqual(sample.call_count, 30)
+                    with mock.patch.object(READINESS, "health_sample", side_effect=READINESS.HealthFailure("active error")):
+                        with self.assertRaisesRegex(READINESS.HealthFailure, "active error"):
+                            READINESS.wait_for_health(self.session(), "HOME", False)
+                self.assertEqual(clock.now, 30)
+
+    def test_foreign_resolved_home_does_not_borrow_focused_launcher(self):
+        command = next(json.loads(key) for key in self.device.rules if "resolve-activity" in key)
+        self.device.add(command, HOSTED_LAUNCHER)
+        with mock.patch.object(READINESS, "time", Clock()) as clock:
+            with self.assertRaisesRegex(READINESS.HealthFailure, "absolute deadline"):
+                READINESS.wait_for_health(self.session(2), "HOME", False)
+        self.assertEqual(clock.now, 2)
 
     def test_transition_and_startup_absolute_deadlines_never_accept_last_sample(self):
         for startup, seconds in ((False, 30), (True, 600)):
@@ -558,7 +875,7 @@ class BoundedAdapterTests(unittest.TestCase):
         snapshot = WINDOW.replace("mCurrentFocus=Window{a1 u0 com.example.launcher/.Home}",
                                   "mCurrentFocus=Window{b2 u0 Application Not Responding: Messages}")
         snapshot += "  mFocusedApp=ActivityRecord{aa com.example.launcher/.Home}\n"
-        self.device.add(["shell", "dumpsys", "window"], snapshot)
+        self.device.add(["shell", "dumpsys", "window"], window_snapshot(snapshot))
         session = self.session()
         with self.assertRaises(READINESS.HealthFailure):
             READINESS.health_sample(session, HOME)
@@ -573,7 +890,7 @@ class BoundedAdapterTests(unittest.TestCase):
                 session = self.session(0.3)
                 started = time.monotonic()
                 with self.assertRaises(READINESS.HealthFailure):
-                    READINESS.window_focus(session.snapshot(*command), OWNERSHIP)
+                    READINESS.window_focus(session.snapshot(*command))
                 self.assertLess(time.monotonic() - started, 3)
                 metadata = json.loads((session.directory / "001.json").read_text())
                 self.assertEqual(metadata["command"], ["adb", *command])
@@ -655,9 +972,9 @@ class RunnerEvidenceTests(unittest.TestCase):
         self.device.add(["logcat", "-b", "all", "-v", "threadtime"], stream=True)
         self.device.add(["shell", "settings", "get", "system", "font_scale"], "1.0")
         self.device.add(["shell", "settings", "put", "system", "font_scale", "1.0"], "")
-        self.device.add(["shell", "dumpsys", "window"], WINDOW.replace(
+        self.device.add(["shell", "dumpsys", "window"], window_snapshot(WINDOW.replace(
             "mCurrentFocus=Window{a1 u0 com.example.launcher/.Home}",
-            "mCurrentFocus=Window{b2 u0 Application Not Responding: Messages}"))
+            "mCurrentFocus=Window{b2 u0 Application Not Responding: Messages}")))
         result = self.shell(f'/bin/bash "{RUNNER}"')
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("Android precondition failed", result.stderr)
