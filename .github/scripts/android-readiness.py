@@ -662,15 +662,34 @@ def require_process_health(snapshot: str) -> None:
 
 
 def require_clean_events(snapshot: str) -> None:
-    lines = snapshot.splitlines()
-    if not lines or lines[0] != "--------- beginning of events":
+    """Recognize complete brief records, including the observed no-argument panel event."""
+    if not snapshot.endswith("\n") or re.search(r"[\x00-\x08\x0b-\x1f\x7f]", snapshot):
+        raise HealthFailure("Unknown or truncated events log record")
+    lines = snapshot[:-1].split("\n")
+    if len(lines) < 2 or lines[0] != "--------- beginning of events":
         raise HealthFailure("Unknown or missing events log header")
     for line in lines[1:]:
-        match = re.fullmatch(r"[VDIWEF]/([\w.]+)\(\s*\d+\): .+", line)
+        match = re.fullmatch(r"[VDIWEF]/([\w.]+)( *)\( *[0-9]+\): (.*)", line)
         if match is None:
+            raise HealthFailure("Unknown or truncated events log record")
+        if match[2] not in ("", " " * max(0, 8 - len(match[1]))):
             raise HealthFailure("Unknown or truncated events log record")
         if match[1] in ("am_anr", "am_crash"):
             raise HealthFailure(f"Retained system error event: {match[1]}")
+        if not match[3].strip() and (match[1] != "notification_panel_hidden" or match[3] != ""):
+            raise HealthFailure("Unknown or truncated events log record")
+
+
+def require_shell_storage(session: DeviceSession) -> None:
+    """Probe exclusive shell-owned internal scratch, not app or external-storage access.
+
+    The harness installs APKs and streams evidence to the host; it never writes
+    /sdcard/Android. Create and write a unique internal scratch file, then remove
+    only that file even if writing fails. Every operation remains mandatory.
+    """
+    session.text("shell", "scratch=$(mktemp /data/local/tmp/pomodorough-ci-ready.XXXXXXXXXX) || exit $?; "
+                 "printf 'ready\\n' > \"$scratch\"; write_status=$?; "
+                 "rm \"$scratch\" || exit $?; exit \"$write_status\"")
 
 
 def health_sample(session: DeviceSession, expected: str) -> bool:
@@ -680,12 +699,11 @@ def health_sample(session: DeviceSession, expected: str) -> bool:
     packages = session.text("shell", "pm", "path", "android")
     if not re.fullmatch(r"package:/[^\n]+\.apk", packages):
         raise HealthFailure("Unknown platform package response")
-    session.text("shell", "mkdir -p /sdcard/Android && touch /sdcard/Android/.pomodorough-ci-ready "
-                 "&& rm /sdcard/Android/.pomodorough-ci-ready")
+    require_shell_storage(session)
     windows = session.snapshot("shell", "dumpsys", "window")
     inputs = session.snapshot("shell", "dumpsys", "input")
     processes = session.snapshot("shell", "dumpsys", "activity", "processes")
-    events = session.text("logcat", "-b", "events", "-d", "-v", "brief")
+    events = session.snapshot("logcat", "-b", "events", "-d", "-v", "brief")
     require_clean_events(events)
     window = window_focus(windows)
     focused_input = input_focus(inputs)

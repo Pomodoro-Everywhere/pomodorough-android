@@ -189,6 +189,13 @@ PROCESSES = """ACTIVITY MANAGER RUNNING PROCESSES (dumpsys activity processes)
   mForceBackgroundCheck=false
 """
 EVENTS = "--------- beginning of events\nI/am_proc_start( 1000): [0,1201]\n"
+STORAGE_COMMAND = ["shell", "scratch=$(mktemp /data/local/tmp/pomodorough-ci-ready.XXXXXXXXXX) || exit $?; "
+                   "printf 'ready\\n' > \"$scratch\"; write_status=$?; "
+                   "rm \"$scratch\" || exit $?; exit \"$write_status\""]
+PADDED_EVENTS = ("--------- beginning of events\n"
+                 "I/snet_event_log(  149): [121035042,-1,]\n"
+                 "I/auditd  (  149): SELinux: Loaded service context from:\n"
+                 "I/auditd  (  149): \t\t/system/etc/selinux/plat_service_contexts\n")
 FAKE_ADB = """import json, os, pathlib, sys, time
 root = pathlib.Path(os.environ['FAKE_ADB_ROOT'])
 arguments = sys.argv[1:]
@@ -206,6 +213,50 @@ if rule.get('hang') or rule.get('stream'):
 sys.stdout.buffer.write(bytes.fromhex(rule.get('bytes', '')))
 sys.stderr.write(rule.get('stderr', ''))
 raise SystemExit(rule.get('status', 0))
+"""
+SCRATCH_ADB = """import json, os, pathlib, subprocess, sys
+root = pathlib.Path(os.environ['FAKE_ADB_ROOT'])
+arguments = sys.argv[1:]
+if arguments == json.loads((root / 'storage-command.json').read_text()):
+    with (root / 'trace.jsonl').open('a') as trace:
+        trace.write(json.dumps(arguments) + '\\n')
+    raise SystemExit(subprocess.call(['/bin/sh', '-c', arguments[1]]))
+exec(compile((root / 'fake-adb.py').read_text(), 'fake-adb.py', 'exec'))
+"""
+SCRATCH_TOOL = """import json, os, pathlib, sys, tempfile
+root = pathlib.Path(os.environ['FAKE_ADB_ROOT'])
+command = pathlib.Path(sys.argv[0]).name
+failure = os.environ.get('FAKE_STORAGE_FAILURE', '')
+record = {'command': command, 'arguments': sys.argv[1:]}
+status = 0
+if command == 'mktemp':
+    assert sys.argv[1:] == ['/data/local/tmp/pomodorough-ci-ready.XXXXXXXXXX']
+    if failure == 'create':
+        status = 71
+    else:
+        descriptor, name = tempfile.mkstemp(prefix='pomodorough-ci-ready.', dir=root / 'scratch')
+        os.close(descriptor)
+        path = pathlib.Path(name)
+        record['created'] = name
+        if failure in ('write', 'write-remove'):
+            path.unlink()
+            path.symlink_to(root / 'missing-parent/ready')
+        print(name)
+elif command == 'rm':
+    assert len(sys.argv) == 2
+    path = pathlib.Path(sys.argv[1])
+    assert path.parent == root / 'scratch' and path.name.startswith('pomodorough-ci-ready.')
+    record['contents'] = None if path.is_symlink() else path.read_bytes().hex()
+    if failure in ('remove', 'write-remove'):
+        status = 73
+    else:
+        path.unlink()
+else:
+    raise SystemExit(97)
+record['status'] = status
+with (root / 'storage-trace.jsonl').open('a') as trace:
+    trace.write(json.dumps(record) + '\\n')
+raise SystemExit(status)
 """
 
 
@@ -264,8 +315,7 @@ class FakeDevice:
         self.add(["shell", "getprop", "ro.build.version.sdk"], api)
         self.add(["shell", "getprop", "sys.boot_completed"], "1")
         self.add(["shell", "pm", "path", "android"], "package:/system/framework/framework-res.apk")
-        self.add(["shell", "mkdir -p /sdcard/Android && touch /sdcard/Android/.pomodorough-ci-ready "
-                  "&& rm /sdcard/Android/.pomodorough-ci-ready"], "")
+        self.add(STORAGE_COMMAND, "")
         self.add(["shell", "cmd", "package", "resolve-activity", "--brief", "--user", "0",
                   "-a", "android.intent.action.MAIN", "-c", "android.intent.category.HOME"], HOME + "\n")
         for command, content in ((["shell", "dumpsys", "window"], window_snapshot()),
@@ -285,6 +335,7 @@ class FakeDevice:
 
     def environment(self):
         return {"PATH": str(self.bin), "FAKE_ADB_ROOT": str(self.root),
+                "HOME": str(self.root), "TMPDIR": str(self.root), "TMP": str(self.root), "TEMP": str(self.root),
                 "PYTHONDONTWRITEBYTECODE": "1"}
 
     def trace(self):
@@ -583,6 +634,46 @@ class DumpGrammarTests(unittest.TestCase):
     def test_stable_nonzero_errors_and_unknown_events_fail_closed(self):
         cases = ("", "logcat failed", EVENTS + "I/am_anr( 1000): [0,1201,launcher]\n",
                  EVENTS + "I/am_crash( 1000): [0,1201,app]\n", EVENTS + "I/am_proc_start(")
+        for snapshot in cases:
+            with self.subTest(snapshot=snapshot), self.assertRaises(READINESS.HealthFailure):
+                READINESS.require_clean_events(snapshot)
+
+
+class EventBriefGrammarTests(unittest.TestCase):
+    """Exact opening records from 33366328032/artifact 9748498570, plus synthetic negatives."""
+
+    def test_retained_short_tag_padding_and_payload_tabs_are_supported(self):
+        READINESS.require_clean_events(PADDED_EVENTS)
+        for tag in ("a", "auditd", "am_test", "tagname8", "am_proc_start"):
+            for padding in ("", " " * max(0, 8 - len(tag))):
+                with self.subTest(tag=tag, padding=padding):
+                    READINESS.require_clean_events(EVENTS + f"I/{tag}{padding}(  149): [0,1201]\n")
+
+    def test_observed_zero_argument_panel_event_keeps_complete_framing(self):
+        for process in (560, 558):
+            record = f"I/notification_panel_hidden(  {process}): \n"
+            READINESS.require_clean_events(PADDED_EVENTS + record)
+            for malformed in (record[:-1], record.replace(": \n", ":\n"),
+                              record.replace(": \n", ":  \n"), record.replace(": \n", ": \t\n")):
+                with self.subTest(malformed=malformed), self.assertRaises(READINESS.HealthFailure):
+                    READINESS.require_clean_events(PADDED_EVENTS + malformed)
+
+    def test_padded_error_tags_keep_explicit_retained_error_classification(self):
+        for tag in ("am_anr", "am_crash"):
+            for padding in ("", " " * (8 - len(tag))):
+                with self.subTest(tag=tag, padding=padding):
+                    with self.assertRaisesRegex(READINESS.HealthFailure, f"Retained system error event: {tag}"):
+                        READINESS.require_clean_events(PADDED_EVENTS + f"I/{tag}{padding}( 1646): [0,1646,com.google.android.gms]\n")
+
+    def test_empty_truncated_error_and_malformed_records_reject(self):
+        cases = ("", "\n", "--------- beginning of events\n", PADDED_EVENTS[:-1], PADDED_EVENTS + "\n",
+                 " " + PADDED_EVENTS, PADDED_EVENTS + "logcat: read failed\n", PADDED_EVENTS + "I/auditd  (",
+                 PADDED_EVENTS.replace("auditd  (", "auditd ("), PADDED_EVENTS.replace("auditd  (", "auditd   ("),
+                 PADDED_EVENTS.replace("auditd  (", "auditd\t("), PADDED_EVENTS.replace("(  149)", "(\t149)"),
+                 PADDED_EVENTS.replace("(  149)", "(  149 "), PADDED_EVENTS.replace("I/auditd", "I/aud itd"),
+                 PADDED_EVENTS + "I/auditd  (  149): \n", PADDED_EVENTS + "I/auditd  (  149): \t \n")
+        cases += tuple(PADDED_EVENTS + f"I/auditd  (  149): bad{character}payload\n"
+                       for character in ("\x00", "\x07", "\x08", "\x0b", "\x0c", "\r", "\x1b", "\x1f", "\x7f"))
         for snapshot in cases:
             with self.subTest(snapshot=snapshot), self.assertRaises(READINESS.HealthFailure):
                 READINESS.require_clean_events(snapshot)
@@ -931,6 +1022,24 @@ class BoundedAdapterTests(unittest.TestCase):
                 with self.assertRaises(READINESS.HealthFailure):
                     READINESS.health_sample(self.session(), HOME)
 
+    def test_padded_events_preserve_raw_framing_and_nonhealthy_focus(self):
+        command = ["logcat", "-b", "events", "-d", "-v", "brief"]
+        for content in (PADDED_EVENTS, PADDED_EVENTS.replace("\n", "\r\n"),
+                        PADDED_EVENTS + "I/notification_panel_hidden(  560): \n"):
+            self.device.add(command, content)
+            session = self.session()
+            self.assertTrue(READINESS.health_sample(session, HOME))
+            self.assertEqual((session.directory / "007.stdout").read_bytes(), content.encode())
+        self.assertFalse(READINESS.health_sample(self.session(), "com.other/com.other.Home"))
+        for content in (PADDED_EVENTS[:-1], PADDED_EVENTS + "\n", "--------- beginning of events\n",
+                        PADDED_EVENTS + "I/am_anr  ( 1646): [0,1646,com.google.android.gms]\n",
+                        PADDED_EVENTS + "I/am_crash ( 1646): [0,1646,com.google.android.gms]\n"):
+            with self.subTest(content=content):
+                self.device.add(command, content)
+                with self.assertRaises(READINESS.HealthFailure):
+                    READINESS.health_sample(self.session(), HOME)
+        self.assertFalse(any(command[0] == "logcat" and "-c" in command for command in self.device.trace()))
+
     def test_screenshot_failure_is_retained_and_success_keeps_png(self):
         command = ["exec-out", "screencap", "-p"]
         self.device.add(command, b"synthetic-png", status=0)
@@ -950,10 +1059,72 @@ class BoundedAdapterTests(unittest.TestCase):
         self.device.add(home_command, HOME + "\ncom.other/.Home")
         with self.assertRaisesRegex(READINESS.HealthFailure, "Unknown component grammar"):
             READINESS.resolve_home(self.session())
-        storage_command = next(json.loads(key) for key in self.device.rules if "mkdir -p" in key)
+        storage_command = next(json.loads(key) for key in self.device.rules if "mktemp " in key)
         self.device.add(storage_command, status=1)
         with self.assertRaises(READINESS.HealthFailure):
             READINESS.health_sample(self.session(), HOME)
+
+
+class ScratchProbeTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="android-scratch-test-")
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.device = FakeDevice(self.root)
+        (self.root / "scratch").mkdir()
+        (self.root / "storage-command.json").write_text(json.dumps(STORAGE_COMMAND))
+        (self.root / "fake-adb.py").write_text(FAKE_ADB)
+        for name, source in (("adb", SCRATCH_ADB), ("mktemp", SCRATCH_TOOL), ("rm", SCRATCH_TOOL)):
+            executable = self.device.bin / name
+            executable.write_text(f"#!{sys.executable}\n{source}")
+            executable.chmod(0o700)
+        self.environment = mock.patch.dict(os.environ, self.device.environment(), clear=True)
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+
+    def storage_trace(self):
+        path = self.root / "storage-trace.jsonl"
+        return [json.loads(line) for line in path.read_text().splitlines()]
+
+    def test_probe_writes_unique_shell_scratch_and_removes_only_owned_files(self):
+        sentinel = self.root / "scratch/pomodorough-ci-ready.sentinel"
+        sentinel.write_bytes(b"preexisting")
+        for observation in range(2):
+            session = READINESS.DeviceSession(self.root / "evidence", f"sample-{observation}", 30)
+            self.assertTrue(READINESS.health_sample(session, HOME))
+            self.assertEqual(list((self.root / "scratch").iterdir()), [sentinel])
+            self.assertEqual(sentinel.read_bytes(), b"preexisting")
+        trace = self.storage_trace()
+        self.assertEqual([record["command"] for record in trace], ["mktemp", "rm"] * 2)
+        self.assertNotEqual(trace[0]["created"], trace[2]["created"])
+        for create, remove in ((trace[0], trace[1]), (trace[2], trace[3])):
+            self.assertEqual(remove["arguments"], [create["created"]])
+            self.assertEqual(bytes.fromhex(remove["contents"]), b"ready\n")
+        self.assertEqual(self.device.trace().count(STORAGE_COMMAND), 2)
+
+    def test_each_required_operation_failure_is_fatal_without_retries(self):
+        for failure, expected in (("create", ["mktemp"]), ("write", ["mktemp", "rm"]),
+                                  ("remove", ["mktemp", "rm"]), ("write-remove", ["mktemp", "rm"])):
+            with self.subTest(failure=failure), mock.patch.dict(os.environ, {"FAKE_STORAGE_FAILURE": failure}):
+                trace_path = self.root / "storage-trace.jsonl"
+                trace_path.unlink(missing_ok=True)
+                session = READINESS.DeviceSession(self.root / "evidence", failure, 30)
+                before = len(self.device.trace())
+                with self.assertRaisesRegex(READINESS.HealthFailure, "Device command failed"):
+                    READINESS.health_sample(session, HOME)
+                self.assertEqual(self.device.trace()[before:][-1], STORAGE_COMMAND)
+                self.assertEqual(self.device.trace()[before:].count(STORAGE_COMMAND), 1)
+                self.assertEqual([record["command"] for record in self.storage_trace()], expected)
+                metadata = json.loads((session.directory / "003.json").read_text())
+                self.assertNotEqual(metadata["status"], 0)
+                if failure == "write":
+                    self.assertEqual(self.storage_trace()[-1]["status"], 0)
+                    self.assertNotEqual(metadata["status"], 73)
+                    self.assertTrue((session.directory / "003.stderr").read_bytes())
+                else:
+                    self.assertEqual(metadata["status"], 71 if failure == "create" else 73)
+                if failure in ("create", "write"):
+                    self.assertEqual(list((self.root / "scratch").iterdir()), [])
 
 
 class RunnerEvidenceTests(unittest.TestCase):
