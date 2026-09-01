@@ -38,6 +38,9 @@ interface TimerRepositoryContract {
     suspend fun leaveIrohRoom()
     suspend fun refreshIrohInvite()
     suspend fun syncIrohNow()
+    suspend fun confirmIrohIdentityRecovery() {
+        throw UnsupportedOperationException("Iroh identity recovery is unavailable")
+    }
     fun onForeground()
     fun onBackground()
 }

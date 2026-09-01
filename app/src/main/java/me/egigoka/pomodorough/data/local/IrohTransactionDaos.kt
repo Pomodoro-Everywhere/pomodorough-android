@@ -77,6 +77,17 @@ interface IrohWorkspaceTransactionsDao :
     IrohRoomMetadataDao,
     IrohRecordsDao {
     @Transaction
+    suspend fun resetIrohIdentity(
+        roomIds: List<String>,
+        snapshot: LocalWorkspaceSnapshot,
+        settings: ReplicationSettingsEntity,
+    ) {
+        roomIds.forEach { deleteIrohRoom(it) }
+        upsertReplicationSettings(settings)
+        replaceWorkspace(snapshot)
+    }
+
+    @Transaction
     suspend fun clearIrohAccountData(
         rooms: List<IrohRoomEntity>,
         malformedRoomIds: List<String>,

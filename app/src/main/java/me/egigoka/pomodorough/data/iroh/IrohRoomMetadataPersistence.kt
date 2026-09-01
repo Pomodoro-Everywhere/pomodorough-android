@@ -34,6 +34,36 @@ internal class IrohRoomMetadataPersistence(
         vault.decryptRoomSecret(room.roomId, room.encryptedRoomSecret)
     }
 
+    suspend fun validateRoomSecrets() {
+        dao.irohRooms().forEach { room ->
+            vault.decryptRoomSecret(room.roomId, room.encryptedRoomSecret).fill(0)
+        }
+    }
+
+    suspend fun resetIdentityData() = workspaceCoordinator.withLock {
+        val settings = replicationSettings()
+        val rooms = dao.irohRooms()
+        val restored = identityResetWorkspace(settings, rooms)
+        dao.resetIrohIdentity(
+            rooms.map(IrohRoomEntity::roomId),
+            restored,
+            ReplicationSettingsEntity(mode = ReplicationMode.OFFLINE.name),
+        )
+    }
+
+    private suspend fun identityResetWorkspace(
+        settings: ReplicationSettingsEntity,
+        rooms: List<IrohRoomEntity>,
+    ): LocalWorkspaceSnapshot {
+        val activeRoom = rooms.singleOrNull { it.roomId == settings.activeRoomId }
+        if (settings.mode == ReplicationMode.IROH.name) {
+            return WorkspaceCodec.decode(
+                checkNotNull(activeRoom) { "Active Iroh room is missing" }.returnStateJson,
+            )
+        }
+        return dao.localWorkspaceSnapshot()
+    }
+
     suspend fun discardIncompleteRooms() {
         val settings = replicationSettings()
         val activeRoomId = settings.activeRoomId
@@ -50,6 +80,7 @@ internal class IrohRoomMetadataPersistence(
         require(IrohProtocolV1.isDisplayName(name)) {
             "Room name must contain 1 through 64 Unicode scalars"
         }
+        validateRoomSecrets()
         val returnState = dao.localWorkspaceSnapshot()
         val secret = ByteArray(32).also(random::nextBytes)
         val roomId = IrohProtocolV1.roomId(secret)
@@ -87,6 +118,7 @@ internal class IrohRoomMetadataPersistence(
         val peer = peerRegistry.joinedRoomPeer(invite, endpointId)
         val existing = dao.irohRoom(invite.roomId)
         if (existing != null) return@withLock prepareExistingJoinedRoom(existing, invite, peer)
+        validateRoomSecrets()
         val returnState = dao.localWorkspaceSnapshot()
         val roomState = projection.makeRoomDeviceState(returnState)
         val room = IrohRoomEntity(

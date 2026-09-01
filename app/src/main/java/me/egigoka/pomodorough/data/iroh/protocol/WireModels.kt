@@ -5,6 +5,7 @@ import me.egigoka.pomodorough.data.CanonicalTimer
 import me.egigoka.pomodorough.data.DurationsMs
 import me.egigoka.pomodorough.data.FocusTask
 import me.egigoka.pomodorough.data.HistoryItem
+import me.egigoka.pomodorough.data.iroh.IrohIdentityRecoveryKind
 
 enum class ReplicationMode { OFFLINE, IROH, CENTRALIZED }
 
@@ -30,6 +31,8 @@ data class IrohNetworkState(
     val message: String? = null,
     val conflict: IrohConflictEvidence? = null,
     val transitioning: Boolean = false,
+    val identityRecovery: IrohIdentityRecoveryKind? = null,
+    val recoveryAttemptFailed: Boolean = false,
 )
 
 class IrohProtocolException(message: String) : Exception(message)

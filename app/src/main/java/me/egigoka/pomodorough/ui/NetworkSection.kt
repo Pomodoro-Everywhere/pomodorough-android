@@ -132,6 +132,7 @@ import me.egigoka.pomodorough.data.TimerPhase
 import me.egigoka.pomodorough.data.TimerSettings
 import me.egigoka.pomodorough.data.TimerStatus
 import me.egigoka.pomodorough.data.iroh.IrohConnectionStatus
+import me.egigoka.pomodorough.data.iroh.IrohIdentityRecoveryKind
 import me.egigoka.pomodorough.data.iroh.IrohNetworkState
 import me.egigoka.pomodorough.data.iroh.ReplicationMode
 
@@ -145,16 +146,25 @@ internal fun NetworkSection(
     var roomName by remember { mutableStateOf("") }
     var joinCode by remember { mutableStateOf("") }
     var confirmLeave by remember { mutableStateOf(false) }
+    var confirmRecovery by remember { mutableStateOf(false) }
     val network = state.network
+    val networkActionsEnabled = enabled && network.identityRecovery == null && !network.transitioning
     Column(modifier, verticalArrangement = Arrangement.spacedBy(14.dp)) {
         NetworkSectionHeader()
-        RouteSwitch(network.mode, network.roomId != null, enabled, actions.onSetMode)
-        NetworkStatusCard(network, enabled, actions.onSyncNow) { confirmLeave = true }
-        if (network.roomId == null) {
-            CreateRoomCard(roomName, enabled, { roomName = it }) { actions.onCreateRoom(roomName) }
-            JoinRoomCard(joinCode, enabled, { joinCode = it }) { actions.onJoinRoom(joinCode) }
+        network.identityRecovery?.let { kind ->
+            IdentityRecoveryCard(
+                kind,
+                network.recoveryAttemptFailed,
+                !network.transitioning,
+            ) { confirmRecovery = true }
         }
-        network.invite?.let { RoomInviteCard(it, enabled, actions) }
+        RouteSwitch(network.mode, network.roomId != null, networkActionsEnabled, actions.onSetMode)
+        NetworkStatusCard(network, networkActionsEnabled, actions.onSyncNow) { confirmLeave = true }
+        if (network.roomId == null) {
+            CreateRoomCard(roomName, networkActionsEnabled, { roomName = it }) { actions.onCreateRoom(roomName) }
+            JoinRoomCard(joinCode, networkActionsEnabled, { joinCode = it }) { actions.onJoinRoom(joinCode) }
+        }
+        network.invite?.let { RoomInviteCard(it, networkActionsEnabled, actions) }
         NetworkPrivacyCard()
     }
     if (confirmLeave) {
@@ -162,6 +172,15 @@ internal fun NetworkSection(
             onConfirm = { confirmLeave = false; actions.onLeaveRoom() },
             onDismiss = { confirmLeave = false },
         )
+    }
+    if (confirmRecovery) {
+        network.identityRecovery?.let { kind ->
+            IdentityRecoveryDialog(
+                kind = kind,
+                onConfirm = { confirmRecovery = false; actions.onConfirmIdentityRecovery() },
+                onDismiss = { confirmRecovery = false },
+            )
+        }
     }
 }
 
@@ -172,8 +191,106 @@ internal data class NetworkActions(
     val onLeaveRoom: () -> Unit,
     val onRefreshInvite: () -> Unit,
     val onSyncNow: () -> Unit,
-    val onCopyInvite: (String) -> Unit,
+    val onConfirmIdentityRecovery: () -> Unit = {},
     val onShareInvite: (String) -> Unit,
+)
+
+@Composable
+private fun IdentityRecoveryCard(
+    kind: IrohIdentityRecoveryKind,
+    previousAttemptFailed: Boolean,
+    enabled: Boolean,
+    onReview: () -> Unit,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.errorContainer,
+        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+        shape = MaterialTheme.shapes.large,
+    ) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(identityRecoveryTitle(kind), style = MaterialTheme.typography.titleLarge)
+            Text(identityRecoveryDescription(kind))
+            if (previousAttemptFailed) Text(stringResource(R.string.iroh_identity_recovery_failed))
+            Button(
+                onClick = onReview,
+                enabled = enabled,
+                modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp),
+            ) {
+                Text(identityRecoveryReviewLabel(kind))
+            }
+        }
+    }
+}
+
+@Composable
+private fun IdentityRecoveryDialog(
+    kind: IrohIdentityRecoveryKind,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(identityRecoveryDialogTitle(kind)) },
+        text = { Text(identityRecoveryDialogDescription(kind)) },
+        confirmButton = {
+            TextButton(onClick = onConfirm, modifier = Modifier.heightIn(min = 48.dp)) {
+                Text(identityRecoveryConfirmLabel(kind), fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, modifier = Modifier.heightIn(min = 48.dp)) {
+                Text(stringResource(R.string.cancel))
+            }
+        },
+    )
+}
+
+@Composable
+private fun identityRecoveryTitle(kind: IrohIdentityRecoveryKind): String = stringResource(
+    when (kind) {
+        IrohIdentityRecoveryKind.ENDPOINT_CORRUPTED -> R.string.iroh_endpoint_identity_needs_repair
+        IrohIdentityRecoveryKind.KEY_INVALIDATED_OR_MISSING -> R.string.iroh_identity_key_is_unavailable
+    },
+)
+
+@Composable
+private fun identityRecoveryDescription(kind: IrohIdentityRecoveryKind): String = stringResource(
+    when (kind) {
+        IrohIdentityRecoveryKind.ENDPOINT_CORRUPTED -> R.string.iroh_endpoint_identity_repair_description
+        IrohIdentityRecoveryKind.KEY_INVALIDATED_OR_MISSING -> R.string.iroh_identity_reset_description
+    },
+)
+
+@Composable
+private fun identityRecoveryReviewLabel(kind: IrohIdentityRecoveryKind): String = stringResource(
+    when (kind) {
+        IrohIdentityRecoveryKind.ENDPOINT_CORRUPTED -> R.string.review_iroh_endpoint_repair
+        IrohIdentityRecoveryKind.KEY_INVALIDATED_OR_MISSING -> R.string.review_iroh_identity_reset
+    },
+)
+
+@Composable
+private fun identityRecoveryDialogTitle(kind: IrohIdentityRecoveryKind): String = stringResource(
+    when (kind) {
+        IrohIdentityRecoveryKind.ENDPOINT_CORRUPTED -> R.string.repair_iroh_endpoint_identity_question
+        IrohIdentityRecoveryKind.KEY_INVALIDATED_OR_MISSING -> R.string.reset_iroh_identity_and_rooms_question
+    },
+)
+
+@Composable
+private fun identityRecoveryDialogDescription(kind: IrohIdentityRecoveryKind): String = stringResource(
+    when (kind) {
+        IrohIdentityRecoveryKind.ENDPOINT_CORRUPTED -> R.string.repair_iroh_endpoint_identity_description
+        IrohIdentityRecoveryKind.KEY_INVALIDATED_OR_MISSING -> R.string.reset_iroh_identity_and_rooms_description
+    },
+)
+
+@Composable
+private fun identityRecoveryConfirmLabel(kind: IrohIdentityRecoveryKind): String = stringResource(
+    when (kind) {
+        IrohIdentityRecoveryKind.ENDPOINT_CORRUPTED -> R.string.repair_endpoint
+        IrohIdentityRecoveryKind.KEY_INVALIDATED_OR_MISSING -> R.string.reset_iroh_identity
+    },
 )
 
 @Composable
@@ -342,10 +459,7 @@ private fun RoomInviteCard(invite: String, enabled: Boolean, actions: NetworkAct
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Button(onClick = { actions.onCopyInvite(invite) }, modifier = Modifier.heightIn(min = 48.dp)) {
-                    Text(stringResource(R.string.copy))
-                }
-                OutlinedButton(onClick = { actions.onShareInvite(invite) }, modifier = Modifier.heightIn(min = 48.dp)) {
+                Button(onClick = { actions.onShareInvite(invite) }, modifier = Modifier.heightIn(min = 48.dp)) {
                     Text(stringResource(R.string.share))
                 }
                 TextButton(

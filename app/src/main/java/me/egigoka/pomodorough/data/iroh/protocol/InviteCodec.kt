@@ -51,14 +51,30 @@ data class IrohRoomInvite(
     }
 
     companion object {
+        // Supported encoders produce less than 100 KiB even when every bounded
+        // field is JSON-escaped. This envelope leaves syntax headroom while
+        // preventing unbounded whitespace or numeric-token allocation.
+        internal const val MaxPayloadBytes = 128 * 1_024
+        internal const val MaxEncodedPayloadCharacters = (MaxPayloadBytes * 4 + 2) / 3
+
         fun decode(text: String): IrohRoomInvite {
             require(text.startsWith(IrohProtocolV1.InvitePrefix)) {
                 "Invite must start with ${IrohProtocolV1.InvitePrefix}"
             }
-            val encoded = text.removePrefix(IrohProtocolV1.InvitePrefix)
+            val encodedLength = text.length - IrohProtocolV1.InvitePrefix.length
+            require(encodedLength <= MaxEncodedPayloadCharacters) {
+                "Invite payload exceeds maximum size"
+            }
+            val encoded = text.substring(IrohProtocolV1.InvitePrefix.length)
             val bytes = Base64Url.decode(encoded)
+            require(bytes.size <= MaxPayloadBytes) { "Invite payload exceeds maximum size" }
             val objectValue = runCatching {
-                IrohJson.strict.parseToJsonElement(strictJson(bytes)).jsonObject
+                IrohJson.strict.parseToJsonElement(
+                    strictJson(
+                        bytes,
+                        canonicalRootIntegerFields = setOf("v"),
+                    ),
+                ).jsonObject
             }.getOrElse { throw IllegalArgumentException("Invite payload must be a JSON object", it) }
             val required = setOf("v", "roomId", "endpointTicket", "roomSecret")
             val allowed = required + "roomName"

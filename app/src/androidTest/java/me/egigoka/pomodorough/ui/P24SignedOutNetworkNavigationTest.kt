@@ -217,7 +217,7 @@ class P24SignedOutNetworkNavigationTest {
                         onDismissConflict = {}, onDismissNotice = {}, onSetReplicationMode = {},
                         onCreateIrohRoom = { createdRooms += it }, onJoinIrohRoom = { joinedInvites += it },
                         onLeaveIrohRoom = {}, onRefreshIrohInvite = {}, onSyncIrohNow = {},
-                        onCopyIrohInvite = {}, onShareIrohInvite = {},
+                        onShareIrohInvite = {},
                         onDeleteAccount = { accountCalls += "delete" },
                         onOpenPrivacy = { accountCalls += "privacy" },
                     )

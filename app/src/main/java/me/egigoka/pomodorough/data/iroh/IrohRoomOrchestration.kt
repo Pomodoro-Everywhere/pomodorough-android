@@ -1,6 +1,7 @@
 package me.egigoka.pomodorough.data.iroh
 
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -25,6 +26,10 @@ internal data class IrohRoomServicePort(
     val join: suspend (IrohRoomInvite) -> IrohRoomProjection,
     val endpointIdForTicket: (String) -> String,
     val syncNow: suspend () -> Unit,
+    val pendingIdentityRecovery: () -> IrohIdentityRecoveryKind? = { null },
+    val replaceEndpointIdentity: suspend () -> Unit = ::unsupportedRecoveryAction,
+    val beginIdentityReset: suspend () -> Unit = ::unsupportedRecoveryAction,
+    val completeIdentityReset: suspend () -> Unit = ::unsupportedRecoveryAction,
 )
 
 internal data class IrohRoomPersistencePort(
@@ -42,6 +47,8 @@ internal data class IrohRoomPersistencePort(
     val discardIncompleteInactiveRoom: suspend (String) -> Unit,
     val leaveActiveRoom: suspend () -> Unit,
     val clearAccountData: suspend () -> Unit,
+    val validateRoomSecrets: suspend () -> Unit = ::unsupportedRecoveryAction,
+    val resetIdentityData: suspend () -> Unit = ::unsupportedRecoveryAction,
 )
 
 internal class IrohRoomOrchestration(
@@ -53,6 +60,8 @@ internal class IrohRoomOrchestration(
     private val mutex = Mutex()
     private val closed = AtomicBoolean(false)
     private val accountQuarantined = AtomicBoolean(false)
+    private val recoveryRequested = AtomicBoolean(false)
+    private val recoveryGeneration = AtomicLong()
     private val lifecycle = IrohLifecycleState()
     private var initialized = false
     private var invite: String? = null
@@ -74,11 +83,10 @@ internal class IrohRoomOrchestration(
 
     suspend fun initialize() = mutex.withLock { initializeLocked() }
 
-    suspend fun setMode(mode: ReplicationMode) = mutex.withLock {
-        initializeLocked()
+    suspend fun setMode(mode: ReplicationMode) = runIrohAction {
         if (mode == service.state.value.mode) {
             if (mode == ReplicationMode.IROH && isForeground()) startIfNeeded()
-            return
+            return@runIrohAction
         }
         publish(service.state.value.copy(transitioning = true))
         try {
@@ -97,8 +105,7 @@ internal class IrohRoomOrchestration(
         }
     }
 
-    suspend fun createRoom(name: String) = mutex.withLock {
-        initializeLocked()
+    suspend fun createRoom(name: String) = runIrohAction {
         publish(service.state.value.copy(transitioning = true))
         var roomId: String? = null
         try {
@@ -124,8 +131,7 @@ internal class IrohRoomOrchestration(
         }
     }
 
-    suspend fun joinRoom(encodedInvite: String) = mutex.withLock {
-        initializeLocked()
+    suspend fun joinRoom(encodedInvite: String) = runIrohAction {
         publish(service.state.value.copy(transitioning = true))
         var decoded: IrohRoomInvite? = null
         var preparation: JoinPreparation? = null
@@ -142,9 +148,8 @@ internal class IrohRoomOrchestration(
         }
     }
 
-    suspend fun leaveRoom() = mutex.withLock {
-        initializeLocked()
-        if (service.state.value.mode != ReplicationMode.IROH) return
+    suspend fun leaveRoom() = runIrohAction {
+        if (service.state.value.mode != ReplicationMode.IROH) return@runIrohAction
         publish(service.state.value.copy(transitioning = true))
         try {
             flushActiveIrohLocked()
@@ -157,8 +162,7 @@ internal class IrohRoomOrchestration(
         }
     }
 
-    suspend fun refreshInvite() = mutex.withLock {
-        initializeLocked()
+    suspend fun refreshInvite() = runIrohAction {
         val room = checkNotNull(persistence.activeRoom()) { "No Iroh room is active" }
         val ticket = startIfNeeded()
         val secret = checkNotNull(persistence.activeRoomSecret())
@@ -167,22 +171,33 @@ internal class IrohRoomOrchestration(
         publish(service.state.value.copy(invite = invite, message = null))
     }
 
-    suspend fun syncNow() = mutex.withLock {
-        initializeLocked()
-        if (service.state.value.mode != ReplicationMode.IROH || !isForeground()) return
+    suspend fun syncNow() = runIrohAction {
+        if (service.state.value.mode != ReplicationMode.IROH || !isForeground()) {
+            return@runIrohAction
+        }
         startIfNeeded()
         service.syncNow()
     }
 
-    suspend fun afterLocalMutation() = mutex.withLock {
-        initializeLocked()
-        if (service.state.value.mode != ReplicationMode.IROH) return
+    suspend fun afterLocalMutation() = runIrohAction {
+        if (service.state.value.mode != ReplicationMode.IROH) return@runIrohAction
         val projection = persistence.captureLocalOperations()
         publish(service.state.value.copy(operationCount = projection.operationCount))
         if (isForeground()) {
-            runCatching { startIfNeeded() }
-            service.syncNow()
+            if (startUnlessIdentityRecoveryRequired()) service.syncNow()
         }
+    }
+
+    suspend fun confirmIdentityRecovery() {
+        if (!recoveryRequested.compareAndSet(false, true)) return
+        recoveryGeneration.incrementAndGet()
+        var restart = false
+        try {
+            mutex.withLock { restart = recoverIdentityLocked() }
+        } finally {
+            recoveryRequested.set(false)
+        }
+        if (restart) onForeground()
     }
 
     suspend fun clearAccountData() = mutex.withLock {
@@ -213,10 +228,10 @@ internal class IrohRoomOrchestration(
         if (closed.get() || accountQuarantined.get()) return
         lifecycle.enterForeground()
         scope.launch {
-            mutex.withLock {
-                if (accountQuarantined.get()) return@withLock
-                initializeLocked()
-                if (service.state.value.mode == ReplicationMode.IROH) runCatching { startIfNeeded() }
+            runIrohAction {
+                if (service.state.value.mode == ReplicationMode.IROH) {
+                    startUnlessIdentityRecoveryRequired()
+                }
             }
         }
     }
@@ -238,23 +253,34 @@ internal class IrohRoomOrchestration(
 
     private suspend fun initializeLocked() {
         if (initialized) return
-        persistence.discardIncompleteRooms()
+        val pendingRecovery = service.pendingIdentityRecovery()
+        if (pendingRecovery == null) persistence.discardIncompleteRooms()
         val settings = persistence.replicationSettings()
         val mode = runCatching { ReplicationMode.valueOf(settings.mode) }
             .getOrDefault(ReplicationMode.CENTRALIZED)
         val room = settings.activeRoomId?.let { persistence.room(it) }
+        val snapshot = room?.let { persistence.snapshot(it.roomId) }
+        pendingRecovery?.let { kind ->
+            publish((snapshot ?: IrohNetworkState()).copy(mode = mode))
+            quarantineRecovery(kind)
+            initialized = true
+            return
+        }
         if (mode == ReplicationMode.IROH && room == null) {
             persistence.setMode(ReplicationMode.OFFLINE)
             publish(IrohNetworkState(mode = ReplicationMode.OFFLINE))
             initialized = true
             return
         }
-        val snapshot = room?.let { persistence.snapshot(it.roomId) }
         publish((snapshot ?: IrohNetworkState()).copy(mode = mode))
         if (!recoverLocalOperations(mode, snapshot)) return
         initialized = true
         if (mode == ReplicationMode.IROH && snapshot?.conflict == null && isForeground()) {
-            startIfNeeded()
+            try {
+                startIfNeeded()
+            } catch (error: IrohSecretVaultException) {
+                quarantineRecovery(error.recoveryKind)
+            }
         }
     }
 
@@ -276,6 +302,10 @@ internal class IrohRoomOrchestration(
     }
 
     private suspend fun handleCreateFailure(roomId: String?, error: Exception) {
+        if (error is IrohSecretVaultException) {
+            quarantineRecovery(error.recoveryKind)
+            return
+        }
         if (roomId == null) {
             recoverPersistedRoute(error, "Iroh room could not be created")
         } else {
@@ -379,6 +409,10 @@ internal class IrohRoomOrchestration(
     }
 
     private suspend fun recoverPersistedRoute(error: Exception, fallbackMessage: String) {
+        if (error is IrohSecretVaultException) {
+            quarantineRecovery(error.recoveryKind)
+            return
+        }
         val settings = persistence.replicationSettings()
         val mode = runCatching { ReplicationMode.valueOf(settings.mode) }
             .getOrDefault(ReplicationMode.OFFLINE)
@@ -390,7 +424,7 @@ internal class IrohRoomOrchestration(
             transitioning = false,
         ))
         if (mode == ReplicationMode.IROH && snapshot?.conflict == null && isForeground()) {
-            runCatching { startIfNeeded() }
+            if (!startUnlessIdentityRecoveryRequired()) return
             publish(service.state.value.copy(
                 message = error.message ?: fallbackMessage,
                 transitioning = false,
@@ -398,8 +432,28 @@ internal class IrohRoomOrchestration(
         }
     }
 
+    private suspend fun startUnlessIdentityRecoveryRequired(): Boolean = try {
+        startIfNeeded()
+        true
+    } catch (error: CancellationException) {
+        throw error
+    } catch (error: IrohSecretVaultException) {
+        quarantineRecovery(error.recoveryKind)
+        false
+    } catch (error: Exception) {
+        publish(service.state.value.copy(
+            status = IrohConnectionStatus.UNAVAILABLE,
+            message = error.message ?: "Iroh endpoint could not start",
+            transitioning = false,
+        ))
+        true
+    }
+
     private fun permitsEndpoint(owner: Long): Boolean =
-        !accountQuarantined.get() && lifecycle.permitsEndpoint(owner)
+        !accountQuarantined.get() &&
+            !recoveryRequested.get() &&
+            service.state.value.identityRecovery == null &&
+            lifecycle.permitsEndpoint(owner)
 
     private fun isForeground(): Boolean =
         !accountQuarantined.get() && lifecycle.snapshot().foreground
@@ -407,4 +461,102 @@ internal class IrohRoomOrchestration(
     private fun publish(value: IrohNetworkState) {
         if (!closed.get()) service.publishState(value)
     }
+
+    private suspend fun runIrohAction(action: suspend () -> Unit) {
+        val generation = recoveryGeneration.get()
+        if (!permitsIrohAction(generation)) return
+        mutex.withLock {
+            if (!permitsIrohAction(generation)) return@withLock
+            initializeLocked()
+            if (!permitsIrohAction(generation)) return@withLock
+            action()
+        }
+    }
+
+    private fun permitsIrohAction(generation: Long): Boolean =
+        !closed.get() &&
+            !accountQuarantined.get() &&
+            !recoveryRequested.get() &&
+            recoveryGeneration.get() == generation &&
+            service.state.value.identityRecovery == null
+
+    private suspend fun recoverIdentityLocked(): Boolean {
+        val kind = service.state.value.identityRecovery ?: return false
+        publishRecovery(kind, failed = false, transitioning = true)
+        return try {
+            when (kind) {
+                IrohIdentityRecoveryKind.ENDPOINT_CORRUPTED -> {
+                    repairEndpointIdentity()
+                    service.state.value.mode == ReplicationMode.IROH && isForeground()
+                }
+                IrohIdentityRecoveryKind.KEY_INVALIDATED_OR_MISSING -> {
+                    resetIrohIdentity()
+                    false
+                }
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: IrohSecretVaultException) {
+            quarantineRecovery(error.recoveryKind, failed = true)
+            false
+        } catch (_: Exception) {
+            publishRecovery(kind, failed = true)
+            false
+        }
+    }
+
+    private suspend fun repairEndpointIdentity() {
+        service.stop()
+        persistence.validateRoomSecrets()
+        service.replaceEndpointIdentity()
+        invite = null
+        publish(service.state.value.copy(
+            status = IrohConnectionStatus.STOPPED,
+            invite = null,
+            message = null,
+            transitioning = false,
+            identityRecovery = null,
+            recoveryAttemptFailed = false,
+        ))
+    }
+
+    private suspend fun resetIrohIdentity() {
+        service.stop()
+        service.beginIdentityReset()
+        persistence.resetIdentityData()
+        service.completeIdentityReset()
+        invite = null
+        publish(IrohNetworkState(mode = ReplicationMode.OFFLINE))
+    }
+
+    private suspend fun quarantineRecovery(
+        kind: IrohIdentityRecoveryKind,
+        failed: Boolean = false,
+    ) {
+        try {
+            service.stop()
+        } finally {
+            invite = null
+            publishRecovery(kind, failed)
+        }
+    }
+
+    private fun publishRecovery(
+        kind: IrohIdentityRecoveryKind,
+        failed: Boolean,
+        transitioning: Boolean = false,
+    ) {
+        publish(service.state.value.copy(
+            status = IrohConnectionStatus.UNAVAILABLE,
+            invite = null,
+            endpointMark = null,
+            message = null,
+            transitioning = transitioning,
+            identityRecovery = kind,
+            recoveryAttemptFailed = failed,
+        ))
+    }
 }
+
+private suspend fun unsupportedRecoveryAction(): Nothing =
+    throw UnsupportedOperationException("Iroh identity recovery is unavailable")

@@ -408,7 +408,6 @@ class PomodoroughScreenTest {
                     onLeaveIrohRoom = {},
                     onRefreshIrohInvite = {},
                     onSyncIrohNow = {},
-                    onCopyIrohInvite = {},
                     onShareIrohInvite = {},
                 )
             }
@@ -589,7 +588,6 @@ class PomodoroughScreenTest {
                     onLeaveIrohRoom = {},
                     onRefreshIrohInvite = {},
                     onSyncIrohNow = {},
-                    onCopyIrohInvite = {},
                     onShareIrohInvite = {},
                 )
             }

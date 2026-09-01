@@ -1,8 +1,8 @@
 package me.egigoka.pomodorough.data.api
 
 import java.io.IOException
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -23,9 +23,19 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import okhttp3.ResponseBody
 import okhttp3.sse.EventSource
 import okhttp3.sse.EventSourceListener
 import okhttp3.sse.EventSources
+import okio.Buffer
+import okio.BufferedSource
+import okio.Source
+import okio.Timeout
+import okio.buffer
+
+// Bounds decoded HTTP bodies before JSON parsing while retaining one byte for oversize detection.
+internal const val API_RESPONSE_BODY_LIMIT_BYTES = 16L * 1024L * 1024L
+private const val RESPONSE_BODY_READ_BYTES = 8L * 1024L
 
 open class ApiException(
     val statusCode: Int,
@@ -59,11 +69,18 @@ interface PomodoroughService {
     }
 }
 
-class PomodoroughApi(
+class PomodoroughApi internal constructor(
     private val baseUrl: String,
     private val client: OkHttpClient,
     val json: Json,
+    private val callFactory: Call.Factory,
 ) : PomodoroughService {
+    constructor(
+        baseUrl: String,
+        client: OkHttpClient,
+        json: Json,
+    ) : this(baseUrl, client, json, client)
+
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
     private val eventSourceFactory = EventSources.createFactory(client)
 
@@ -139,7 +156,7 @@ class PomodoroughApi(
     private suspend inline fun <reified T> executeJson(request: Request): T {
         return execute(request).use { response ->
             requireSuccess(response)
-            val body = response.body?.string().orEmpty()
+            val body = readBody(response)
             if (body.isBlank()) throw IOException("Server returned an empty response")
             json.decodeFromString(body)
         }
@@ -147,7 +164,7 @@ class PomodoroughApi(
 
     private fun requireSuccess(response: Response): Response {
         if (response.isSuccessful) return response
-        val body = response.body?.string().orEmpty()
+        val body = readBody(response)
         val error = runCatching { json.decodeFromString<ApiError>(body).error }.getOrNull()
         if (response.code == 409 && response.request.url.encodedPath.endsWith("/bootstrap/resolve")) {
             val normalized = error.orEmpty().lowercase().replace('-', '_').replace(' ', '_')
@@ -161,17 +178,96 @@ class PomodoroughApi(
         throw ApiException(response.code, error ?: "Request failed (${response.code})")
     }
 
+    private fun readBody(response: Response): String {
+        val body = response.body ?: return ""
+        return body.limitedBody().string()
+    }
+
+    private fun ResponseBody.limitedBody(): ResponseBody {
+        val original = this
+        val limitedSource = ResponseBodyLimitSource(source()).buffer()
+        return object : ResponseBody() {
+            override fun contentType() = original.contentType()
+            override fun contentLength() = original.contentLength()
+            override fun source(): BufferedSource = limitedSource
+        }
+    }
+
     private suspend fun execute(request: Request): Response = suspendCancellableCoroutine { continuation ->
-        val call = client.newCall(request)
+        val call = callFactory.newCall(request)
+        val callbackDelivered = AtomicBoolean(false)
         continuation.invokeOnCancellation { call.cancel() }
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, error: IOException) {
-                if (continuation.isActive) continuation.resumeWithException(error)
+                if (!continuation.isActive || !callbackDelivered.compareAndSet(false, true)) return
+                continuation.resumeWith(Result.failure(error))
             }
 
             override fun onResponse(call: Call, response: Response) {
-                continuation.resume(response)
+                if (!callbackDelivered.compareAndSet(false, true)) {
+                    response.close()
+                    return
+                }
+                continuation.resume(response) { _, undelivered, _ -> undelivered.close() }
             }
         })
+    }
+}
+
+internal class ResponseBodyLimitSource(
+    private val upstream: BufferedSource,
+) : Source {
+    private var acceptedBytes = 0L
+    private var reachedEof = false
+    private var terminalFailure: Throwable? = null
+    private val scratch = Buffer()
+
+    override fun read(sink: Buffer, byteCount: Long): Long {
+        require(byteCount >= 0L) { "byteCount < 0: $byteCount" }
+        if (byteCount == 0L) return 0L
+        terminalFailure?.let { throw it }
+        if (reachedEof) return -1L
+        val probeBytes = API_RESPONSE_BODY_LIMIT_BYTES - acceptedBytes + 1L
+        val requested = minOf(byteCount, RESPONSE_BODY_READ_BYTES, probeBytes)
+        val read = readUpstream(requested)
+        if (read == -1L) {
+            if (scratch.size != 0L) failTerminal("Server response body returned data with EOF")
+            reachedEof = true
+            return -1L
+        }
+        validateRead(read, requested)
+        acceptedBytes += read
+        if (acceptedBytes > API_RESPONSE_BODY_LIMIT_BYTES) {
+            failTerminal("Server response exceeds $API_RESPONSE_BODY_LIMIT_BYTES bytes")
+        }
+        sink.write(scratch, read)
+        return read
+    }
+
+    override fun timeout(): Timeout = upstream.timeout()
+    override fun close() = upstream.close()
+
+    private fun readUpstream(requested: Long): Long = try {
+        upstream.read(scratch, requested)
+    } catch (error: Exception) {
+        if (scratch.size != 0L) {
+            failTerminal("Server response body returned data before failing", error)
+        }
+        terminalFailure = error
+        throw error
+    }
+
+    private fun validateRead(read: Long, requested: Long) {
+        if (read <= 0L) failTerminal("Server response body read made no progress: $read")
+        if (read > requested || scratch.size != read) {
+            failTerminal("Server response body returned invalid read count: $read for $requested bytes")
+        }
+    }
+
+    private fun failTerminal(message: String, cause: Throwable? = null): Nothing {
+        scratch.clear()
+        val error = IOException(message, cause)
+        terminalFailure = error
+        throw error
     }
 }

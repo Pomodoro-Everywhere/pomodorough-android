@@ -94,7 +94,6 @@
     <string name="join_room">JOIN ROOM</string>
     <string name="room_pass">Room pass</string>
     <string name="iroh_room_invite_treat_as_full_read_and">Iroh room invite. Treat as full read and write access.</string>
-    <string name="copy">Copy</string>
     <string name="share">Share</string>
     <string name="refresh">Refresh</string>
     <string name="privacy_access">PRIVACY &amp; ACCESS</string>
@@ -214,7 +213,6 @@
     <string name="deleted_task_2">, deleted task</string>
     <string name="unassigned_2">, unassigned</string>
     <string name="time_not_recorded">Time not recorded</string>
-    <string name="pomodorough_iroh_room_invite">Pomodorough Iroh room invite</string>
     <string name="pomodorough_iroh_room">Pomodorough Iroh room</string>
     <string name="share_room_invite">Share room invite</string>
     <string name="cloud_sync_value">Cloud sync: %1$s</string>
@@ -287,4 +285,17 @@
     <string name="sync_rejected_status">Sync rejected (%1$d)</string>
     <string name="sync_stopped_after_a_local_failure">Sync stopped after a local failure</string>
     <string name="saved_history_resolution_corrupted_local_data_preserved">Saved history resolution is corrupted. Local data and queues were preserved.</string>
+    <string name="iroh_endpoint_identity_needs_repair">Iroh endpoint identity needs repair</string>
+    <string name="iroh_endpoint_identity_repair_description">Saved endpoint ciphertext is corrupted. Room data remains quarantined and is preserved unless every saved room secret decrypts with this device’s Keystore key.</string>
+    <string name="iroh_identity_key_is_unavailable">Iroh identity key is unavailable</string>
+    <string name="iroh_identity_reset_description">Android Keystore can no longer decrypt the endpoint identity or saved Iroh room secrets. Iroh networking stays quarantined.</string>
+    <string name="iroh_identity_recovery_failed">Recovery did not complete. Data remains quarantined; review the scope and retry.</string>
+    <string name="review_iroh_endpoint_repair">Review endpoint repair</string>
+    <string name="review_iroh_identity_reset">Review destructive reset</string>
+    <string name="repair_iroh_endpoint_identity_question">Repair Iroh endpoint identity?</string>
+    <string name="repair_iroh_endpoint_identity_description">This creates a new endpoint identity only after every saved Iroh room secret decrypts with the current Keystore key. Room data, metadata, operations, and workspace are preserved. Repair stops without changes if validation fails.</string>
+    <string name="reset_iroh_identity_and_rooms_question">Reset Iroh identity and room data?</string>
+    <string name="reset_iroh_identity_and_rooms_description">This permanently deletes this device’s Iroh rooms, encrypted room secrets, peers, room metadata, operations, and conflicts. Previous on-device or cloud workspace is restored. Other devices’ copies are unchanged.</string>
+    <string name="repair_endpoint">Repair endpoint</string>
+    <string name="reset_iroh_identity">Reset Iroh identity</string>
 </resources>

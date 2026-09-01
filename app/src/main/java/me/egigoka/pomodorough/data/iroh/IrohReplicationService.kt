@@ -80,11 +80,19 @@ class IrohReplicationService(
 
     suspend fun stop() = lifecycle.stop()
 
+    suspend fun replaceEndpointIdentity() = lifecycle.replaceEndpointIdentity()
+
+    suspend fun beginIdentityReset() = lifecycle.beginIdentityReset()
+
+    suspend fun completeIdentityReset() = lifecycle.completeIdentityReset()
+
     suspend fun close() = lifecycle.close()
 
     suspend fun stopIf(condition: () -> Boolean) = lifecycle.stopIf(condition)
 
     suspend fun currentEndpointTicket(): String = lifecycle.currentEndpointTicket()
+
+    fun pendingIdentityRecovery(): IrohIdentityRecoveryKind? = lifecycle.pendingIdentityRecovery()
 
     suspend fun join(invite: IrohRoomInvite): IrohRoomProjection = roomJoin.join(invite)
 
@@ -100,9 +108,24 @@ class IrohReplicationService(
                 event.endpointMark ?: _state.value.endpointMark,
                 event.message,
             )
+            is IrohEndpointEvent.RecoveryRequired -> {
+                _state.value = _state.value.copy(
+                    status = IrohConnectionStatus.UNAVAILABLE,
+                    roomId = event.roomId,
+                    endpointMark = null,
+                    message = null,
+                    transitioning = false,
+                    identityRecovery = event.kind,
+                    recoveryAttemptFailed = false,
+                )
+            }
             IrohEndpointEvent.Stopped -> {
                 _state.value = _state.value.copy(
-                    status = IrohConnectionStatus.STOPPED,
+                    status = if (_state.value.identityRecovery == null) {
+                        IrohConnectionStatus.STOPPED
+                    } else {
+                        IrohConnectionStatus.UNAVAILABLE
+                    },
                     endpointMark = null,
                 )
             }
@@ -145,6 +168,8 @@ class IrohReplicationService(
             roomId = roomId,
             endpointMark = endpointMark,
             message = message,
+            identityRecovery = _state.value.identityRecovery,
+            recoveryAttemptFailed = _state.value.recoveryAttemptFailed,
         )
     }
 }

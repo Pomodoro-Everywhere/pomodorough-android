@@ -267,7 +267,7 @@ if [[ -n "$test_class" ]]; then
     || runner_status=$?
 else
   shard_count="${TEST_SHARD_COUNT:-8}"
-  expected_test_count="${EXPECTED_TEST_COUNT:-319}"
+  expected_test_count="${EXPECTED_TEST_COUNT:-331}"
   if [[ ! "$shard_count" =~ ^[1-9][0-9]*$ ]]; then
     echo "TEST_SHARD_COUNT must be a positive integer" >&2
     exit 1

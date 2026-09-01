@@ -371,7 +371,7 @@ private fun LazyListScope.networkTab(
                 onLeaveRoom = actions.onLeaveIrohRoom,
                 onRefreshInvite = actions.onRefreshIrohInvite,
                 onSyncNow = actions.onSyncIrohNow,
-                onCopyInvite = actions.onCopyIrohInvite,
+                onConfirmIdentityRecovery = actions.onConfirmIrohIdentityRecovery,
                 onShareInvite = actions.onShareIrohInvite,
             ),
             Modifier.padding(horizontal = 16.dp, vertical = 18.dp),

@@ -273,7 +273,7 @@ class PomodoroughRtlAccessibilityTest {
     }
 
     private fun assertIrohActionTargets(context: Context) {
-        listOf(R.string.sync_now, R.string.leave_room, R.string.copy, R.string.share, R.string.refresh)
+        listOf(R.string.sync_now, R.string.leave_room, R.string.share, R.string.refresh)
             .forEach { label -> assertActionTarget(context.getString(label), scroll = true) }
     }
 
@@ -449,7 +449,7 @@ class PomodoroughRtlAccessibilityTest {
                 onDismissConflict = onDismissConflict, onDismissNotice = onDismissNotice,
                 onSetReplicationMode = {}, onCreateIrohRoom = {}, onJoinIrohRoom = {},
                 onLeaveIrohRoom = onLeaveIrohRoom, onRefreshIrohInvite = {},
-                onSyncIrohNow = {}, onCopyIrohInvite = {}, onShareIrohInvite = {},
+                onSyncIrohNow = {}, onShareIrohInvite = {},
                 onDeleteAccount = onDeleteAccount,
             )
         }

@@ -33,11 +33,11 @@ class CIWorkflowTests(unittest.TestCase):
         workflow = CI_WORKFLOW.read_text(encoding="utf-8")
 
         self.assertIn(
-            'CORE_COMMIT: "44ff36e125cf653c1761dfb5951f6e77e41a2c82"',
+            'CORE_COMMIT: "542aca9a322a1b04c3e53d4a76152f385675d0a1"',
             workflow,
         )
         self.assertIn(
-            'CORE_SHA256: "f34fe57b5e080dd69afa5c7f28b60bc77851c7f874db99744eab72b4e1858877"',
+            'CORE_SHA256: "f735303cbd13a1671090b7ecd1e9c96a210ca007d8a35244bdf8028772c66eb6"',
             workflow,
         )
         self.assertIn("repository: Pomodoro-Everywhere/pomodorough-core", workflow)
@@ -234,6 +234,7 @@ class CIWorkflowTests(unittest.TestCase):
                 inventory.extend((path.relative_to(ROOT), method) for method in methods)
         self.assertTrue(inventory)
         self.assertEqual(len(inventory), len(set(inventory)))
+        self.assertEqual(331, len(inventory), "Update exact instrumentation inventory contract")
         self.assertEqual(int(default[1]), len(inventory), "Update runner's explicit inventory guard")
 
     def test_instrumentation_count_guard_fails_closed(self) -> None:

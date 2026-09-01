@@ -148,7 +148,8 @@ fun PomodoroughScreen(
     onSetReplicationMode: (ReplicationMode) -> Unit, onCreateIrohRoom: (String) -> Unit,
     onJoinIrohRoom: (String) -> Unit, onLeaveIrohRoom: () -> Unit,
     onRefreshIrohInvite: () -> Unit, onSyncIrohNow: () -> Unit,
-    onCopyIrohInvite: (String) -> Unit, onShareIrohInvite: (String) -> Unit,
+    onConfirmIrohIdentityRecovery: () -> Unit = {},
+    onShareIrohInvite: (String) -> Unit,
     onDeleteAccount: (String) -> Unit = {},
     onOpenPrivacy: () -> Unit = {},
     onStopSound: () -> Unit = {},
@@ -164,7 +165,8 @@ fun PomodoroughScreen(
                 onResolveHistory, onRecoverHistoryResolution, onConfirmAccountSwitch,
                 onCancelAccountSwitch, onDismissConflict, onDismissNotice,
                 onSetReplicationMode, onCreateIrohRoom, onJoinIrohRoom, onLeaveIrohRoom,
-                onRefreshIrohInvite, onSyncIrohNow, onCopyIrohInvite, onShareIrohInvite,
+                onRefreshIrohInvite, onSyncIrohNow, onConfirmIrohIdentityRecovery,
+                onShareIrohInvite,
                 onDeleteAccount, onOpenPrivacy,
             ))
         }
@@ -300,6 +302,7 @@ internal data class TimerScreenActions(
     val onSetReplicationMode: (ReplicationMode) -> Unit, val onCreateIrohRoom: (String) -> Unit,
     val onJoinIrohRoom: (String) -> Unit, val onLeaveIrohRoom: () -> Unit,
     val onRefreshIrohInvite: () -> Unit, val onSyncIrohNow: () -> Unit,
-    val onCopyIrohInvite: (String) -> Unit, val onShareIrohInvite: (String) -> Unit,
+    val onConfirmIrohIdentityRecovery: () -> Unit,
+    val onShareIrohInvite: (String) -> Unit,
     val onDeleteAccount: (String) -> Unit, val onOpenPrivacy: () -> Unit,
 )

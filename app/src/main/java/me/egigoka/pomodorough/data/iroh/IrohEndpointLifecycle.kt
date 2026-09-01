@@ -38,6 +38,11 @@ internal sealed interface IrohEndpointEvent {
         val message: String? = null,
     ) : IrohEndpointEvent
 
+    data class RecoveryRequired(
+        val kind: IrohIdentityRecoveryKind,
+        val roomId: String?,
+    ) : IrohEndpointEvent
+
     data object Stopped : IrohEndpointEvent
 }
 
@@ -88,6 +93,21 @@ internal class IrohEndpointLifecycle(
 
     suspend fun stop() = mutex.withLock { stopLocked() }
 
+    suspend fun replaceEndpointIdentity() = mutex.withLock {
+        stopLocked()
+        binding.replaceEndpointIdentity()
+    }
+
+    suspend fun beginIdentityReset() = mutex.withLock {
+        stopLocked()
+        binding.beginIdentityReset()
+    }
+
+    suspend fun completeIdentityReset() = mutex.withLock {
+        stopLocked()
+        binding.completeIdentityReset()
+    }
+
     suspend fun close() {
         if (!closed.compareAndSet(false, true)) return
         mutex.withLock { stopLocked() }
@@ -103,6 +123,8 @@ internal class IrohEndpointLifecycle(
             ?: throw IllegalStateException("Iroh endpoint is not running")
         return binding.ticket(current).also { endpointTicket = it }
     }
+
+    fun pendingIdentityRecovery(): IrohIdentityRecoveryKind? = binding.pendingIdentityRecovery()
 
     fun quarantine(roomId: String, quarantineOwner: Long) {
         if (closed.get()) return
@@ -138,6 +160,9 @@ internal class IrohEndpointLifecycle(
     private suspend fun bindEndpoint(nextContext: IrohServiceContext): Endpoint {
         return try {
             binding.bind()
+        } catch (error: IrohSecretVaultException) {
+            onEvent(IrohEndpointEvent.RecoveryRequired(error.recoveryKind, nextContext.roomId))
+            throw error
         } catch (error: Exception) {
             onEvent(IrohEndpointEvent.Status(
                 IrohConnectionStatus.UNAVAILABLE,
@@ -212,6 +237,16 @@ internal class IrohEndpointLifecycle(
 internal interface IrohEndpointBinding {
     suspend fun bind(): Endpoint
     fun ticket(endpoint: Endpoint): String
+    fun replaceEndpointIdentity() {
+        throw UnsupportedOperationException("Iroh endpoint identity repair is unavailable")
+    }
+    fun beginIdentityReset() {
+        throw UnsupportedOperationException("Iroh identity reset is unavailable")
+    }
+    fun completeIdentityReset() {
+        throw UnsupportedOperationException("Iroh identity reset is unavailable")
+    }
+    fun pendingIdentityRecovery(): IrohIdentityRecoveryKind? = null
 }
 
 private class IrohNativeEndpointBinding(private val vault: IrohSecretVault) : IrohEndpointBinding {
@@ -232,16 +267,26 @@ private class IrohNativeEndpointBinding(private val vault: IrohSecretVault) : Ir
         }
     }
 
-    private fun endpointSecret(): ByteArray {
-        vault.endpointSecret()?.let { secret ->
-            require(secret.size == 32) { "Saved Iroh endpoint identity is invalid" }
-            return secret
-        }
+    private fun endpointSecret(): ByteArray = vault.endpointSecret() ?: generateEndpointSecret(
+        vault::writeEndpointSecret,
+    )
+
+    override fun replaceEndpointIdentity() {
+        generateEndpointSecret(vault::replaceEndpointSecret).fill(0)
+    }
+
+    override fun beginIdentityReset() = vault.beginIdentityReset()
+
+    override fun completeIdentityReset() = vault.completeIdentityReset()
+
+    override fun pendingIdentityRecovery(): IrohIdentityRecoveryKind? = vault.pendingIdentityRecovery()
+
+    private fun generateEndpointSecret(persist: (ByteArray) -> Unit): ByteArray {
         val key = SecretKey.generate()
         return try {
             val generated = key.toBytes()
             try {
-                vault.writeEndpointSecret(generated)
+                persist(generated)
                 generated
             } catch (error: Exception) {
                 generated.fill(0)

@@ -48,29 +48,35 @@ internal fun JsonElement.jsonInt(): Int? {
     return (this as? JsonPrimitive)?.intOrNull
 }
 
-internal fun strictJson(value: ByteArray): String {
+internal fun strictJson(
+    value: ByteArray,
+    canonicalRootIntegerFields: Set<String> = emptySet(),
+): String {
     return StandardCharsets.UTF_8.newDecoder()
         .onMalformedInput(CodingErrorAction.REPORT)
         .onUnmappableCharacter(CodingErrorAction.REPORT)
         .decode(ByteBuffer.wrap(value))
         .toString()
-        .also { StrictJsonScanner(it).validate() }
+        .also { StrictJsonScanner(it, canonicalRootIntegerFields).validate() }
 }
 
-private class StrictJsonScanner(private val source: String) {
+private class StrictJsonScanner(
+    private val source: String,
+    private val canonicalRootIntegerFields: Set<String>,
+) {
     private var index = 0
 
     fun validate() {
         skipWhitespace()
-        parseValue()
+        parseValue(depth = 0)
         skipWhitespace()
         require(index == source.length) { "Body is not strict JSON" }
     }
 
-    private fun parseValue() {
+    private fun parseValue(depth: Int) {
         when (current()) {
-            '{' -> parseObject()
-            '[' -> parseArray()
+            '{' -> parseObject(depth)
+            '[' -> parseArray(depth)
             '"' -> parseString()
             't' -> consumeLiteral("true")
             'f' -> consumeLiteral("false")
@@ -80,7 +86,7 @@ private class StrictJsonScanner(private val source: String) {
         }
     }
 
-    private fun parseObject() {
+    private fun parseObject(depth: Int) {
         consume('{')
         skipWhitespace()
         if (consumeIfPresent('}')) return
@@ -92,7 +98,9 @@ private class StrictJsonScanner(private val source: String) {
             skipWhitespace()
             consume(':')
             skipWhitespace()
-            parseValue()
+            val valueStart = index
+            parseValue(depth + 1)
+            if (depth == 0) requireCanonicalRootInteger(key, valueStart)
             skipWhitespace()
             if (consumeIfPresent('}')) return
             consume(',')
@@ -100,16 +108,28 @@ private class StrictJsonScanner(private val source: String) {
         }
     }
 
-    private fun parseArray() {
+    private fun parseArray(depth: Int) {
         consume('[')
         skipWhitespace()
         if (consumeIfPresent(']')) return
         while (true) {
-            parseValue()
+            parseValue(depth + 1)
             skipWhitespace()
             if (consumeIfPresent(']')) return
             consume(',')
             skipWhitespace()
+        }
+    }
+
+    private fun requireCanonicalRootInteger(key: String, valueStart: Int) {
+        if (key !in canonicalRootIntegerFields) return
+        val token = source.substring(valueStart, index)
+        val digitStart = if (token.startsWith('-')) 1 else 0
+        val hasCanonicalDigits = digitStart < token.length &&
+            token[digitStart] in '1'..'9' &&
+            token.substring(digitStart + 1).all { it in '0'..'9' }
+        require(token == "0" || hasCanonicalDigits) {
+            "JSON integer field is not canonical"
         }
     }
 

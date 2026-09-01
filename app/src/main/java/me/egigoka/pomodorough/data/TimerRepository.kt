@@ -1557,6 +1557,20 @@ class TimerRepository(
         replication?.syncNow()
     }
 
+    override suspend fun confirmIrohIdentityRecovery() =
+        accountWorkspaceController.serialize { confirmIrohIdentityRecoveryInternal() }
+
+    private suspend fun confirmIrohIdentityRecoveryInternal() {
+        initialize()
+        if (accountNetworkBlocked()) return
+        val controller = replication ?: return
+        controller.confirmIdentityRecovery()
+        reloadWorkspace(controller.mode)
+        if (controller.mode != ReplicationMode.CENTRALIZED) {
+            centralizedSyncRuntime.requestRevisionClose()
+        }
+    }
+
     override suspend fun resolveHistory(strategy: BootstrapStrategy) {
         initialize()
         if (localMutationCorrupted) return

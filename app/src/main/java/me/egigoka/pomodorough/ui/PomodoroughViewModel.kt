@@ -59,6 +59,7 @@ class PomodoroughViewModel(
     fun leaveIrohRoom() = launch { repository.leaveIrohRoom() }
     fun refreshIrohInvite() = launch { repository.refreshIrohInvite() }
     fun syncIrohNow() = launch { repository.syncIrohNow() }
+    fun confirmIrohIdentityRecovery() = launch { repository.confirmIrohIdentityRecovery() }
     fun onForeground() {
         repository.onForeground()
         timerTickJob?.cancel()

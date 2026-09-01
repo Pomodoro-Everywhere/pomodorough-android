@@ -2,19 +2,17 @@ package me.egigoka.pomodorough
 
 import android.Manifest
 import android.app.AlarmManager
-import android.content.ClipData
-import android.content.ClipDescription
-import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.PersistableBundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContract
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.material3.AlertDialog
@@ -22,15 +20,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.res.stringResource
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import me.egigoka.pomodorough.data.auth.SystemGoogleCredentialProvider
 import me.egigoka.pomodorough.ui.PomodoroughScreen
@@ -38,25 +33,27 @@ import me.egigoka.pomodorough.ui.PomodoroughTheme
 import me.egigoka.pomodorough.ui.PomodoroughViewModel
 
 class MainActivity : ComponentActivity() {
-    private var showNotificationIntro by mutableStateOf(false)
-    private var showNotificationRecovery by mutableStateOf(false)
-    private var showExactAlarmFallback by mutableStateOf(false)
+    private lateinit var pendingTimerAction: PendingTimerActionCoordinator
+    private val pendingLaunchers = mutableMapOf<String, ActivityResultLauncher<*>>()
     private val viewModel by viewModels<PomodoroughViewModel> {
         PomodoroughViewModel.Factory(
             (application as PomodoroughApplication).timerRepository,
         )
     }
-    private val notificationPermission = registerForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { granted ->
-        if (granted) toggleWithAlarmDisclosure() else showNotificationRecovery = true
-    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        restorePendingTimerAction()
+        rebindPendingTimerAction()
         enableEdgeToEdge()
         observeAppLifecycle()
         setContent { PomodoroughContent() }
+    }
+
+    override fun onDestroy() {
+        if (::pendingTimerAction.isInitialized) pendingTimerAction.detach()
+        detachPendingLaunchers()
+        super.onDestroy()
     }
 
     private fun observeAppLifecycle() {
@@ -101,7 +98,7 @@ class MainActivity : ComponentActivity() {
                 onLeaveIrohRoom = viewModel::leaveIrohRoom,
                 onRefreshIrohInvite = viewModel::refreshIrohInvite,
                 onSyncIrohNow = viewModel::syncIrohNow,
-                onCopyIrohInvite = ::copyIrohInvite,
+                onConfirmIrohIdentityRecovery = viewModel::confirmIrohIdentityRecovery,
                 onShareIrohInvite = ::shareIrohInvite,
                 onDeleteAccount = viewModel::deleteAccount,
                 onOpenPrivacy = ::openPrivacyPolicy,
@@ -120,116 +117,203 @@ class MainActivity : ComponentActivity() {
     private fun startOrToggleTimer() {
         val decision = TimerNotificationPermissionPolicy.decide(
             sdkInt = Build.VERSION.SDK_INT,
-            permissionGranted = ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.POST_NOTIFICATIONS,
-            ) == PackageManager.PERMISSION_GRANTED,
+            permissionGranted = notificationPermissionGranted(),
             timerStatus = viewModel.state.value.timer?.status,
         )
-        when (decision) {
-            TimerNotificationPermissionAction.RequestPermission -> showNotificationIntro = true
-            TimerNotificationPermissionAction.ToggleTimer -> toggleWithAlarmDisclosure()
-        }
+        handleTimerAction(
+            pendingTimerAction.begin(decision == TimerNotificationPermissionAction.RequestPermission),
+        )
     }
 
-    private fun requestNotificationPermission() {
-        showNotificationIntro = false
-        notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+    private fun requestNotificationPermission(actionId: String) {
+        handleTimerAction(pendingTimerAction.confirmNotificationIntro(actionId))
     }
 
-    private fun toggleWithAlarmDisclosure() {
+    private fun evaluateExactAlarm(callback: PendingTimerActionCallbackIdentity) {
         val exact = Build.VERSION.SDK_INT < 31 ||
             getSystemService(AlarmManager::class.java).canScheduleExactAlarms()
-        if (me.egigoka.pomodorough.timer.ExactAlarmDisclosurePolicy.usesInexactFallback(
+        val needsFallback =
+            me.egigoka.pomodorough.timer.ExactAlarmDisclosurePolicy.usesInexactFallback(
                 sdkInt = Build.VERSION.SDK_INT,
                 canScheduleExactAlarms = exact,
                 timerStatus = viewModel.state.value.timer?.status,
             )
-        ) {
-            showExactAlarmFallback = true
-        } else {
-            viewModel.toggleTimer()
-        }
+        handleTimerAction(pendingTimerAction.exactAlarmResult(callback, needsFallback))
     }
 
-    private fun openNotificationSettings() {
-        showNotificationRecovery = false
-        startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+    private fun openNotificationSettings(actionId: String) {
+        handleTimerAction(pendingTimerAction.openNotificationSettings(actionId))
     }
 
-    private fun openExactAlarmSettings() {
-        showExactAlarmFallback = false
-        if (Build.VERSION.SDK_INT >= 31) {
-            startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:$packageName")))
-        }
+    private fun openExactAlarmSettings(actionId: String) {
+        handleTimerAction(pendingTimerAction.openExactAlarmSettings(actionId))
     }
 
     @Composable
     private fun PermissionDialogs() {
-        if (showNotificationIntro) NotificationIntroDialog()
-        if (showNotificationRecovery) NotificationRecoveryDialog()
-        if (showExactAlarmFallback) ExactAlarmFallbackDialog()
+        val state = pendingTimerAction.state
+        val actionId = state.actionId ?: return
+        when (state.step) {
+            PendingTimerActionStep.NotificationIntro -> NotificationIntroDialog(actionId)
+            PendingTimerActionStep.NotificationRecovery -> NotificationRecoveryDialog(actionId)
+            PendingTimerActionStep.ExactAlarmFallback -> ExactAlarmFallbackDialog(actionId)
+            else -> Unit
+        }
     }
 
     @Composable
-    private fun NotificationIntroDialog() {
+    private fun NotificationIntroDialog(actionId: String) {
         AlertDialog(
-            onDismissRequest = { showNotificationIntro = false },
+            onDismissRequest = { pendingTimerAction.dismissDialog(actionId) },
             title = { Text(stringResource(R.string.notification_intro_title)) },
             text = { Text(stringResource(R.string.notification_intro_body)) },
             confirmButton = {
-                TextButton(onClick = ::requestNotificationPermission) {
+                TextButton(onClick = { requestNotificationPermission(actionId) }) {
                     Text(stringResource(R.string.continue_label))
                 }
             },
             dismissButton = {
                 TextButton(onClick = {
-                    showNotificationIntro = false
-                    showNotificationRecovery = true
+                    handleTimerAction(pendingTimerAction.declineNotificationIntro(actionId))
                 }) { Text(stringResource(R.string.not_now)) }
             },
         )
     }
 
     @Composable
-    private fun NotificationRecoveryDialog() {
+    private fun NotificationRecoveryDialog(actionId: String) {
         AlertDialog(
-            onDismissRequest = { showNotificationRecovery = false },
+            onDismissRequest = { pendingTimerAction.dismissDialog(actionId) },
             title = { Text(stringResource(R.string.notification_denied_title)) },
             text = { Text(stringResource(R.string.notification_denied_body)) },
             confirmButton = {
-                TextButton(onClick = ::openNotificationSettings) {
+                TextButton(onClick = { openNotificationSettings(actionId) }) {
                     Text(stringResource(R.string.open_settings))
                 }
             },
             dismissButton = {
                 TextButton(onClick = {
-                    showNotificationRecovery = false
-                    toggleWithAlarmDisclosure()
+                    handleTimerAction(pendingTimerAction.continueWithoutNotifications(actionId))
                 }) { Text(stringResource(R.string.continue_without_notifications)) }
             },
         )
     }
 
     @Composable
-    private fun ExactAlarmFallbackDialog() {
+    private fun ExactAlarmFallbackDialog(actionId: String) {
         AlertDialog(
-            onDismissRequest = { showExactAlarmFallback = false },
+            onDismissRequest = { pendingTimerAction.dismissDialog(actionId) },
             title = { Text(stringResource(R.string.exact_alarm_title)) },
             text = { Text(stringResource(R.string.exact_alarm_body)) },
             confirmButton = {
-                TextButton(onClick = ::openExactAlarmSettings) {
+                TextButton(onClick = { openExactAlarmSettings(actionId) }) {
                     Text(stringResource(R.string.open_settings))
                 }
             },
             dismissButton = {
                 TextButton(onClick = {
-                    showExactAlarmFallback = false
-                    viewModel.toggleTimer()
+                    handleTimerAction(pendingTimerAction.useInexactAlarm(actionId))
                 }) { Text(stringResource(R.string.use_inexact_alarm)) }
             },
         )
     }
+
+    private fun restorePendingTimerAction() {
+        val restored = savedStateRegistry.consumeRestoredStateForKey(PendingTimerActionStateKey)
+        pendingTimerAction = PendingTimerActionCoordinator.restore(restored?.pendingTimerActionState())
+        savedStateRegistry.registerSavedStateProvider(PendingTimerActionStateKey) {
+            pendingTimerAction.savedState().toBundle()
+        }
+    }
+
+    private fun rebindPendingTimerAction() {
+        val callback = pendingTimerAction.pendingCallback() ?: return
+        when (pendingTimerAction.step) {
+            PendingTimerActionStep.NotificationPermission -> bindNotificationPermission(callback)
+            PendingTimerActionStep.NotificationSettings -> bindNotificationSettings(callback)
+            PendingTimerActionStep.ExactAlarmSettings -> bindExactAlarmSettings(callback)
+            PendingTimerActionStep.ExactAlarmCheck ->
+                handleTimerAction(pendingTimerAction.resumeAfterRestore())
+            else -> Unit
+        }
+    }
+
+    private fun handleTimerAction(effect: PendingTimerActionEffect) {
+        when (effect) {
+            PendingTimerActionEffect.None -> Unit
+            is PendingTimerActionEffect.CheckExactAlarm -> evaluateExactAlarm(effect.callback)
+            is PendingTimerActionEffect.ToggleTimer -> viewModel.toggleTimer()
+            is PendingTimerActionEffect.RequestNotificationPermission ->
+                bindNotificationPermission(effect.callback).launch(Manifest.permission.POST_NOTIFICATIONS)
+            is PendingTimerActionEffect.OpenNotificationSettings ->
+                bindNotificationSettings(effect.callback).launch(notificationSettingsIntent())
+            is PendingTimerActionEffect.OpenExactAlarmSettings ->
+                bindExactAlarmSettings(effect.callback).launch(exactAlarmSettingsIntent())
+        }
+    }
+
+    private fun bindNotificationPermission(
+        callback: PendingTimerActionCallbackIdentity,
+    ): ActivityResultLauncher<String> = registerPendingResult(
+        key = callback.launcherKey(NotificationPermissionLauncherKey),
+        contract = ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        handleTimerAction(pendingTimerAction.notificationPermissionResult(callback, granted))
+    }
+
+    private fun bindNotificationSettings(
+        callback: PendingTimerActionCallbackIdentity,
+    ): ActivityResultLauncher<Intent> = registerPendingResult(
+        key = callback.launcherKey(NotificationSettingsLauncherKey),
+        contract = ActivityResultContracts.StartActivityForResult(),
+    ) {
+        val granted = notificationPermissionGranted()
+        handleTimerAction(pendingTimerAction.notificationSettingsResult(callback, granted))
+    }
+
+    private fun bindExactAlarmSettings(
+        callback: PendingTimerActionCallbackIdentity,
+    ): ActivityResultLauncher<Intent> = registerPendingResult(
+        key = callback.launcherKey(ExactAlarmSettingsLauncherKey),
+        contract = ActivityResultContracts.StartActivityForResult(),
+    ) {
+        handleTimerAction(pendingTimerAction.exactAlarmSettingsResult(callback))
+    }
+
+    private fun <Input, Output> registerPendingResult(
+        key: String,
+        contract: ActivityResultContract<Input, Output>,
+        onResult: (Output) -> Unit,
+    ): ActivityResultLauncher<Input> {
+        var deliveredDuringRegistration = false
+        val launcher = activityResultRegistry.register(key, contract) { result ->
+            val registered = pendingLaunchers.remove(key)
+            if (registered == null) deliveredDuringRegistration = true else registered.unregister()
+            onResult(result)
+        }
+        if (deliveredDuringRegistration) launcher.unregister() else pendingLaunchers[key] = launcher
+        return launcher
+    }
+
+    private fun detachPendingLaunchers() {
+        val launchers = pendingLaunchers.values.toList()
+        pendingLaunchers.clear()
+        launchers.forEach { it.unregister() }
+    }
+
+    private fun notificationPermissionGranted(): Boolean = Build.VERSION.SDK_INT < 33 ||
+        ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
+        PackageManager.PERMISSION_GRANTED
+
+    private fun notificationSettingsIntent(): Intent = Intent(
+        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+        Uri.parse("package:$packageName"),
+    )
+
+    private fun exactAlarmSettingsIntent(): Intent = Intent(
+        Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+        Uri.parse("package:$packageName"),
+    )
 
     private fun stopSound() {
         (application as PomodoroughApplication).timerRepository.stopCompletionAlert(
@@ -237,35 +321,14 @@ class MainActivity : ComponentActivity() {
         )
     }
 
-    private fun copyIrohInvite(invite: String) {
-        val clipboard = getSystemService(ClipboardManager::class.java)
-        val clip = ClipData.newPlainText(getString(R.string.pomodorough_iroh_room_invite), invite)
-        if (Build.VERSION.SDK_INT >= 33) {
-            clip.description.extras = PersistableBundle().apply {
-                putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
-            }
-        }
-        clipboard.setPrimaryClip(clip)
-        lifecycleScope.launch {
-            delay(60_000L)
-            val current = clipboard.primaryClip?.getItemAt(0)?.coerceToText(this@MainActivity)?.toString()
-            if (current == invite) {
-                if (Build.VERSION.SDK_INT >= 28) {
-                    clipboard.clearPrimaryClip()
-                } else {
-                    clipboard.setPrimaryClip(ClipData.newPlainText("", ""))
-                }
-            }
-        }
-    }
-
     private fun shareIrohInvite(invite: String) {
+        val shareContent = irohInviteShareContent(invite, getString(R.string.pomodorough_iroh_room))
         startActivity(
             Intent.createChooser(
                 Intent(Intent.ACTION_SEND).apply {
-                    type = "text/plain"
-                    putExtra(Intent.EXTRA_SUBJECT, getString(R.string.pomodorough_iroh_room))
-                    putExtra(Intent.EXTRA_TEXT, invite)
+                    type = shareContent.mimeType
+                    putExtra(Intent.EXTRA_SUBJECT, shareContent.subject)
+                    putExtra(Intent.EXTRA_TEXT, shareContent.text)
                 },
                 getString(R.string.share_room_invite),
             ),
@@ -276,3 +339,38 @@ class MainActivity : ComponentActivity() {
         startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://pomodorough.egigoka.me/privacy")))
     }
 }
+
+private const val PendingTimerActionStateKey = "pending-timer-action"
+private const val PendingTimerActionStepKey = "step"
+private const val PendingTimerActionIdKey = "action-id"
+private const val PendingTimerActionLaunchIdKey = "launch-id"
+private const val NotificationPermissionLauncherKey = "notification-permission"
+private const val NotificationSettingsLauncherKey = "notification-settings"
+private const val ExactAlarmSettingsLauncherKey = "exact-alarm-settings"
+
+private fun PendingTimerActionCallbackIdentity.launcherKey(kind: String): String =
+    "$PendingTimerActionStateKey:$kind:$actionId:$launchId"
+
+private fun Bundle.pendingTimerActionState() = PendingTimerActionSavedState(
+    stepName = getString(PendingTimerActionStepKey).orEmpty(),
+    actionId = getString(PendingTimerActionIdKey),
+    launchId = getString(PendingTimerActionLaunchIdKey),
+)
+
+private fun PendingTimerActionSavedState.toBundle() = Bundle().apply {
+    putString(PendingTimerActionStepKey, stepName)
+    putString(PendingTimerActionIdKey, actionId)
+    putString(PendingTimerActionLaunchIdKey, launchId)
+}
+
+internal data class IrohInviteShareContent(
+    val mimeType: String,
+    val subject: String,
+    val text: String,
+)
+
+internal fun irohInviteShareContent(invite: String, subject: String) = IrohInviteShareContent(
+    mimeType = "text/plain",
+    subject = subject,
+    text = invite,
+)

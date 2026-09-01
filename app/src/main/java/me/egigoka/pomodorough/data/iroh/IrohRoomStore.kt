@@ -66,6 +66,10 @@ class IrohRoomStore(
 
     suspend fun activeRoomSecret(): ByteArray? = metadata.activeRoomSecret()
 
+    suspend fun validateRoomSecrets() = metadata.validateRoomSecrets()
+
+    suspend fun resetIdentityData() = metadata.resetIdentityData()
+
     suspend fun discardIncompleteRooms() = metadata.discardIncompleteRooms()
 
     suspend fun createRoom(name: String?): Pair<IrohRoomEntity, IrohRoomProjection> =

@@ -16,6 +16,9 @@ interface IrohReplicationController {
     suspend fun leaveRoom()
     suspend fun refreshInvite()
     suspend fun syncNow()
+    suspend fun confirmIdentityRecovery() {
+        throw UnsupportedOperationException("Iroh identity recovery is unavailable")
+    }
     suspend fun afterLocalMutation()
     suspend fun quarantineAccount() {
         onBackground()
@@ -55,6 +58,10 @@ class IrohReplicationRepository(
             join = service::join,
             endpointIdForTicket = service::endpointIdForTicket,
             syncNow = service::syncNow,
+            pendingIdentityRecovery = service::pendingIdentityRecovery,
+            replaceEndpointIdentity = service::replaceEndpointIdentity,
+            beginIdentityReset = service::beginIdentityReset,
+            completeIdentityReset = service::completeIdentityReset,
         ),
         persistence = IrohRoomPersistencePort(
             localState = workspace::localState,
@@ -77,6 +84,8 @@ class IrohReplicationRepository(
                 Unit
             },
             clearAccountData = store::clearAccountData,
+            validateRoomSecrets = store::validateRoomSecrets,
+            resetIdentityData = store::resetIdentityData,
         ),
     )
 
@@ -93,6 +102,8 @@ class IrohReplicationRepository(
     override suspend fun refreshInvite() = orchestration.refreshInvite()
 
     override suspend fun syncNow() = orchestration.syncNow()
+
+    override suspend fun confirmIdentityRecovery() = orchestration.confirmIdentityRecovery()
 
     override suspend fun afterLocalMutation() = orchestration.afterLocalMutation()
 
