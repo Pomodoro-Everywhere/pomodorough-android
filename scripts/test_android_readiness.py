@@ -168,6 +168,15 @@ Input Manager Service (Java) State:
   KbdBacklightController: 0 keyboard backlights
   KeyboardLedController: 0 keyboard mic mute lights
 """
+
+
+def focus_handoff_input() -> str:
+    channel = "a1 com.example.launcher/.Home"
+    event = "        FocusEvent(hasFocus=true), seq=9, targetFlags=0x0, age=659ms, wait=659ms\n"
+    snapshot = INPUT.replace(f"channelName='{channel}'", f"channelName='{channel} (server)'")
+    return snapshot.replace("      WaitQueue: <empty>\n", "      WaitQueue: length=1\n" + event)
+
+
 PROCESSES = """ACTIVITY MANAGER RUNNING PROCESSES (dumpsys activity processes)
   All known processes:
   *APP* UID 10101 ProcessRecord{aa 1201:com.example.launcher/u0a101}
@@ -522,6 +531,43 @@ class DumpGrammarTests(unittest.TestCase):
                          INPUT.replace("      WaitQueue: <empty>\n", "")):
             with self.subTest(snapshot=snapshot), self.assertRaises(READINESS.HealthFailure):
                 READINESS.input_focus(snapshot)
+
+    def test_api35_bounded_current_home_focus_handoff_is_supported(self):
+        snapshot = focus_handoff_input()
+        self.assertEqual(READINESS.input_focus(snapshot, HOME), ("a1", HOME))
+
+    def test_api35_focus_handoff_rejects_unbound_or_unsafe_variants(self):
+        snapshot = focus_handoff_input()
+        second = snapshot.replace(
+            "  AppSwitch: not pending\n",
+            "    2: channelName='a1 com.example.launcher/.Home (server)', status=NORMAL, "
+            "monitor=false, responsive=true\n"
+            "      OutboundQueue: <empty>\n      WaitQueue: length=1\n"
+            "        FocusEvent(hasFocus=true), seq=10, targetFlags=0x0, age=10ms, wait=10ms\n"
+            "  AppSwitch: not pending\n",
+        )
+        cases = (
+            (snapshot, None), (snapshot, "com.other/com.other.Home"),
+            (snapshot.replace("channelName='a1 ", "channelName='b2 "), HOME),
+            (snapshot.replace("/.Home (server)'", "/.Other (server)'"), HOME),
+            (snapshot.replace("monitor=false", "monitor=true"), HOME),
+            (snapshot.replace("responsive=true", "responsive=false"), HOME),
+            (snapshot.replace("hasFocus=true", "hasFocus=false"), HOME),
+            (snapshot.replace("seq=9", "seq=0"), HOME),
+            (snapshot.replace("targetFlags=0x0", "targetFlags=0x1"), HOME),
+            (snapshot.replace("age=659ms, wait=659ms", "age=1001ms, wait=1001ms"), HOME),
+            (snapshot.replace("age=659ms, wait=659ms", "age=659ms, wait=658ms"), HOME),
+            (snapshot.replace("WaitQueue: length=1", "WaitQueue: length=2"), HOME),
+            (snapshot.replace("        FocusEvent", "        KeyEvent"), HOME),
+            (snapshot.replace("      OutboundQueue: <empty>", "      OutboundQueue: length=1"), HOME),
+            (snapshot.replace("wait=659ms\n", "wait=659ms\n        FocusEvent(hasFocus=true), "
+                              "seq=10, targetFlags=0x0, age=1ms, wait=1ms\n"), HOME),
+            (second, HOME),
+        )
+        for candidate, expected in cases:
+            with self.subTest(candidate=candidate, expected=expected), \
+                    self.assertRaises(READINESS.HealthFailure):
+                READINESS.input_focus(candidate, expected)
 
     def test_emitted_process_error_branches_and_unknown_flags_reject(self):
         branches = ("mCrashing=true null mNotResponding=false null bad=false",
@@ -906,6 +952,13 @@ class BoundedAdapterTests(unittest.TestCase):
                 self.assertTrue(READINESS.health_sample(self.session(), HOME))
         self.assertEqual(self.device.trace().count(["shell", "dumpsys", "window"]), 2)
         self.assertNotIn(["shell", "dumpsys", "window", "windows"], self.device.trace())
+
+    def test_followed_home_binds_api35_focus_handoff_to_resolved_launcher(self):
+        self.device.add(["shell", "dumpsys", "input"], focus_handoff_input())
+        with mock.patch.object(READINESS, "time", Clock()):
+            READINESS.wait_for_health(self.session(), "HOME", False)
+        with self.assertRaisesRegex(READINESS.HealthFailure, "not bound to current HOME"):
+            READINESS.wait_for_health(self.session(), HOME, False)
 
     def test_presentation_marker_preserves_health_sample_vetoes(self):
         inputs = INPUT.replace("touchOcclusionMode=BLOCK_UNTRUSTED\n",

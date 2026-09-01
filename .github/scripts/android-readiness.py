@@ -23,8 +23,9 @@ failures. Conditional process-error omission is meaningful only within that
 framed traversal. Any emitted error branch rejects, including false flags with
 dialog objects or bad=true. Retained ANR history rejects by evidence policy, NOT
 because historical state establishes a current error. Never borrow its focus.
-The supported input subset includes source-shaped display/monitor lists; queued
-connection payloads remain unsupported rather than inventing their dump grammar.
+The supported input subset includes source-shaped display/monitor lists and one
+bounded API 35 focus handoff to the resolved HOME; other queued connection
+payloads remain unsupported rather than inventing their dump grammar.
 """
 
 from __future__ import annotations
@@ -52,8 +53,9 @@ class DeviceSession:
         self.deadline = time.monotonic() + seconds
         self.sequence = 0
         self.startup_home = False
+        self.expected_home = None
         self.record("phase", {"phase": phase, "started_at": time.time(), "budget": seconds,
-                              "grammar": "retained-api35-api36-bounded-observations-v3",
+                              "grammar": "retained-api35-api36-bounded-observations-v4",
                               "history_policy": "reject-retained-errors-not-active-error-proof"})
 
     def record(self, name: str, value: object) -> None:
@@ -431,27 +433,67 @@ def input_queue(header: str, children: list[str], name: str, empty: str = "<empt
         raise HealthFailure(f"Malformed {name} entry")
 
 
-def input_connections(header: str, children: list[str], version: str) -> None:
+MAX_FOCUS_HANDOFF_MS = 1000
+
+
+def input_connection_records(header: str, children: list[str]) -> list[tuple[str, bool, list[str]]]:
     if header == "Connections: <none>" and not children:
-        return
+        return []
     if header != "Connections:" or not children:
         raise HealthFailure("Malformed input connections")
     records = []
     identifiers = set()
     for child in children:
-        match = re.fullmatch(r"(\d+): channelName='[^']*', status=NORMAL, "
-                             r"monitor=(?:true|false), responsive=true", child)
+        match = re.fullmatch(r"(\d+): channelName='([^']*)', status=NORMAL, "
+                             r"monitor=(true|false), responsive=true", child)
         if match and match[1] not in identifiers:
             identifiers.add(match[1])
-            records.append([])
+            records.append((match[2], match[3] == "true", []))
         elif child.startswith("  ") and records:
-            records[-1].append(child[2:])
+            records[-1][2].append(child[2:])
         else:
             raise HealthFailure("Unknown or unresponsive input connection")
-    for queues in records:
-        expected = ["OutboundQueue: <empty>", "WaitQueue: <empty>"] if version == "35" else []
-        if queues != expected:
+    return records
+
+
+def input_focus_handoff(queues: list[str]) -> bool:
+    if queues == ["OutboundQueue: <empty>", "WaitQueue: <empty>"]:
+        return False
+    if queues[:2] != ["OutboundQueue: <empty>", "WaitQueue: length=1"] or len(queues) != 3:
+        raise HealthFailure("Unsupported nonempty or malformed input connection queues")
+    event = re.fullmatch(r"  FocusEvent\(hasFocus=true\), seq=([1-9]\d{0,9}), "
+                         r"targetFlags=0x0, age=(\d{1,4})ms, wait=(\d{1,4})ms", queues[2])
+    if event is None:
+        raise HealthFailure("Unsupported input connection wait event")
+    sequence, age, wait = map(int, event.groups())
+    if sequence > 2147483647 or age != wait or age > MAX_FOCUS_HANDOFF_MS:
+        raise HealthFailure("Unbounded or mismatched input focus handoff")
+    return True
+
+
+def input_connections(header: str, children: list[str], version: str) -> None:
+    records = input_connection_records(header, children)
+    for _, _, queues in records:
+        if version == "36" and queues:
             raise HealthFailure("Unsupported nonempty or malformed input connection queues")
+        if version == "35":
+            input_focus_handoff(queues)
+
+
+def require_home_focus_handoff(sections: list[tuple[str, list[str]]], version: str,
+                               focus: tuple[str, str] | None, expected_home: str | None) -> None:
+    header, children = next(section for section in sections if section[0].startswith("Connections:"))
+    records = input_connection_records(header, children)
+    handoffs = [(channel, monitor) for channel, monitor, queues in records
+                if version == "35" and input_focus_handoff(queues)]
+    if not handoffs:
+        return
+    if len(handoffs) != 1 or focus is None or expected_home is None or focus[1] != expected_home:
+        raise HealthFailure("Input focus handoff is not bound to current HOME")
+    channel, monitor = handoffs[0]
+    match = re.fullmatch(r"([0-9a-f]+) ([^']+) \(server\)", channel)
+    if monitor or match is None or match[1] != focus[0] or canonical_component(match[2]) != focus[1]:
+        raise HealthFailure("Input focus handoff connection does not match current HOME")
 
 
 def input_display(header: str, children: list[str]) -> None:
@@ -609,7 +651,7 @@ def input_section_order(sections: list[tuple[str, list[str]]], version: str) -> 
         raise HealthFailure("Conflicting empty input sections")
 
 
-def input_focus(snapshot: str) -> tuple[str, str] | None:
+def input_focus(snapshot: str, expected_home: str | None = None) -> tuple[str, str] | None:
     sections, historical_anr, version = input_sections(snapshot)
     input_section_order(sections, version)
     if historical_anr:
@@ -619,15 +661,19 @@ def input_focus(snapshot: str) -> tuple[str, str] | None:
             raise HealthFailure(f"Input dispatcher not ready: {sections[rank][0]}")
     header, entries = sections[5]
     if header == "FocusedWindows: <none>":
+        require_home_focus_handoff(sections, version, None, expected_home)
         return None
     if entries == ["displayId=0 has focused token without a window'"]:
+        require_home_focus_handoff(sections, version, None, expected_home)
         return None
     if len(entries) != 1:
         raise HealthFailure("Unknown or ambiguous input focus")
     match = re.fullmatch(r"displayId=0, name='([0-9a-f]+) ([^']+)'", entries[0])
     if match is None:
         raise HealthFailure(f"Unsupported or obstructing input window: {entries[0]}")
-    return match[1], canonical_component(match[2])
+    focus = match[1], canonical_component(match[2])
+    require_home_focus_handoff(sections, version, focus, expected_home)
+    return focus
 
 
 def process_records(snapshot: str) -> list[str]:
@@ -714,7 +760,8 @@ def health_sample(session: DeviceSession, expected: str) -> bool:
     events = session.snapshot("logcat", "-b", "events", "-d", "-v", "brief")
     require_clean_events(events)
     window = window_focus(windows, startup_home=session.startup_home)
-    focused_input = input_focus(inputs)
+    expected_home = expected if getattr(session, "expected_home", None) == expected else None
+    focused_input = input_focus(inputs, expected_home)
     require_process_health(processes)
     return boot == "1" and window is not None and window == focused_input and window[1] == expected
 
@@ -739,10 +786,12 @@ def wait_for_health(session: DeviceSession, expected: str, startup: bool) -> Non
                 healthy_since = None
                 expected = current_home
         session.startup_home = startup and follow_home
+        session.expected_home = expected if follow_home else None
         try:
             healthy = health_sample(session, expected)
         finally:
             session.startup_home = False
+            session.expected_home = None
         if follow_home:
             healthy = resolve_home(session) == expected and not transient_home(expected) and healthy
         now = time.monotonic()
