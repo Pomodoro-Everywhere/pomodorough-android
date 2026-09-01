@@ -234,11 +234,12 @@ class Lifecycle:
         self.avd_root = Path(tempfile.mkdtemp(prefix="pomodorough-emulator-"))
         for name in ("avd", "user", "emulator"):
             (self.avd_root / name).mkdir()
+        environment.pop("ANDROID_SDK_HOME", None)
+        environment.pop("ANDROID_PREFS_ROOT", None)
         environment.update(ANDROID_HOME=str(sdk), ANDROID_SDK_ROOT=str(sdk),
                            ANDROID_AVD_HOME=str(self.avd_root / "avd"),
                            ANDROID_USER_HOME=str(self.avd_root / "user"),
                            ANDROID_EMULATOR_HOME=str(self.avd_root / "emulator"),
-                           ANDROID_SDK_HOME=str(self.avd_root),
                            ANDROID_SERIAL=SERIAL, EMULATOR_PORT=str(PORT))
         environment["PATH"] = os.pathsep.join((str(sdk / "platform-tools"), str(sdk / "emulator"),
                                                environment.get("PATH", os.defpath)))

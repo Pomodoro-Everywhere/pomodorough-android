@@ -303,8 +303,34 @@ class EmulatorLifecycleTests(unittest.TestCase):
                              [str(self.sdk / "platform-tools"), str(self.sdk / "emulator"), str(self.bin)])
             self.assertEqual([environment[name] for name in ("FONT_SCALE", "TEST_LOCALE", "TEST_CLASS", "RUNTIME_ABI")],
                              ["2.0", "ar-XB", "fixture.Test", "arm64-v8a"])
-            for name in ("ANDROID_AVD_HOME", "ANDROID_USER_HOME", "ANDROID_EMULATOR_HOME", "ANDROID_SDK_HOME"):
+            for name in ("ANDROID_AVD_HOME", "ANDROID_USER_HOME", "ANDROID_EMULATOR_HOME"):
                 self.assertTrue(Path(environment[name]).is_relative_to(Path(self.result()["avd_root"])))
+
+    def test_conflicting_preference_aliases_removed_without_changing_unrelated_environment(self):
+        aliases = {"ANDROID_USER_HOME": str(self.root / "inherited-user"),
+                   "ANDROID_SDK_HOME": str(self.root / "inherited-sdk-home"),
+                   "ANDROID_PREFS_ROOT": str(self.root / "inherited-prefs-root")}
+        for folder in aliases.values():
+            Path(folder).mkdir()
+        os.environ.update(aliases, ANDROID_UNRELATED="keep unrelated value",
+                          ANDROID_SDK_HOME_EXTRA="keep sdk prefix", ANDROID_PREFS_ROOT_EXTRA="keep prefs prefix")
+        inherited = os.environ.copy()
+        self.assertEqual(self.invoke(diagnostics=True), 0)
+        self.assertEqual(dict(os.environ), inherited)
+        avd_root = Path(self.result()["avd_root"])
+        for call in self.runtime.calls:
+            with self.subTest(command=call["name"]):
+                environment = call["env"]
+                self.assertNotIn("ANDROID_SDK_HOME", environment)
+                self.assertNotIn("ANDROID_PREFS_ROOT", environment)
+                self.assertEqual(environment["ANDROID_USER_HOME"], str(avd_root / "user"))
+                self.assertEqual(environment["ANDROID_AVD_HOME"], str(avd_root / "avd"))
+                self.assertEqual(environment["ANDROID_EMULATOR_HOME"], str(avd_root / "emulator"))
+                self.assertEqual(environment["ANDROID_HOME"], str(self.sdk))
+                self.assertEqual(environment["ANDROID_SDK_ROOT"], str(self.sdk))
+                for name, value in inherited.items():
+                    if name not in {*aliases, "PATH"}:
+                        self.assertEqual(environment[name], value)
 
     def test_new_private_avd_each_run_never_reuses_stale_home(self):
         stale = self.root / "home/.android/avd/ci.avd/config.ini"
