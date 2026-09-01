@@ -3,6 +3,7 @@ package me.egigoka.pomodorough.ui
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -41,14 +42,14 @@ class IrohIdentityRecoveryA4UiTest {
         val review = context.getString(R.string.review_iroh_endpoint_repair)
         val description = context.getString(R.string.repair_iroh_endpoint_identity_description)
 
-        action(review).performClick()
+        scrollingAction(review).performClick()
         composeRule.onNodeWithText(description).assertIsDisplayed()
-        action(context.getString(R.string.cancel)).performClick()
+        dialogAction(context.getString(R.string.cancel)).performClick()
         composeRule.onNodeWithText(description).assertDoesNotExist()
         composeRule.runOnIdle { assertEquals(0, confirmationCount) }
 
-        action(review).performClick()
-        action(context.getString(R.string.repair_endpoint)).performClick()
+        scrollingAction(review).performClick()
+        dialogAction(context.getString(R.string.repair_endpoint)).performClick()
         composeRule.runOnIdle { assertEquals(1, confirmationCount) }
     }
 
@@ -64,11 +65,11 @@ class IrohIdentityRecoveryA4UiTest {
         composeRule.onNodeWithText(context.getString(R.string.sync_now)).performScrollTo().assertIsNotEnabled()
         composeRule.onNodeWithText(context.getString(R.string.leave_room)).assertIsNotEnabled()
 
-        action(context.getString(R.string.review_iroh_identity_reset)).performClick()
+        scrollingAction(context.getString(R.string.review_iroh_identity_reset)).performClick()
         composeRule.onNodeWithText(
             context.getString(R.string.reset_iroh_identity_and_rooms_description),
         ).assertIsDisplayed()
-        action(context.getString(R.string.reset_iroh_identity)).performClick()
+        dialogAction(context.getString(R.string.reset_iroh_identity)).performClick()
         composeRule.runOnIdle { assertEquals(1, confirmationCount) }
     }
 
@@ -89,8 +90,14 @@ class IrohIdentityRecoveryA4UiTest {
         }
     }
 
-    private fun action(label: String) = composeRule.onNode(hasText(label) and hasClickAction())
+    private fun scrollingAction(label: String) = composeRule.onNode(hasText(label) and hasClickAction())
         .performScrollTo()
+        .assertAccessibleAction()
+
+    private fun dialogAction(label: String) = composeRule.onNode(hasText(label) and hasClickAction())
+        .assertAccessibleAction()
+
+    private fun SemanticsNodeInteraction.assertAccessibleAction() = this
         .assertIsDisplayed()
         .assertHeightIsAtLeast(48.dp)
         .assertWidthIsAtLeast(48.dp)
