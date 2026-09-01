@@ -174,6 +174,27 @@ class CIWorkflowTests(unittest.TestCase):
         self.assertNotIn("ReactiveCircus/android-emulator-runner@", connected)
         self.assertIn("fail-fast: false", connected)
 
+    def test_verify_assembly_uses_fresh_gradle_process(self) -> None:
+        workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+        verify = workflow.split("  verify:", 1)[1].split("\n  connected:", 1)[0]
+        tests = verify.split("- name: Run unit tests and lint", 1)[1].split(
+            "- name: Assemble debug and test APKs", 1
+        )[0]
+        assembly = verify.split("- name: Assemble debug and test APKs", 1)[1].split(
+            "- name: Assemble unsigned release APK", 1
+        )[0]
+
+        self.assertEqual(tests.count("./gradlew --no-daemon --stacktrace"), 1)
+        self.assertIn(":app:testDebugUnitTest", tests)
+        self.assertIn(":app:testReleaseUnitTest", tests)
+        self.assertIn(":app:lintDebug", tests)
+        self.assertIn(":app:lintRelease", tests)
+        self.assertNotIn(":app:assembleDebug", tests)
+        self.assertEqual(assembly.count("./gradlew --no-daemon --stacktrace"), 1)
+        self.assertIn(":app:assembleDebug :app:assembleDebugAndroidTest", assembly)
+        self.assertNotIn(":app:lint", assembly)
+        self.assertNotIn("UnitTest", assembly)
+
     def test_runner_gates_active_windows_without_dismissing_or_clearing_evidence(self) -> None:
         script = INSTRUMENTED_SCRIPT.read_text(encoding="utf-8")
         self.assertLess(script.index("trap cleanup EXIT"), script.index('original_font_scale="$(device_command'))

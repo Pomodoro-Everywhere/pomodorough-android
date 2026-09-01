@@ -163,15 +163,16 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
 
-      - name: Run unit tests, lint, and assemble test APKs
+      - name: Run unit tests and lint
         run: >-
           ./gradlew --no-daemon --stacktrace
           :app:testDebugUnitTest
           :app:testReleaseUnitTest
           :app:lintDebug
           :app:lintRelease
-          :app:assembleDebug
-          :app:assembleDebugAndroidTest
+
+      - name: Assemble debug and test APKs
+        run: ./gradlew --no-daemon --stacktrace :app:assembleDebug :app:assembleDebugAndroidTest
 
       - name: Assemble unsigned release APK
         if: ${{ !inputs.upload-release-bundle }}
