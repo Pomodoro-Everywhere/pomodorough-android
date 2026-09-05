@@ -9,11 +9,11 @@ interface WorkspaceSnapshotDao : TimerWorkspaceDao, BootstrapDao {
         val local = checkNotNull(localState()) { "Local workspace is not initialized" }
         return LocalWorkspaceSnapshot(
             local = local,
-            commands = pendingCommands(),
-            taskOperations = pendingTaskOperations(),
-            durationOperations = pendingDurationOperations(),
-            autoStartOperations = pendingAutoStartOperations(),
-            selectedTaskOperations = pendingSelectedTaskOperations(),
+            commands = loadCommandsBounded(),
+            taskOperations = loadTaskOperationsBounded(),
+            durationOperations = loadDurationOperationsBounded(),
+            autoStartOperations = loadAutoStartOperationsBounded(),
+            selectedTaskOperations = loadSelectedTaskOperationsBounded(),
             bootstrapResolution = pendingBootstrapResolution(),
         )
     }
@@ -62,7 +62,7 @@ interface IrohRoomTransactionsDao : IrohRoomMetadataDao, IrohPeersDao {
 
     @Transaction
     suspend fun upsertIrohPeerBounded(peer: IrohPeerEntity, maximum: Int) {
-        val exists = irohPeers(peer.roomId).any { it.endpointId == peer.endpointId }
+        val exists = irohPeersCapped(peer.roomId, maximum + 1).any { it.endpointId == peer.endpointId }
         check(exists || irohPeerCount(peer.roomId) < maximum) {
             "Iroh room address book contains $maximum peers"
         }
@@ -146,9 +146,10 @@ interface IrohWorkspaceTransactionsDao :
         operations: List<IrohOperationEntity>,
         snapshot: LocalWorkspaceSnapshot,
     ): List<Long> {
-        check(pendingCommands().isEmpty() && pendingTaskOperations().isEmpty() &&
-            pendingDurationOperations().isEmpty() && pendingAutoStartOperations().isEmpty() &&
-            pendingSelectedTaskOperations().isEmpty()
+        check(
+            pendingCommandCount() == 0 && pendingTaskOperationCount() == 0 &&
+                pendingDurationOperationCount() == 0 && pendingAutoStartOperationCount() == 0 &&
+                pendingSelectedTaskOperationCount() == 0,
         ) { "Local Iroh operations must be captured before applying remote records" }
         return insertIrohRecordsAndActivate(room, operations, snapshot)
     }

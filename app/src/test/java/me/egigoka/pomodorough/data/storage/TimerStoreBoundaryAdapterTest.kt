@@ -169,6 +169,7 @@ class TimerStoreBoundaryAdapterTest {
     fun loadWorkspaceKeepsNullableCanonicalAndAccountFieldsAbsent() = runBlocking {
         val values = queueValues(state(), PendingCommandEntity.from(command(), null)).toMutableMap()
         values["pendingCommands"] = emptyList<Any>()
+        values["pendingCommandsCapped"] = emptyList<Any>()
         val store = TimerStore(proxy(values).first, json, strict) {}
 
         val loaded = store.loadWorkspace()
@@ -182,15 +183,26 @@ class TimerStoreBoundaryAdapterTest {
     private fun queueValues(
         local: LocalStateEntity,
         command: PendingCommandEntity,
-    ): Map<String, Any?> = mapOf(
-        "localState" to local,
-        "pendingCommands" to listOf(command),
-        "pendingTaskOperations" to listOf(PendingTaskOperationEntity.from(task())),
-        "pendingDurationOperations" to listOf(PendingDurationOperationEntity.from(duration())),
-        "pendingAutoStartOperations" to listOf(PendingAutoStartOperationEntity.from(autoStart())),
-        "pendingSelectedTaskOperations" to listOf(PendingSelectedTaskOperationEntity.from(selection())),
-        "pendingBootstrapResolution" to null,
-    )
+    ): Map<String, Any?> {
+        val task = PendingTaskOperationEntity.from(task())
+        val duration = PendingDurationOperationEntity.from(duration())
+        val autoStart = PendingAutoStartOperationEntity.from(autoStart())
+        val selected = PendingSelectedTaskOperationEntity.from(selection())
+        return mapOf(
+            "localState" to local,
+            "pendingCommands" to listOf(command),
+            "pendingTaskOperations" to listOf(task),
+            "pendingDurationOperations" to listOf(duration),
+            "pendingAutoStartOperations" to listOf(autoStart),
+            "pendingSelectedTaskOperations" to listOf(selected),
+            "pendingCommandsCapped" to listOf(command),
+            "pendingTaskOperationsCapped" to listOf(task),
+            "pendingDurationOperationsCapped" to listOf(duration),
+            "pendingAutoStartOperationsCapped" to listOf(autoStart),
+            "pendingSelectedTaskOperationsCapped" to listOf(selected),
+            "pendingBootstrapResolution" to null,
+        )
+    }
 
     private fun queues() = PendingSyncQueues(
         listOf(command()), listOf(task()), listOf(duration()), listOf(autoStart()), listOf(selection()),

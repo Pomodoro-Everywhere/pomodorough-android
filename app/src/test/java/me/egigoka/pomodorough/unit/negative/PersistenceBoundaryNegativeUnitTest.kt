@@ -84,6 +84,11 @@ class PersistenceBoundaryNegativeUnitTest {
             "pendingDurationOperations" to emptyList<Any>(),
             "pendingAutoStartOperations" to emptyList<Any>(),
             "pendingSelectedTaskOperations" to emptyList<Any>(),
+            "pendingCommandsCapped" to emptyList<Any>(),
+            "pendingTaskOperationsCapped" to emptyList<Any>(),
+            "pendingDurationOperationsCapped" to emptyList<Any>(),
+            "pendingAutoStartOperationsCapped" to emptyList<Any>(),
+            "pendingSelectedTaskOperationsCapped" to emptyList<Any>(),
             "pendingBootstrapResolution" to null,
         )
         return TimerLocalInitializer(

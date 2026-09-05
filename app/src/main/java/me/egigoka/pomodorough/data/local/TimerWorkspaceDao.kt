@@ -28,6 +28,42 @@ interface TimerWorkspaceDao {
     @Query("SELECT * FROM pending_selected_task_operations ORDER BY hlcWallMs, hlcCounter, id")
     suspend fun pendingSelectedTaskOperations(): List<PendingSelectedTaskOperationEntity>
 
+    @Query("SELECT COUNT(*) FROM pending_commands")
+    suspend fun pendingCommandCount(): Int
+
+    @Query("SELECT COUNT(*) FROM pending_task_operations")
+    suspend fun pendingTaskOperationCount(): Int
+
+    @Query("SELECT COUNT(*) FROM pending_duration_operations")
+    suspend fun pendingDurationOperationCount(): Int
+
+    @Query("SELECT COUNT(*) FROM pending_auto_start_operations")
+    suspend fun pendingAutoStartOperationCount(): Int
+
+    @Query("SELECT COUNT(*) FROM pending_selected_task_operations")
+    suspend fun pendingSelectedTaskOperationCount(): Int
+
+    @Query("SELECT * FROM pending_commands ORDER BY deviceSequence LIMIT :limit")
+    suspend fun pendingCommandsCapped(limit: Int): List<PendingCommandEntity>
+
+    @Query("SELECT * FROM pending_task_operations ORDER BY hlcWallMs, hlcCounter, id LIMIT :limit")
+    suspend fun pendingTaskOperationsCapped(limit: Int): List<PendingTaskOperationEntity>
+
+    @Query("SELECT * FROM pending_duration_operations ORDER BY hlcWallMs, hlcCounter, id LIMIT :limit")
+    suspend fun pendingDurationOperationsCapped(limit: Int): List<PendingDurationOperationEntity>
+
+    @Query(
+        "SELECT * FROM pending_auto_start_operations " +
+            "ORDER BY hlcWallMs, hlcCounter, deviceId, id LIMIT :limit",
+    )
+    suspend fun pendingAutoStartOperationsCapped(limit: Int): List<PendingAutoStartOperationEntity>
+
+    @Query(
+        "SELECT * FROM pending_selected_task_operations " +
+            "ORDER BY hlcWallMs, hlcCounter, id LIMIT :limit",
+    )
+    suspend fun pendingSelectedTaskOperationsCapped(limit: Int): List<PendingSelectedTaskOperationEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertState(state: LocalStateEntity)
 

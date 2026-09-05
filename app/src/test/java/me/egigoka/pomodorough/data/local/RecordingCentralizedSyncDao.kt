@@ -17,6 +17,11 @@ internal data class DaoCall(val name: String, val arguments: List<Any?> = emptyL
 internal class RecordingCentralizedSyncDao : CentralizedSyncDao {
     val calls = mutableListOf<DaoCall>()
     var failOn: String? = null
+    var commands: List<PendingCommandEntity> = emptyList()
+    var taskOperations: List<PendingTaskOperationEntity> = emptyList()
+    var durationOperations: List<PendingDurationOperationEntity> = emptyList()
+    var autoStartOperations: List<PendingAutoStartOperationEntity> = emptyList()
+    var selectedTaskOperations: List<PendingSelectedTaskOperationEntity> = emptyList()
 
     private fun record(name: String, vararg arguments: Any?) {
         calls += DaoCall(name, arguments.toList())
@@ -24,11 +29,27 @@ internal class RecordingCentralizedSyncDao : CentralizedSyncDao {
     }
 
     override suspend fun localState(): LocalStateEntity? = null
-    override suspend fun pendingCommands(): List<PendingCommandEntity> = emptyList()
-    override suspend fun pendingTaskOperations(): List<PendingTaskOperationEntity> = emptyList()
-    override suspend fun pendingDurationOperations(): List<PendingDurationOperationEntity> = emptyList()
-    override suspend fun pendingAutoStartOperations(): List<PendingAutoStartOperationEntity> = emptyList()
-    override suspend fun pendingSelectedTaskOperations(): List<PendingSelectedTaskOperationEntity> = emptyList()
+    override suspend fun pendingCommands(): List<PendingCommandEntity> = commands
+    override suspend fun pendingTaskOperations(): List<PendingTaskOperationEntity> = taskOperations
+    override suspend fun pendingDurationOperations(): List<PendingDurationOperationEntity> = durationOperations
+    override suspend fun pendingAutoStartOperations(): List<PendingAutoStartOperationEntity> = autoStartOperations
+    override suspend fun pendingSelectedTaskOperations(): List<PendingSelectedTaskOperationEntity> =
+        selectedTaskOperations
+    override suspend fun pendingCommandCount(): Int = commands.size
+    override suspend fun pendingTaskOperationCount(): Int = taskOperations.size
+    override suspend fun pendingDurationOperationCount(): Int = durationOperations.size
+    override suspend fun pendingAutoStartOperationCount(): Int = autoStartOperations.size
+    override suspend fun pendingSelectedTaskOperationCount(): Int = selectedTaskOperations.size
+    override suspend fun pendingCommandsCapped(limit: Int): List<PendingCommandEntity> =
+        commands.take(limit)
+    override suspend fun pendingTaskOperationsCapped(limit: Int): List<PendingTaskOperationEntity> =
+        taskOperations.take(limit)
+    override suspend fun pendingDurationOperationsCapped(limit: Int): List<PendingDurationOperationEntity> =
+        durationOperations.take(limit)
+    override suspend fun pendingAutoStartOperationsCapped(limit: Int): List<PendingAutoStartOperationEntity> =
+        autoStartOperations.take(limit)
+    override suspend fun pendingSelectedTaskOperationsCapped(limit: Int): List<PendingSelectedTaskOperationEntity> =
+        selectedTaskOperations.take(limit)
     override suspend fun pendingBootstrapResolution(): PendingBootstrapResolutionEntity? = null
 
     override suspend fun insertState(state: LocalStateEntity) = record("insertState", state)

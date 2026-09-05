@@ -75,6 +75,11 @@ class PersistenceBoundaryPositiveUnitTest {
             "pendingDurationOperations" to listOf(duration),
             "pendingAutoStartOperations" to listOf(auto),
             "pendingSelectedTaskOperations" to listOf(selected),
+            "pendingCommandsCapped" to listOf(command),
+            "pendingTaskOperationsCapped" to listOf(task),
+            "pendingDurationOperationsCapped" to listOf(duration),
+            "pendingAutoStartOperationsCapped" to listOf(auto),
+            "pendingSelectedTaskOperationsCapped" to listOf(selected),
             "pendingBootstrapResolution" to resolution,
         )
         var validated: User? = null
@@ -183,6 +188,11 @@ class PersistenceBoundaryPositiveUnitTest {
         "pendingDurationOperations" to emptyList<Any>(),
         "pendingAutoStartOperations" to emptyList<Any>(),
         "pendingSelectedTaskOperations" to emptyList<Any>(),
+        "pendingCommandsCapped" to emptyList<Any>(),
+        "pendingTaskOperationsCapped" to emptyList<Any>(),
+        "pendingDurationOperationsCapped" to emptyList<Any>(),
+        "pendingAutoStartOperationsCapped" to emptyList<Any>(),
+        "pendingSelectedTaskOperationsCapped" to emptyList<Any>(),
         "pendingBootstrapResolution" to null,
     )
 

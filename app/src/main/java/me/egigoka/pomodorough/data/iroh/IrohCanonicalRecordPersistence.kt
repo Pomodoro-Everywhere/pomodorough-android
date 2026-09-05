@@ -10,6 +10,7 @@ import me.egigoka.pomodorough.data.local.IrohWorkspaceTransactionsDao
 import me.egigoka.pomodorough.data.local.LocalWorkspaceCoordinator
 import me.egigoka.pomodorough.data.local.LocalWorkspaceSnapshot
 import me.egigoka.pomodorough.data.local.ReplicationSettingsEntity
+import me.egigoka.pomodorough.data.local.loadOperationsBounded
 
 internal class IrohCanonicalRecordPersistence(
     private val dao: IrohWorkspaceTransactionsDao,
@@ -40,7 +41,7 @@ internal class IrohCanonicalRecordPersistence(
         )
         val newEntities = newRoomEntities(room.roomId, records)
         val projected = projection.project(
-            room.roomId, dao.irohOperations(room.roomId) + newEntities, cleared,
+            room.roomId, dao.loadOperationsBounded(room.roomId) + newEntities, cleared,
         )
         persistCapturedProjection(room, records.isNotEmpty(), newEntities, projected)
         return if (projection.eligibleRoomCommands(projected.snapshot).isNotEmpty()) {
@@ -127,7 +128,7 @@ internal class IrohCanonicalRecordPersistence(
             room = checkNotNull(dao.irohRoom(roomId)) { "Iroh room is missing" }
             val projected = projection.project(
                 roomId = roomId,
-                records = dao.irohOperations(roomId) + newEntities,
+                records = dao.loadOperationsBounded(roomId) + newEntities,
                 baseSnapshot = base,
             )
             val updated = room.copy(roomStateJson = WorkspaceCodec.encode(projected.snapshot))

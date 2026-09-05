@@ -35,6 +35,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -67,12 +70,36 @@ internal fun TimerScreen(state: AppState, actions: TimerScreenActions) {
     TimerScreenDialogs(state, actions, ui)
 }
 
-private class TimerDialogState {
+internal class TimerDialogState {
     var showLogout by mutableStateOf(false)
     var showAccount by mutableStateOf(false)
     var showLocalReset by mutableStateOf(false)
     var showDelete by mutableStateOf(false)
     var deleteConfirmation by mutableStateOf("")
+}
+
+internal val TimerDialogSaver: Saver<TimerDialogState, Any> = listSaver(
+    save = {
+        listOf(
+            it.showLogout,
+            it.showAccount,
+            it.showLocalReset,
+            it.showDelete,
+            it.deleteConfirmation,
+        )
+    },
+    restore = ::restoreTimerDialogState,
+)
+
+internal fun restoreTimerDialogState(saved: List<Any?>): TimerDialogState? {
+    if (saved.size != 5) return null
+    return TimerDialogState().apply {
+        showLogout = saved[0] as? Boolean ?: return null
+        showAccount = saved[1] as? Boolean ?: return null
+        showLocalReset = saved[2] as? Boolean ?: return null
+        showDelete = saved[3] as? Boolean ?: return null
+        deleteConfirmation = saved[4] as? String ?: return null
+    }
 }
 
 private class TimerNavigationState(
@@ -100,7 +127,7 @@ private data class TimerScreenUiState(
 
 @Composable
 private fun rememberTimerScreenUiState(state: AppState): TimerScreenUiState {
-    val dialogs = remember { TimerDialogState() }
+    val dialogs = rememberSaveable(saver = TimerDialogSaver) { TimerDialogState() }
     val tasks = rememberLazyListState()
     val pattern = rememberLazyListState()
     val arrivals = rememberLazyListState()

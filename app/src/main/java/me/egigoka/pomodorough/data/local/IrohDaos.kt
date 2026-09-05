@@ -20,6 +20,12 @@ interface IrohRoomMetadataDao {
     @Query("SELECT * FROM iroh_rooms ORDER BY roomId")
     suspend fun irohRooms(): List<IrohRoomEntity>
 
+    @Query("SELECT COUNT(*) FROM iroh_rooms")
+    suspend fun irohRoomCount(): Int
+
+    @Query("SELECT * FROM iroh_rooms ORDER BY roomId LIMIT :limit")
+    suspend fun irohRoomsCapped(limit: Int): List<IrohRoomEntity>
+
     @Query("SELECT * FROM iroh_rooms WHERE roomId = :roomId")
     suspend fun irohRoom(roomId: String): IrohRoomEntity?
 
@@ -48,6 +54,9 @@ interface IrohPeersDao {
     @Query("SELECT * FROM iroh_peers WHERE roomId = :roomId ORDER BY endpointId")
     suspend fun irohPeers(roomId: String): List<IrohPeerEntity>
 
+    @Query("SELECT * FROM iroh_peers WHERE roomId = :roomId ORDER BY endpointId LIMIT :limit")
+    suspend fun irohPeersCapped(roomId: String, limit: Int): List<IrohPeerEntity>
+
     @Query("SELECT COUNT(*) FROM iroh_peers WHERE roomId = :roomId")
     suspend fun irohPeerCount(roomId: String): Int
 
@@ -62,6 +71,15 @@ interface IrohRecordsDao {
             "ORDER BY domain COLLATE BINARY, operationId COLLATE BINARY",
     )
     suspend fun irohOperations(roomId: String): List<IrohOperationEntity>
+
+    @Query(
+        "SELECT * FROM iroh_operations WHERE roomId = :roomId " +
+            "ORDER BY domain COLLATE BINARY, operationId COLLATE BINARY LIMIT :limit",
+    )
+    suspend fun irohOperationsCapped(roomId: String, limit: Int): List<IrohOperationEntity>
+
+    @Query("SELECT COUNT(*) FROM iroh_operations WHERE roomId = :roomId")
+    suspend fun irohOperationCount(roomId: String): Int
 
     @Query(
         "SELECT * FROM iroh_operations WHERE roomId = :roomId AND domain = :domain " +

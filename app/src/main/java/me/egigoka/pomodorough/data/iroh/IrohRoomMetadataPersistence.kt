@@ -11,6 +11,7 @@ import me.egigoka.pomodorough.data.local.LocalStateEntity
 import me.egigoka.pomodorough.data.local.LocalWorkspaceCoordinator
 import me.egigoka.pomodorough.data.local.LocalWorkspaceSnapshot
 import me.egigoka.pomodorough.data.local.ReplicationSettingsEntity
+import me.egigoka.pomodorough.data.local.loadRoomsBounded
 
 internal class IrohRoomMetadataPersistence(
     private val dao: IrohWorkspaceTransactionsDao,
@@ -35,14 +36,14 @@ internal class IrohRoomMetadataPersistence(
     }
 
     suspend fun validateRoomSecrets() {
-        dao.irohRooms().forEach { room ->
+        dao.loadRoomsBounded().forEach { room ->
             vault.decryptRoomSecret(room.roomId, room.encryptedRoomSecret).fill(0)
         }
     }
 
     suspend fun resetIdentityData() = workspaceCoordinator.withLock {
         val settings = replicationSettings()
-        val rooms = dao.irohRooms()
+        val rooms = dao.loadRoomsBounded()
         val restored = identityResetWorkspace(settings, rooms)
         dao.resetIrohIdentity(
             rooms.map(IrohRoomEntity::roomId),
@@ -255,7 +256,7 @@ internal class IrohRoomMetadataPersistence(
         val stored = dao.localWorkspaceSnapshot()
         val current = stored.withoutIrohAccount(preserveDomain = stored.local.ownerUserId == null)
         val malformedRoomIds = mutableListOf<String>()
-        val clearedRooms = dao.irohRooms().mapNotNull { room ->
+        val clearedRooms = dao.loadRoomsBounded().mapNotNull { room ->
             runCatching {
                 val returned = WorkspaceCodec.decode(room.returnStateJson)
                 val roomState = WorkspaceCodec.decode(room.roomStateJson)

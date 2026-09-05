@@ -20,6 +20,8 @@ import me.egigoka.pomodorough.data.local.IrohRoomEntity
 import me.egigoka.pomodorough.data.local.IrohRoomMetadataDao
 import me.egigoka.pomodorough.data.local.LocalStateEntity
 import me.egigoka.pomodorough.data.local.LocalWorkspaceSnapshot
+import me.egigoka.pomodorough.data.local.WorkspaceLoadBounds
+import me.egigoka.pomodorough.data.local.loadOperationsBounded
 
 internal class IrohRoomProjectionPersistence(
     private val rooms: IrohRoomMetadataDao,
@@ -70,7 +72,9 @@ internal class IrohRoomProjectionPersistence(
         records: List<IrohOperationEntity>?,
         baseSnapshot: LocalWorkspaceSnapshot?,
     ): RoomProjectionInput {
-        val storedRecords = records ?: this.records.irohOperations(roomId)
+        val storedRecords = records?.let {
+            WorkspaceLoadBounds.requireBounded(it, WorkspaceLoadBounds.MaxIrohOperations, "iroh_operations")
+        } ?: this.records.loadOperationsBounded(roomId)
         validateRecordSet(storedRecords)
         val room = checkNotNull(rooms.irohRoom(roomId)) { "Iroh room is missing" }
         val parsed = storedRecords.map(IrohOperationEntity::toIrohRecord)

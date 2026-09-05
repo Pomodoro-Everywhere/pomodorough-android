@@ -3,6 +3,7 @@ package me.egigoka.pomodorough.data.iroh
 import me.egigoka.pomodorough.data.local.IrohPeerEntity
 import me.egigoka.pomodorough.data.local.IrohRoomEntity
 import me.egigoka.pomodorough.data.local.IrohRoomTransactionsDao
+import me.egigoka.pomodorough.data.local.loadPeersBounded
 
 internal class IrohPeerRegistryPersistence(
     private val dao: IrohRoomTransactionsDao,
@@ -34,5 +35,5 @@ internal class IrohPeerRegistryPersistence(
         dao.upsertIrohPeerBounded(peer, IrohProtocolV1.MaxPeers)
     }
 
-    suspend fun peers(roomId: String): List<IrohPeerEntity> = dao.irohPeers(roomId)
+    suspend fun peers(roomId: String): List<IrohPeerEntity> = dao.loadPeersBounded(roomId)
 }

@@ -23,6 +23,11 @@ import me.egigoka.pomodorough.data.local.PendingCommandEntity
 import me.egigoka.pomodorough.data.local.PendingDurationOperationEntity
 import me.egigoka.pomodorough.data.local.PendingSelectedTaskOperationEntity
 import me.egigoka.pomodorough.data.local.PendingTaskOperationEntity
+import me.egigoka.pomodorough.data.local.loadAutoStartOperationsBounded
+import me.egigoka.pomodorough.data.local.loadCommandsBounded
+import me.egigoka.pomodorough.data.local.loadDurationOperationsBounded
+import me.egigoka.pomodorough.data.local.loadSelectedTaskOperationsBounded
+import me.egigoka.pomodorough.data.local.loadTaskOperationsBounded
 
 internal data class StoredTimerWorkspace(
     val local: LocalStateEntity,
@@ -77,15 +82,15 @@ internal class TimerStore(
 
     suspend fun loadWorkspace(): StoredTimerWorkspace {
         val local = checkNotNull(dao.localState()) { "Local workspace is missing" }
-        val commandEntities = dao.pendingCommands()
+        val commandEntities = dao.loadCommandsBounded()
         val pending = PendingSyncQueues(
             commands = commandEntities.map(PendingCommandEntity::toModel),
-            taskOperations = dao.pendingTaskOperations().map(PendingTaskOperationEntity::toModel),
-            durationOperations = dao.pendingDurationOperations()
+            taskOperations = dao.loadTaskOperationsBounded().map(PendingTaskOperationEntity::toModel),
+            durationOperations = dao.loadDurationOperationsBounded()
                 .map(PendingDurationOperationEntity::toModel),
-            autoStartOperations = dao.pendingAutoStartOperations()
+            autoStartOperations = dao.loadAutoStartOperationsBounded()
                 .map(PendingAutoStartOperationEntity::toModel),
-            selectedTaskOperations = dao.pendingSelectedTaskOperations()
+            selectedTaskOperations = dao.loadSelectedTaskOperationsBounded()
                 .map(PendingSelectedTaskOperationEntity::toModel),
         )
         val bootstrapResolution = dao.pendingBootstrapResolution()

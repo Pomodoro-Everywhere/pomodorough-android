@@ -12,6 +12,11 @@ import me.egigoka.pomodorough.data.local.PendingDurationOperationEntity
 import me.egigoka.pomodorough.data.local.PendingSelectedTaskOperationEntity
 import me.egigoka.pomodorough.data.local.PendingTaskOperationEntity
 import me.egigoka.pomodorough.data.local.TimerWorkspaceDao
+import me.egigoka.pomodorough.data.local.loadAutoStartOperationsBounded
+import me.egigoka.pomodorough.data.local.loadCommandsBounded
+import me.egigoka.pomodorough.data.local.loadDurationOperationsBounded
+import me.egigoka.pomodorough.data.local.loadSelectedTaskOperationsBounded
+import me.egigoka.pomodorough.data.local.loadTaskOperationsBounded
 
 internal data class DecodedLocalJson(
     val settings: TimerSettings,
@@ -51,19 +56,19 @@ internal class TimerLocalInitializer(
     suspend fun load(): LocalInitializationData {
         val stored = workspace.localState()
         val local = stored ?: createLocalState()
-        val commandEntities = workspace.pendingCommands()
+        val commandEntities = workspace.loadCommandsBounded()
         return LocalInitializationData(
             storedLocal = stored,
             local = local,
             commandEntities = commandEntities,
             commands = commandEntities.map(PendingCommandEntity::toModel),
             commandDependencies = commandDependencies(commandEntities),
-            durationOperations = workspace.pendingDurationOperations()
+            durationOperations = workspace.loadDurationOperationsBounded()
                 .map(PendingDurationOperationEntity::toModel),
-            taskOperations = workspace.pendingTaskOperations().map(PendingTaskOperationEntity::toModel),
-            autoStartOperations = workspace.pendingAutoStartOperations()
+            taskOperations = workspace.loadTaskOperationsBounded().map(PendingTaskOperationEntity::toModel),
+            autoStartOperations = workspace.loadAutoStartOperationsBounded()
                 .map(PendingAutoStartOperationEntity::toModel),
-            selectedTaskOperations = workspace.pendingSelectedTaskOperations()
+            selectedTaskOperations = workspace.loadSelectedTaskOperationsBounded()
                 .map(PendingSelectedTaskOperationEntity::toModel),
             bootstrapResolution = bootstrap.pendingBootstrapResolution(),
             decoded = try {

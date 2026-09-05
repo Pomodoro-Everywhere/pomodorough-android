@@ -69,8 +69,8 @@ internal class IrohInventoryReferencePersistence(
             status = if (conflict == null) IrohConnectionStatus.STOPPED else IrohConnectionStatus.CONFLICT,
             roomId = room?.roomId,
             roomName = room?.roomName,
-            peerCount = peers.irohPeers(roomId).size,
-            operationCount = records.irohOperations(roomId).size,
+            peerCount = peers.irohPeerCount(roomId),
+            operationCount = records.irohOperationCount(roomId),
             conflict = conflict,
         )
     }

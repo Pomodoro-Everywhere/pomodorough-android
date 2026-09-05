@@ -329,6 +329,9 @@ private class InventoryPersistenceHarness(currentTimeMillis: () -> Long = { 1L }
     }
     private val recordDao = object : IrohRecordsDao {
         override suspend fun irohOperations(roomId: String) = records.values.toList()
+        override suspend fun irohOperationsCapped(roomId: String, limit: Int) =
+            records.values.toList().take(limit)
+        override suspend fun irohOperationCount(roomId: String) = records.size
         override suspend fun irohOperation(roomId: String, domain: String, operationId: String): IrohOperationEntity? {
             recordQueries += domain to operationId
             return records[domain to operationId]
@@ -370,6 +373,8 @@ private class RegistryPersistenceHarness : IrohRoomTransactionsDao {
     val persistence = IrohPeerRegistryPersistence(this)
 
     override suspend fun irohRooms(): List<IrohRoomEntity> = emptyList()
+    override suspend fun irohRoomsCapped(limit: Int): List<IrohRoomEntity> = emptyList()
+    override suspend fun irohRoomCount(): Int = 0
     override suspend fun irohRoom(roomId: String): IrohRoomEntity? = null
     override suspend fun preferredIrohRoom(): IrohRoomEntity? = null
     override suspend fun insertIrohRoom(room: IrohRoomEntity) { calls += "insertRoom" }
@@ -380,6 +385,10 @@ private class RegistryPersistenceHarness : IrohRoomTransactionsDao {
     override suspend fun irohPeers(roomId: String): List<IrohPeerEntity> {
         calls += "listPeers"
         return peers.toList()
+    }
+    override suspend fun irohPeersCapped(roomId: String, limit: Int): List<IrohPeerEntity> {
+        calls += "listPeers"
+        return peers.take(limit)
     }
     override suspend fun irohPeerCount(roomId: String): Int {
         calls += "peerCount"
