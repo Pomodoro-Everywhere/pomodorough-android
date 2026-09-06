@@ -37,7 +37,7 @@ class CIWorkflowTests(unittest.TestCase):
             workflow,
         )
         self.assertIn(
-            'CORE_SHA256: "b10a8f40a3a9220026a1bfe4224fd40ad4e9126260e8216ca7de5f8b303a58c9"',
+            'CORE_SHA256: "e83b0ed6905317368fd13b4aa8891a305df7132e33bbee1baca6f47056fc15f7"',
             workflow,
         )
         self.assertIn("repository: Pomodoro-Everywhere/pomodorough-core", workflow)
