@@ -70,6 +70,7 @@ properties when targeting another deployment:
 | --- | --- |
 | `POMODOROUGH_API_BASE_URL` | Base URL for authenticated API requests and the revision stream |
 | `POMODOROUGH_GOOGLE_SERVER_CLIENT_ID` | OAuth audience requested through Credential Manager |
+| `POMODOROUGH_SENTRY_DSN` | Sentry DSN for crash reporting and Session Replay; empty (default) disables Sentry |
 
 The API base URL should include the `/api/v1` path and omit a trailing slash.
 

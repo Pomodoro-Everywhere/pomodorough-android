@@ -10,6 +10,9 @@ val apiBaseUrl = providers.gradleProperty("POMODOROUGH_API_BASE_URL")
     .orElse("https://pomodorough.egigoka.me/api/v1")
 val googleServerClientId = providers.gradleProperty("POMODOROUGH_GOOGLE_SERVER_CLIENT_ID")
     .orElse("614768274539-5jrk37jie6415babe51ae4qiupif0m7v.apps.googleusercontent.com")
+val sentryDsn = providers.gradleProperty("POMODOROUGH_SENTRY_DSN")
+    .orElse(providers.environmentVariable("POMODOROUGH_SENTRY_DSN"))
+    .orElse("")
 val releaseStoreFile = providers.gradleProperty("POMODOROUGH_RELEASE_STORE_FILE")
     .orElse(providers.environmentVariable("POMODOROUGH_RELEASE_STORE_FILE"))
 val releaseStorePassword = providers.gradleProperty("POMODOROUGH_RELEASE_STORE_PASSWORD")
@@ -41,14 +44,17 @@ android {
         applicationId = "me.egigoka.pomodorough"
         minSdk = 26
         targetSdk = 36
-        versionCode = 28
-        versionName = "0.12.0"
+        versionCode = 29
+        versionName = "0.14.0"
 
         testInstrumentationRunner = if (requestedTestBuildType == "release") {
             "me.egigoka.pomodorough.releaseiroh.ReleaseIrohSmokeInstrumentation"
         } else "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "API_BASE_URL", "\"${apiBaseUrl.get().trimEnd('/')}\"")
         buildConfigField("String", "GOOGLE_SERVER_CLIENT_ID", "\"${googleServerClientId.get()}\"")
+        // Empty DSN disables Sentry; never commit a real DSN, pass it via
+        // -PPOMODOROUGH_SENTRY_DSN=..., the env var, or ~/.gradle/gradle.properties.
+        buildConfigField("String", "SENTRY_DSN", "\"${sentryDsn.get()}\"")
     }
 
     signingConfigs {
@@ -136,6 +142,11 @@ dependencies {
     implementation("computer.iroh:iroh-android:1.1.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.squareup.okhttp3:okhttp-sse:4.12.0")
+    // Pinned Sentry SDK for crash reporting + Session Replay. No Sentry Gradle
+    // plugin: the plugin injects a per-build UUID that would break the
+    // byte-identical release gate, so mapping upload stays a manual follow-up.
+    implementation("io.sentry:sentry-android:8.55.0")
+    implementation("io.sentry:sentry-compose-android:8.55.0")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.1")

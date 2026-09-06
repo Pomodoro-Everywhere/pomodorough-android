@@ -2,6 +2,7 @@ package me.egigoka.pomodorough
 
 import android.app.Application
 import computer.iroh.IrohAndroid
+import io.sentry.android.core.SentryAndroid
 import java.util.concurrent.TimeUnit
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -24,8 +25,26 @@ class PomodoroughApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        startCrashReporting()
         IrohAndroid.installAndroidContext(applicationContext)
         timerRepository = ApplicationDependencyGraph(this).createTimerRepository()
+    }
+
+    private fun startCrashReporting() {
+        val dsn = BuildConfig.SENTRY_DSN
+        if (dsn.isBlank()) {
+            return
+        }
+        SentryAndroid.init(this) { options ->
+            options.dsn = dsn
+            options.release = "${BuildConfig.VERSION_NAME}+${BuildConfig.VERSION_CODE}"
+            options.environment = "production"
+            options.sessionReplay.sessionSampleRate = 0.1
+            options.sessionReplay.onErrorSampleRate = 1.0
+            // Masking flags are setter-only on SentryReplayOptions.
+            options.sessionReplay.setMaskAllText(true)
+            options.sessionReplay.setMaskAllImages(true)
+        }
     }
 }
 
