@@ -18,6 +18,8 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Pomodorough"
         android:usesCleartextTraffic="false">
+        <!-- Disable Sentry auto-init provider: manual gated init in PomodoroughApplication runs only when a DSN is configured. -->
+        <meta-data android:name="io.sentry.auto-init" android:value="false" />
         <activity
             android:name=".MainActivity"
             android:exported="true">
