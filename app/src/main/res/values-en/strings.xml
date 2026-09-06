@@ -298,4 +298,5 @@
     <string name="reset_iroh_identity_and_rooms_description">This permanently deletes this device’s Iroh rooms, encrypted room secrets, peers, room metadata, operations, and conflicts. Previous on-device or cloud workspace is restored. Other devices’ copies are unchanged.</string>
     <string name="repair_endpoint">Repair endpoint</string>
     <string name="reset_iroh_identity">Reset Iroh identity</string>
+    <string name="version_label">Version %1$s</string>
 </resources>

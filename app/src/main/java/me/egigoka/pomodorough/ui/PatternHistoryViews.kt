@@ -117,6 +117,7 @@ import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.sin
 import kotlinx.coroutines.delay
+import me.egigoka.pomodorough.BuildConfig
 import me.egigoka.pomodorough.R
 import me.egigoka.pomodorough.data.AppState
 import me.egigoka.pomodorough.data.AuthStatus
@@ -142,6 +143,7 @@ internal fun PatternSection(
     onChangeDuration: (String, Int) -> Unit,
     onSetAutoStart: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
+    versionName: String = BuildConfig.VERSION_NAME,
 ) {
     val active = timer?.status == TimerStatus.Running || timer?.status == TimerStatus.Paused
     Column(modifier) {
@@ -150,6 +152,8 @@ internal fun PatternSection(
         PhaseCards(settings, mutationsEnabled && !active, onSelectPhase, onChangeDuration)
         Spacer(Modifier.height(12.dp))
         AutoStartBreaksCard(settings.autoStartBreaks, mutationsEnabled, onSetAutoStart)
+        Spacer(Modifier.height(12.dp))
+        VersionFooter(versionName = versionName)
     }
 }
 
