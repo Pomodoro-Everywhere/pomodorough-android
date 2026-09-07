@@ -6,9 +6,12 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
+import android.content.ContentResolver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioAttributes
+import android.net.Uri
 import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -89,13 +92,8 @@ internal class SystemTimerCompletionNotifier(
         ) return false
 
         val manager = appContext.getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(
-            NotificationChannel(
-                ChannelId,
-                appContext.getString(R.string.timer_complete_channel),
-                NotificationManager.IMPORTANCE_HIGH,
-            ),
-        )
+        val chime = completionChimeUri(appContext)
+        ensureCompletionChannel(manager, appContext, chime)
         val contentIntent = PendingIntent.getActivity(
             appContext,
             0,
@@ -115,6 +113,7 @@ internal class SystemTimerCompletionNotifier(
             .setContentTitle(appContext.getString(R.string.timer_complete_title))
             .setContentText(appContext.getString(R.string.timer_complete_body))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setSound(chime)
             .setContentIntent(contentIntent)
             .addAction(0, appContext.getString(R.string.stop_sound), stopSoundIntent)
             .build()
@@ -123,9 +122,33 @@ internal class SystemTimerCompletionNotifier(
         return true
     }
 
+    private fun completionChimeUri(context: Context): Uri = Uri.parse(
+        "${ContentResolver.SCHEME_ANDROID_RESOURCE}://${context.packageName}/${R.raw.completion_chime}",
+    )
+
+    private fun ensureCompletionChannel(
+        manager: NotificationManager,
+        context: Context,
+        chime: Uri,
+    ) {
+        val chimeAttributes = AudioAttributes.Builder()
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+            .build()
+        manager.deleteNotificationChannel(LegacyChannelId)
+        manager.createNotificationChannel(
+            NotificationChannel(
+                ChannelId,
+                context.getString(R.string.timer_complete_channel),
+                NotificationManager.IMPORTANCE_HIGH,
+            ).apply { setSound(chime, chimeAttributes) },
+        )
+    }
+
     companion object {
-        internal const val ChannelId = "timer-arrivals"
+        internal const val ChannelId = "timer-arrivals-v2"
         internal const val NotificationId = 25
+        private const val LegacyChannelId = "timer-arrivals"
 
         internal fun cancel(context: Context) {
             context.applicationContext
