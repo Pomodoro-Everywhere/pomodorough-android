@@ -12,6 +12,7 @@ class CrashReportingSilenceTest {
             "me/egigoka/pomodorough/data/TimerRepository.kt",
             "me/egigoka/pomodorough/data/iroh/IrohRoomOrchestration.kt",
             "me/egigoka/pomodorough/data/iroh/IrohEndpointLifecycle.kt",
+            "me/egigoka/pomodorough/data/iroh/IrohIncomingRpcHandler.kt",
         )
         var markers = 0
         files.forEach { relativePath ->

@@ -2,9 +2,24 @@ package me.egigoka.pomodorough.crash
 
 import io.sentry.Breadcrumb
 import io.sentry.SentryEvent
+import io.sentry.protocol.App
+import io.sentry.protocol.Device
+import io.sentry.protocol.Geo
+import io.sentry.protocol.Mechanism
 import io.sentry.protocol.Message
+import io.sentry.protocol.OperatingSystem
+import io.sentry.protocol.SentryStackFrame
+import io.sentry.protocol.SentryStackTrace
+import io.sentry.protocol.User
 
 object SentryScrubber {
+    // Residual coverage (A23): stacktrace frames/registers, User name/data/geo,
+    // and typed Device/App/Os contexts are scrubbed even though no app path
+    // writes secrets there. The app never calls Sentry.setUser and never puts
+    // invites, tokens, or emails into contexts; Device/App/Os values come from
+    // the Sentry Android SDK (hardware model, OS version, app build). The
+    // scrub below is defense in depth, pinned by SentryScrubberResidualsTest
+    // and SentryNoUserOrContextAuditTest.
     const val REDACTED = "[REDACTED]"
     const val REDACTED_EMAIL = "[REDACTED_EMAIL]"
     const val REDACTED_TOKEN = "[REDACTED_TOKEN]"
@@ -127,6 +142,46 @@ object SentryScrubber {
     private fun scrubEventExceptions(event: SentryEvent) {
         event.exceptions?.forEach { exception ->
             exception.value = scrubText(exception.value)
+            exception.module = scrubText(exception.module)
+            exception.stacktrace?.let(::scrubStackTrace)
+            exception.mechanism?.let(::scrubMechanism)
+        }
+    }
+
+    private fun scrubStackTrace(trace: SentryStackTrace) {
+        trace.frames?.forEach(::scrubFrame)
+        trace.registers?.toMap()?.forEach { (key, value) ->
+            trace.registers = trace.registers?.toMutableMap()?.also {
+                it[key] = scrubText(value) ?: REDACTED
+            }
+        }
+    }
+
+    private fun scrubFrame(frame: SentryStackFrame) {
+        frame.filename = scrubText(frame.filename)
+        frame.absPath = scrubText(frame.absPath)
+        frame.contextLine = scrubText(frame.contextLine)
+        frame.function = scrubText(frame.function)
+        frame.module = scrubText(frame.module)
+        frame.`package` = scrubText(frame.`package`)
+        frame.preContext = frame.preContext?.map { scrubText(it) ?: REDACTED }
+        frame.postContext = frame.postContext?.map { scrubText(it) ?: REDACTED }
+        frame.vars?.toMap()?.forEach { (key, value) ->
+            if (value == null) return@forEach
+            frame.vars = frame.vars?.toMutableMap()?.also {
+                it[key] = scrubAny(key, value) ?: REDACTED
+            }
+        }
+    }
+
+    private fun scrubMechanism(mechanism: Mechanism) {
+        mechanism.description = scrubText(mechanism.description)
+        mechanism.helpLink = scrubText(mechanism.helpLink)
+        mechanism.data?.toMap()?.forEach { (key, value) ->
+            if (value == null) return@forEach
+            mechanism.data = mechanism.data?.toMutableMap()?.also {
+                it[key] = scrubAny(key, value) ?: REDACTED
+            }
         }
     }
 
@@ -138,11 +193,51 @@ object SentryScrubber {
             val scrubbed = scrubAny(key, value)
             if (scrubbed !== value) contexts.put(key, scrubbed)
         }
+        contexts.device?.let(::scrubDevice)
+        contexts.app?.let(::scrubApp)
+        contexts.operatingSystem?.let(::scrubOperatingSystem)
+    }
+
+    private fun scrubDevice(device: Device) {
+        device.name = scrubText(device.name)
+        device.id = scrubText(device.id)
+        device.locale = scrubText(device.locale)
+        device.unknown?.toMap()?.forEach { (key, value) ->
+            if (value == null) return@forEach
+            device.unknown = device.unknown?.toMutableMap()?.also {
+                it[key] = scrubAny(key, value) ?: REDACTED
+            }
+        }
+    }
+
+    private fun scrubApp(app: App) {
+        app.viewNames = app.viewNames?.map { scrubText(it) ?: REDACTED }
+        app.unknown?.toMap()?.forEach { (key, value) ->
+            if (value == null) return@forEach
+            app.unknown = app.unknown?.toMutableMap()?.also {
+                it[key] = scrubAny(key, value) ?: REDACTED
+            }
+        }
+    }
+
+    private fun scrubOperatingSystem(os: OperatingSystem) {
+        os.name = scrubText(os.name)
+        os.version = scrubText(os.version)
+        os.build = scrubText(os.build)
+        os.kernelVersion = scrubText(os.kernelVersion)
+        os.rawDescription = scrubText(os.rawDescription)
+        os.unknown?.toMap()?.forEach { (key, value) ->
+            if (value == null) return@forEach
+            os.unknown = os.unknown?.toMutableMap()?.also {
+                it[key] = scrubAny(key, value) ?: REDACTED
+            }
+        }
     }
 
     private fun scrubEventThreads(event: SentryEvent) {
         event.threads?.forEach { thread ->
             thread.name = scrubText(thread.name)
+            thread.stacktrace?.let(::scrubStackTrace)
         }
     }
 
@@ -180,5 +275,30 @@ object SentryScrubber {
         user.username = user.username?.let { scrubText(it) }
         user.id = user.id?.let { scrubText(it) }
         user.ipAddress = REDACTED
+        user.name = user.name?.let { scrubText(it) }
+        user.geo?.let(::scrubGeo)
+        user.data?.toMap()?.forEach { (key, value) ->
+            user.data = user.data?.toMutableMap()?.also {
+                it[key] = scrubDataValue(key, value) ?: REDACTED
+            }
+        }
+        user.unknown?.toMap()?.forEach { (key, value) ->
+            if (value == null) return@forEach
+            user.unknown = user.unknown?.toMutableMap()?.also {
+                it[key] = scrubAny(key, value) ?: REDACTED
+            }
+        }
+    }
+
+    private fun scrubGeo(geo: Geo) {
+        geo.city = scrubText(geo.city)
+        geo.region = scrubText(geo.region)
+        geo.countryCode = scrubText(geo.countryCode)
+        geo.unknown?.toMap()?.forEach { (key, value) ->
+            if (value == null) return@forEach
+            geo.unknown = geo.unknown?.toMutableMap()?.also {
+                it[key] = scrubAny(key, value) ?: REDACTED
+            }
+        }
     }
 }

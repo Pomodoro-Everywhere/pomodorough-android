@@ -4,6 +4,7 @@ import computer.iroh.BiStream
 import computer.iroh.Connection
 import computer.iroh.Endpoint
 import computer.iroh.RecvStream
+import java.io.IOException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
@@ -11,6 +12,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.withTimeout
+import me.egigoka.pomodorough.crash.CrashReporter
 
 internal data class IrohIncomingRpcDependencies(
     val inventory: suspend (String, String?, Int) -> Pair<List<IrohInventoryEntry>, String?>,
@@ -61,7 +63,16 @@ internal class IrohIncomingRpcHandler(
                     handleIncoming(connection, owner)
                 } catch (error: CancellationException) {
                     throw error
-                } catch (_: Exception) {
+                } catch (error: IOException) {
+                    // expected-silent: inbound handshake from an untrusted peer failed
+                    // (network drop/reset); the half-open inbound is ignored and closed.
+                    runCatching { incoming.ignore() }
+                } catch (error: IllegalArgumentException) {
+                    // expected-silent: inbound handshake carried the wrong ALPN or a
+                    // malformed frame; the half-open inbound is ignored and closed.
+                    runCatching { incoming.ignore() }
+                } catch (error: Exception) {
+                    CrashReporter.report(error)
                     runCatching { incoming.ignore() }
                 } finally {
                     incoming.close()
@@ -82,7 +93,7 @@ internal class IrohIncomingRpcHandler(
         }
     }
 
-    private suspend fun handleIncoming(connection: Connection, owner: Long) {
+    internal suspend fun handleIncoming(connection: Connection, owner: Long) {
         try {
             val session = sessions.session()
             val context = session?.context
@@ -93,7 +104,16 @@ internal class IrohIncomingRpcHandler(
             serveAuthenticatedRequests(connection, context, owner)
         } catch (error: CancellationException) {
             throw error
-        } catch (_: Exception) {
+        } catch (error: IOException) {
+            // expected-silent: authenticated peer disconnected mid-stream;
+            // the connection is closed without a crash report.
+            transport.closeConnection(connection, "connection ended")
+        } catch (error: IllegalArgumentException) {
+            // expected-silent: authenticated peer sent a malformed request or
+            // violated the room/protocol invariant; the connection is closed.
+            transport.closeConnection(connection, "connection ended")
+        } catch (error: Exception) {
+            CrashReporter.report(error)
             transport.closeConnection(connection, "connection ended")
         } finally {
             connection.close()
@@ -116,12 +136,21 @@ internal class IrohIncomingRpcHandler(
         }
     }
 
-    private suspend fun readAuthenticatedRequest(
+    internal suspend fun readAuthenticatedRequest(
         recv: RecvStream,
         context: IrohServiceContext,
     ): IrohRpcMessage? = try {
         transport.readMessage(recv, context.roomSecret)
-    } catch (_: Exception) {
+    } catch (error: IOException) {
+        // expected-silent: untrusted peer sent a truncated frame or dropped the
+        // stream; the request is skipped without responding.
+        null
+    } catch (error: IllegalArgumentException) {
+        // expected-silent: untrusted peer sent an undecryptable or malformed
+        // frame; the request is skipped without responding.
+        null
+    } catch (error: Exception) {
+        CrashReporter.report(error)
         null
     }
 
