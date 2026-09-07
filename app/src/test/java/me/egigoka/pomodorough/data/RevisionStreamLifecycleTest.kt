@@ -11,6 +11,7 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import me.egigoka.pomodorough.crash.CrashReporter
 import me.egigoka.pomodorough.data.auth.AuthenticationRequired
 import okhttp3.Request
 import okhttp3.sse.EventSource
@@ -109,6 +110,57 @@ class RevisionStreamLifecycleTest {
         runCurrent()
         assertEquals(2, calls)
         lifecycle.shutdown()
+    }
+
+    @Test
+    fun transientIOExceptionStaysSilentWhileRetrying() = runTest {
+        val reported = mutableListOf<Throwable>()
+        val previous = CrashReporter.delegate
+        CrashReporter.delegate = reported::add
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        var calls = 0
+        val lifecycle = lifecycle(dispatcher) { listener ->
+            calls += 1
+            if (calls == 1) throw IOException("stream unavailable")
+            FakeEventSource("stream", listener, mutableListOf())
+        }
+        try {
+            lifecycle.onForeground()
+            runCurrent()
+            advanceTimeBy(5_000)
+            runCurrent()
+            assertEquals(2, calls)
+            assertTrue(reported.isEmpty())
+        } finally {
+            CrashReporter.delegate = previous
+            lifecycle.shutdown()
+        }
+    }
+
+    @Test
+    fun unexpectedOpenFailureIsReportedWhileRetrying() = runTest {
+        val reported = mutableListOf<Throwable>()
+        val previous = CrashReporter.delegate
+        CrashReporter.delegate = reported::add
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        var calls = 0
+        val lifecycle = lifecycle(dispatcher) { listener ->
+            calls += 1
+            if (calls == 1) throw IllegalStateException("stream invariant broken")
+            FakeEventSource("stream", listener, mutableListOf())
+        }
+        try {
+            lifecycle.onForeground()
+            runCurrent()
+            advanceTimeBy(5_000)
+            runCurrent()
+            assertEquals(2, calls)
+            assertEquals(1, reported.size)
+            assertTrue(reported.single() is IllegalStateException)
+        } finally {
+            CrashReporter.delegate = previous
+            lifecycle.shutdown()
+        }
     }
 
     @Test

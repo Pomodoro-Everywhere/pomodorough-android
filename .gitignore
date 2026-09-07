@@ -28,3 +28,9 @@ __pycache__/
 *.hprof
 google-services.json
 sentry.properties
+.env
+*.log
+keystore.properties
+secrets.properties
+*.p12
+*.pem

@@ -444,6 +444,7 @@ class TimerRepository(
     private suspend fun loadLocalInitialization(): LocalInitializationData? = try {
         timerStore.initialize()
     } catch (error: LocalDecodingException) {
+        // expected-silent: corrupted persisted state surfaces as blocked UI, not a crash.
         accountWorkspaceController.setDeletionAdmissionQuarantined(
             error.local.accountDeletionState != null,
         )
@@ -1595,12 +1596,14 @@ class TimerRepository(
         val refreshed = try {
             fetchTimedBootstrap()
         } catch (_: AuthenticationRequired) {
+            // expected-silent: session expiry surfaces as resolution error, not a crash.
             handleAuthenticationRequired(
                 identity,
                 "Session expired while refreshing remote history.",
             )
             return false
         } catch (error: Exception) {
+            // expected-silent: refresh failure surfaces as resolution error with retry, not a crash.
             actionMutex.withLock {
                 if (!isCurrent(identity)) return@withLock
                 historyResolution = historyResolution?.copy(
@@ -1652,6 +1655,7 @@ class TimerRepository(
         val request = try {
             stored.toRequestStrict()
         } catch (_: Exception) {
+            // expected-silent: corrupted saved resolution surfaces as corrupted UI, not a crash.
             return corruptPendingResolution()
         }
         if (request.strategy != strategy) {
@@ -1701,8 +1705,10 @@ class TimerRepository(
                 repreviewResolution = true,
             )
         } catch (_: AuthenticationRequired) {
+            // expected-silent: session expiry surfaces as corrupted recovery, not a crash.
             expireResolutionRecovery(identity)
         } catch (error: Exception) {
+            // expected-silent: recovery refresh failure surfaces as recovery error, not a crash.
             failResolutionRecovery(identity, error)
         }
     }
@@ -1869,8 +1875,10 @@ class TimerRepository(
             if (shouldSync) requestSync(force = true)
             if (foreground) centralizedSyncRuntime.requestRevisionOpen()
         } catch (error: BootstrapConflictException) {
+            // expected-silent: server conflict surfaces as resolution UI, not a crash.
             handleBootstrapConflict(identity, error)
         } catch (_: AuthenticationRequired) {
+            // expected-silent: session expiry surfaces as sign-in notice, not a crash.
             handleAuthenticationRequired(
                 identity,
                 "Session expired. Sign in again to retry the exact saved history choice.",
@@ -2215,6 +2223,7 @@ class TimerRepository(
                 ),
             )
         } catch (_: Exception) {
+            // expected-silent: corrupted saved resolution surfaces as corrupted UI, not a crash.
             corruptedResolutionState()
         }
     }
@@ -2427,6 +2436,7 @@ class TimerRepository(
             sharedCoreDispatch?.invoke("task.identity.v1", input)
                 ?: sharedCore.dispatch("task.identity.v1", input)
         } catch (error: SharedCoreException.Operation) {
+            // expected-silent: invalid task input surfaces as validation notice, not a crash.
             notice = appContext.getString(
                 R.string.task_must_contain_printable_text_and_fit_within_512_bytes,
             )
@@ -3112,6 +3122,7 @@ class TimerRepository(
             )
             TimerMutationReservation(stamps, uuids, uuids.last().toString())
         } catch (error: IllegalArgumentException) {
+            // expected-silent: clock out of bounds surfaces as blocked mutation, not a crash.
             mutationFailure = error.message ?: LocalClockRangeError
             notice = mutationFailure
             publish()

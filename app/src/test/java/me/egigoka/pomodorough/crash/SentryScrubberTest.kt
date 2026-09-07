@@ -4,6 +4,8 @@ import io.sentry.Breadcrumb
 import io.sentry.SentryEvent
 import io.sentry.protocol.Message
 import io.sentry.protocol.Request
+import io.sentry.protocol.SentryException
+import io.sentry.protocol.SentryThread
 import io.sentry.protocol.User
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -143,5 +145,84 @@ class SentryScrubberTest {
         assertEquals(SentryScrubber.REDACTED, event.request?.headers?.get("Authorization"))
         assertEquals("json", event.request?.headers?.get("Accept"))
         assertEquals(SentryScrubber.REDACTED_EMAIL, event.user?.email)
+    }
+
+    @Test
+    fun messageTemplateAndParamsLoseSecrets() {
+        val event = SentryEvent()
+        event.message = Message().apply {
+            message = "sync failed for ada@example.com"
+            formatted = "sync failed for ada@example.com"
+            params = listOf("ada@example.com", "pomodorough1SECRET99")
+        }
+        SentryScrubber.scrubEvent(event)
+        assertFalse(checkNotNull(event.message?.message).contains("ada@example.com"))
+        assertFalse(checkNotNull(event.message?.formatted).contains("ada@example.com"))
+        val params = checkNotNull(event.message?.params)
+        assertTrue(params.none { it.contains("ada@example.com") || it.contains("pomodorough1") })
+    }
+
+    @Test
+    fun exceptionValuesLoseSecrets() {
+        val event = SentryEvent()
+        event.exceptions = listOf(
+            SentryException().apply { value = "failed for ada@example.com token=secret" },
+        )
+        SentryScrubber.scrubEvent(event)
+        val value = checkNotNull(event.exceptions?.single()?.value)
+        assertFalse(value.contains("ada@example.com"))
+    }
+
+    @Test
+    fun contextsThreadsAndTransactionLoseSecrets() {
+        val event = SentryEvent().apply {
+            transaction = "sync ada@example.com"
+            contexts.put("room", "join pomodorough1SECRET99 now")
+            contexts.put("owner", "ada@example.com")
+            threads = listOf(SentryThread().apply { name = "worker ada@example.com" })
+        }
+        SentryScrubber.scrubEvent(event)
+        assertFalse(checkNotNull(event.transaction).contains("ada@example.com"))
+        assertFalse(checkNotNull(event.contexts["room"] as String).contains("pomodorough1"))
+        assertFalse(checkNotNull(event.contexts["owner"] as String).contains("ada@example.com"))
+        assertFalse(checkNotNull(event.threads?.single()?.name).contains("ada@example.com"))
+    }
+
+    @Test
+    fun requestBodiesAndEnvsLoseSecrets() {
+        val event = SentryEvent()
+        event.request = Request().apply {
+            url = "https://host/sync"
+            data = """{"token": "abc123", "note": "hi ada@example.com"}"""
+            fragment = "token=secret123"
+            envs = mapOf("Authorization" to "Bearer abcdefgh12345678", "Region" to "eu")
+        }
+        SentryScrubber.scrubEvent(event)
+        assertFalse(checkNotNull(event.request?.data as String).contains("abc123"))
+        assertFalse(checkNotNull(event.request?.data as String).contains("ada@example.com"))
+        assertFalse(checkNotNull(event.request?.fragment).contains("secret123"))
+        assertEquals(SentryScrubber.REDACTED, event.request?.envs?.get("Authorization"))
+        assertEquals("eu", event.request?.envs?.get("Region"))
+    }
+
+    @Test
+    fun nestedExtrasAndBreadcrumbDataLoseSecrets() {
+        val event = SentryEvent()
+        event.setExtra("payload", mapOf("invite" to "pomodorough1SECRET99", "count" to 3))
+        event.setExtra("history", listOf("ada@example.com", "clean"))
+        val crumb = Breadcrumb()
+        crumb.message = "clean"
+        crumb.setData("nested", mapOf("token" to "abc123", "ok" to true))
+        event.breadcrumbs = listOf(crumb)
+        SentryScrubber.scrubEvent(event)
+        val payload = checkNotNull(event.getExtra("payload") as Map<*, *>)
+        assertEquals(SentryScrubber.REDACTED, payload["invite"])
+        assertEquals(3, payload["count"])
+        val history = checkNotNull(event.getExtra("history") as List<*>)
+        assertFalse((history[0] as String).contains("ada@example.com"))
+        assertEquals("clean", history[1])
+        val nested = checkNotNull(event.breadcrumbs?.single()?.getData("nested") as Map<*, *>)
+        assertEquals(SentryScrubber.REDACTED, nested["token"])
+        assertEquals(true, nested["ok"])
     }
 }

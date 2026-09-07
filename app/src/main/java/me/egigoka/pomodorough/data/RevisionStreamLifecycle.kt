@@ -1,5 +1,6 @@
 package me.egigoka.pomodorough.data
 
+import java.io.IOException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
@@ -14,6 +15,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import me.egigoka.pomodorough.crash.CrashReporter
 import me.egigoka.pomodorough.data.auth.AuthenticationRequired
 import okhttp3.Response
 import okhttp3.sse.EventSource
@@ -128,7 +130,11 @@ internal class RevisionStreamLifecycle(
                 }
             } catch (error: CancellationException) {
                 throw error
-            } catch (_: Exception) {
+            } catch (error: IOException) {
+                // expected-silent: transient stream failure retries with backoff, not a crash.
+                if (signal == RevisionStreamSignal.Open) scheduleOpenRetry(generation)
+            } catch (error: Exception) {
+                CrashReporter.report(error)
                 if (signal == RevisionStreamSignal.Open) scheduleOpenRetry(generation)
             }
         }

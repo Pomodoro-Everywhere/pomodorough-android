@@ -38,7 +38,8 @@ object SentryScrubber {
         crumb.message = scrubText(crumb.message)
         val data = crumb.data.toMap()
         data.forEach { (key, value) ->
-            if (value is String) crumb.setData(key, scrubDataValue(key, value))
+            if (value == null) return@forEach
+            crumb.setData(key, scrubAny(key, value))
         }
         return crumb
     }
@@ -49,6 +50,10 @@ object SentryScrubber {
         scrubEventExtras(event)
         scrubEventRequest(event)
         scrubEventUser(event)
+        scrubEventExceptions(event)
+        scrubEventContexts(event)
+        scrubEventThreads(event)
+        scrubEventTransaction(event)
         event.breadcrumbs?.forEach(::scrubBreadcrumb)
         return event
     }
@@ -70,6 +75,21 @@ object SentryScrubber {
         return scrubText(value)
     }
 
+    private fun scrubAny(parentKey: String, value: Any?): Any? {
+        if (value == null) return null
+        if (isSensitiveKey(parentKey)) return REDACTED
+        return when (value) {
+            is String -> scrubDataValue(parentKey, value) ?: REDACTED
+            is Map<*, *> -> value.entries.associate { (childKey, childValue) ->
+                val key = childKey.toString()
+                key to scrubAny(key, childValue)
+            }
+            is Iterable<*> -> value.map { scrubAny(parentKey, it) }
+            is Array<*> -> value.map { scrubAny(parentKey, it) }
+            else -> value
+        }
+    }
+
     private fun isSensitiveKey(key: String): Boolean {
         val normalized = key.lowercase()
         return normalized.contains("token") ||
@@ -83,7 +103,11 @@ object SentryScrubber {
     private fun scrubEventMessage(event: SentryEvent) {
         val message: Message? = event.message
         if (message != null) {
+            message.message = scrubText(message.message)
             message.formatted = scrubText(message.formatted)
+            message.params?.let { params ->
+                message.params = params.map { scrubText(it) ?: REDACTED }
+            }
         }
     }
 
@@ -95,8 +119,35 @@ object SentryScrubber {
 
     private fun scrubEventExtras(event: SentryEvent) {
         event.extras?.toMap()?.forEach { (key, value) ->
-            if (value is String) event.setExtra(key, scrubDataValue(key, value) ?: REDACTED)
+            if (value == null) return@forEach
+            event.setExtra(key, scrubAny(key, value))
         }
+    }
+
+    private fun scrubEventExceptions(event: SentryEvent) {
+        event.exceptions?.forEach { exception ->
+            exception.value = scrubText(exception.value)
+        }
+    }
+
+    private fun scrubEventContexts(event: SentryEvent) {
+        val contexts = event.contexts ?: return
+        contexts.entrySet().toList().forEach { entry ->
+            val key = entry.key
+            val value = entry.value ?: return@forEach
+            val scrubbed = scrubAny(key, value)
+            if (scrubbed !== value) contexts.put(key, scrubbed)
+        }
+    }
+
+    private fun scrubEventThreads(event: SentryEvent) {
+        event.threads?.forEach { thread ->
+            thread.name = scrubText(thread.name)
+        }
+    }
+
+    private fun scrubEventTransaction(event: SentryEvent) {
+        event.transaction = scrubText(event.transaction)
     }
 
     private fun scrubEventRequest(event: SentryEvent) {
@@ -104,8 +155,20 @@ object SentryScrubber {
         request.url = scrubText(request.url)
         request.queryString = scrubText(request.queryString)
         request.cookies = scrubText(request.cookies)
+        request.fragment = request.fragment?.let { scrubText("?$it")?.removePrefix("?") }
+        request.data = scrubAny("data", request.data)
         request.headers?.toMap()?.forEach { (key, value) ->
             request.headers = request.headers?.toMutableMap()?.also {
+                it[key] = scrubDataValue(key, value) ?: REDACTED
+            }
+        }
+        request.envs?.toMap()?.forEach { (key, value) ->
+            request.envs = request.envs?.toMutableMap()?.also {
+                it[key] = scrubDataValue(key, value) ?: REDACTED
+            }
+        }
+        request.others?.toMap()?.forEach { (key, value) ->
+            request.others = request.others?.toMutableMap()?.also {
                 it[key] = scrubDataValue(key, value) ?: REDACTED
             }
         }

@@ -22,7 +22,7 @@ class CrashReportingSilenceTest {
                 assertSilentCatchBody(relativePath, lines, index)
             }
         }
-        assertTrue("expected-silent markers shrank to $markers, update this audit", markers >= 14)
+        assertTrue("expected-silent markers shrank to $markers, update this audit", markers >= 24)
     }
 
     private fun assertSilentCatchBody(relativePath: String, lines: List<String>, marker: Int) {
