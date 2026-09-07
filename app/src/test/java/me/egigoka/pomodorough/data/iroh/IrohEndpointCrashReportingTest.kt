@@ -45,6 +45,39 @@ class IrohEndpointCrashReportingTest {
         }
     }
 
+    @Test
+    fun vaultBindFailureStaysSilentAndRequestsRecovery() = runTest {
+        val reported = mutableListOf<Throwable>()
+        val previous = CrashReporter.delegate
+        CrashReporter.delegate = reported::add
+        val events = mutableListOf<IrohEndpointEvent>()
+        val lifecycle = IrohEndpointLifecycle(
+            FailingBinding(IrohSecretVaultException(IrohIdentityRecoveryKind.ENDPOINT_CORRUPTED)),
+            { events += it },
+            StandardTestDispatcher(testScheduler),
+        )
+        try {
+            val failure = runCatching {
+                lifecycle.start(
+                    IrohServiceContext("room", ByteArray(32) { 7 }, "device", null),
+                    true,
+                    { _, _ -> awaitCancellation() },
+                    { awaitCancellation() },
+                )
+            }.exceptionOrNull()
+            runCurrent()
+            assertTrue(failure is IrohSecretVaultException)
+            assertTrue(reported.isEmpty())
+            assertTrue(events.any {
+                it is IrohEndpointEvent.RecoveryRequired &&
+                    it.kind == IrohIdentityRecoveryKind.ENDPOINT_CORRUPTED
+            })
+        } finally {
+            CrashReporter.delegate = previous
+            lifecycle.close()
+        }
+    }
+
     private class FailingBinding(private val failure: Exception) : IrohEndpointBinding {
         override suspend fun bind(): Endpoint = throw failure
         override fun ticket(endpoint: Endpoint): String = error("unreachable")

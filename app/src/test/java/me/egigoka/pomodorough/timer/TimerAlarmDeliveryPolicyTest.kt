@@ -5,6 +5,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.sync.Mutex
@@ -215,6 +216,23 @@ class TimerAlarmDeliveryPolicyTest {
             )
             assertEquals(TimerAlarmDeliveryResult.CompletedWithoutNotification, policy.deliver())
             assertEquals(1, reported.size)
+        } finally {
+            CrashReporter.delegate = previous
+        }
+    }
+
+    @Test
+    fun cancellationStaysSilent() = runTest {
+        val reported = mutableListOf<Throwable>()
+        val previous = CrashReporter.delegate
+        CrashReporter.delegate = reported::add
+        try {
+            val policy = TimerAlarmDeliveryPolicy(
+                completion = ExpiredTimerCompleting { true },
+                notification = TimerCompletionNotifying { throw CancellationException("gone") },
+            )
+            assertEquals(TimerAlarmDeliveryResult.CompletedWithoutNotification, policy.deliver())
+            assertTrue(reported.isEmpty())
         } finally {
             CrashReporter.delegate = previous
         }

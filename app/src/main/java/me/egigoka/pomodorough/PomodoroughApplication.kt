@@ -3,13 +3,12 @@ package me.egigoka.pomodorough
 import android.app.Application
 import computer.iroh.IrohAndroid
 import io.sentry.android.core.SentryAndroid
-import io.sentry.SentryOptions
 import java.util.concurrent.TimeUnit
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import me.egigoka.pomodorough.core.SharedCore
 import me.egigoka.pomodorough.crash.CrashReportingConsent
-import me.egigoka.pomodorough.crash.SentryScrubber
+import me.egigoka.pomodorough.crash.CrashReportingInit
 import me.egigoka.pomodorough.data.TimerRepository
 import me.egigoka.pomodorough.data.api.PomodoroughApi
 import me.egigoka.pomodorough.data.auth.AuthRepository
@@ -39,15 +38,9 @@ class PomodoroughApplication : Application() {
             return
         }
         SentryAndroid.init(this) { options ->
-            options.dsn = dsn
             options.release = "${BuildConfig.VERSION_NAME}+${BuildConfig.VERSION_CODE}"
             options.environment = "production"
-            options.beforeSend =
-                SentryOptions.BeforeSendCallback { event, _ -> SentryScrubber.scrubEvent(event) }
-            options.beforeBreadcrumb =
-                SentryOptions.BeforeBreadcrumbCallback { crumb, _ ->
-                    SentryScrubber.scrubBreadcrumb(crumb)
-                }
+            CrashReportingInit.configure(options, dsn)
             options.sessionReplay.sessionSampleRate = 0.1
             options.sessionReplay.onErrorSampleRate = 1.0
             // Masking flags are setter-only on SentryReplayOptions.
