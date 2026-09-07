@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import me.egigoka.pomodorough.crash.CrashReporter
 import me.egigoka.pomodorough.data.local.IrohRoomEntity
 import me.egigoka.pomodorough.data.local.LocalStateEntity
 import me.egigoka.pomodorough.data.local.ReplicationSettingsEntity
@@ -303,6 +304,7 @@ internal class IrohRoomOrchestration(
 
     private suspend fun handleCreateFailure(roomId: String?, error: Exception) {
         if (error is IrohSecretVaultException) {
+            // expected-silent: vault recovery is reported through the recovery UI, not a crash.
             quarantineRecovery(error.recoveryKind)
             return
         }
@@ -410,6 +412,7 @@ internal class IrohRoomOrchestration(
 
     private suspend fun recoverPersistedRoute(error: Exception, fallbackMessage: String) {
         if (error is IrohSecretVaultException) {
+            // expected-silent: vault recovery is reported through the recovery UI, not a crash.
             quarantineRecovery(error.recoveryKind)
             return
         }
@@ -438,9 +441,11 @@ internal class IrohRoomOrchestration(
     } catch (error: CancellationException) {
         throw error
     } catch (error: IrohSecretVaultException) {
+        // expected-silent: vault recovery is reported through the recovery UI, not a crash.
         quarantineRecovery(error.recoveryKind)
         false
     } catch (error: Exception) {
+        CrashReporter.report(error)
         publish(service.state.value.copy(
             status = IrohConnectionStatus.UNAVAILABLE,
             message = error.message ?: "Iroh endpoint could not start",
@@ -497,9 +502,11 @@ internal class IrohRoomOrchestration(
         } catch (error: CancellationException) {
             throw error
         } catch (error: IrohSecretVaultException) {
+            // expected-silent: vault recovery is reported through the recovery UI, not a crash.
             quarantineRecovery(error.recoveryKind, failed = true)
             false
-        } catch (_: Exception) {
+        } catch (error: Exception) {
+            CrashReporter.report(error)
             publishRecovery(kind, failed = true)
             false
         }

@@ -166,6 +166,7 @@ internal fun NetworkSection(
         }
         network.invite?.let { RoomInviteCard(it, networkActionsEnabled, actions) }
         NetworkPrivacyCard()
+        CrashReportingCard()
     }
     if (confirmLeave) {
         LeaveRoomDialog(

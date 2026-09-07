@@ -23,6 +23,7 @@ import kotlinx.coroutines.launch
 import me.egigoka.pomodorough.MainActivity
 import me.egigoka.pomodorough.PomodoroughApplication
 import me.egigoka.pomodorough.R
+import me.egigoka.pomodorough.crash.CrashReporter
 import me.egigoka.pomodorough.data.CanonicalTimer
 import me.egigoka.pomodorough.data.TimerRepository
 import me.egigoka.pomodorough.data.TimerStatus
@@ -57,7 +58,8 @@ internal class TimerAlarmDeliveryPolicy(
             } else {
                 TimerAlarmDeliveryResult.CompletedWithoutNotification
             }
-        } catch (_: Exception) {
+        } catch (error: Exception) {
+            CrashReporter.report(error)
             TimerAlarmDeliveryResult.CompletedWithoutNotification
         }
     }
@@ -207,6 +209,7 @@ class TimerAlarmReceiver : BroadcastReceiver() {
                 }
             } catch (error: Exception) {
                 Log.e(Tag, "Could not finish expired timer", error)
+                CrashReporter.report(error)
             } finally {
                 pendingResult.finish()
             }

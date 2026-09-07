@@ -21,3 +21,10 @@ __pycache__/
 .ruff_cache/
 /.audit/*
 !/.audit/android-remediation.tsv
+.cxx/
+.externalNativeBuild/
+*.apk
+*.aab
+*.hprof
+google-services.json
+sentry.properties

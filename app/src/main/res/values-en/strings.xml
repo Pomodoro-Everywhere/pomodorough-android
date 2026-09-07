@@ -298,5 +298,7 @@
     <string name="reset_iroh_identity_and_rooms_description">This permanently deletes this device’s Iroh rooms, encrypted room secrets, peers, room metadata, operations, and conflicts. Previous on-device or cloud workspace is restored. Other devices’ copies are unchanged.</string>
     <string name="repair_endpoint">Repair endpoint</string>
     <string name="reset_iroh_identity">Reset Iroh identity</string>
+    <string name="crash_reporting_title">Crash reports</string>
+    <string name="crash_reporting_body">Sentry crash reports and session replay are on by default when the build includes a DSN. Reports are scrubbed of invites, tokens, emails, and credentials, and long IDs are truncated. Turning this off disables all Sentry uploads on this device.</string>
     <string name="version_label">Version %1$s</string>
 </resources>

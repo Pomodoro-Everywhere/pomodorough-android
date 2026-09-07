@@ -74,6 +74,25 @@ properties when targeting another deployment:
 
 The API base URL should include the `/api/v1` path and omit a trailing slash.
 
+## Crash reporting
+
+Release builds bake the Sentry DSN in at build time via `POMODOROUGH_SENTRY_DSN`
+(empty by default, which disables Sentry). When a DSN is present, crash
+reporting and Session Replay start automatically on launch.
+
+- Reporting is **on by default** and can be turned off per device in the
+  Network tab under **Crash reports**. The choice is stored in the
+  `pomodorough_crash_reporting` SharedPreferences file (`crash_reporting_enabled`,
+  default `true`) and is read before `SentryAndroid.init`, so opting out
+  disables all Sentry uploads.
+- Every event and breadcrumb passes through a scrubber that strips emails,
+  `Authorization`/`Bearer` credentials, `token` query and JSON values, and full
+  `pomodorough1…` room invites, and truncates long IDs to first-8/last-4.
+  Session Replay masks all text and images.
+- Never put a real DSN in `gradle.properties`. Pass it per build with
+  `-PPOMODOROUGH_SENTRY_DSN=...`, the `POMODOROUGH_SENTRY_DSN` environment
+  variable, or private `~/.gradle/gradle.properties`.
+
 ## Architecture
 
 | Package | Responsibility |
@@ -218,6 +237,14 @@ apksigner verify --verbose --print-certs app/build/outputs/apk/release/app-relea
 
 Keep Room schema JSON files under `app/schemas/` with every release so migration
 tests can validate upgrade paths.
+
+## Audio provenance
+
+`app/src/main/res/raw/completion_chime.wav` (mono 16-bit PCM at 48 kHz) plays the
+Westminster Quarters melody, which is in the public domain. The generator or
+tool that produced this particular recording is unknown: `unknown-recording —
+replace with first-party synth`. Until a first-party synthesized chime lands,
+keep this file and do not re-encode it without updating this note.
 
 ## Shared experience contract
 

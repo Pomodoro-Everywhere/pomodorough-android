@@ -10,6 +10,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.test.runTest
+import me.egigoka.pomodorough.crash.CrashReporter
 import me.egigoka.pomodorough.data.CanonicalTimer
 import me.egigoka.pomodorough.data.TimerStatus
 import org.junit.Assert.assertEquals
@@ -200,6 +201,23 @@ class TimerAlarmDeliveryPolicyTest {
 
         assertFalse(completed)
         assertEquals(0, finishCalls)
+    }
+
+    @Test
+    fun notificationFailureIsReportedToCrashReporter() = runTest {
+        val reported = mutableListOf<Throwable>()
+        val previous = CrashReporter.delegate
+        CrashReporter.delegate = reported::add
+        try {
+            val policy = TimerAlarmDeliveryPolicy(
+                completion = ExpiredTimerCompleting { true },
+                notification = TimerCompletionNotifying { throw IOException("sound failed") },
+            )
+            assertEquals(TimerAlarmDeliveryResult.CompletedWithoutNotification, policy.deliver())
+            assertEquals(1, reported.size)
+        } finally {
+            CrashReporter.delegate = previous
+        }
     }
 
     @Test

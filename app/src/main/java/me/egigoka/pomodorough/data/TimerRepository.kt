@@ -35,6 +35,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import me.egigoka.pomodorough.R
 import me.egigoka.pomodorough.core.SharedCore
 import me.egigoka.pomodorough.core.SharedCoreException
+import me.egigoka.pomodorough.crash.CrashReporter
 import me.egigoka.pomodorough.data.api.ApiException
 import me.egigoka.pomodorough.data.api.BootstrapConflictException
 import me.egigoka.pomodorough.data.api.BootstrapConflictKind
@@ -626,12 +627,15 @@ class TimerRepository(
             cancelSignInAttempt()
             throw error
         } catch (_: AuthenticationRequired) {
+            // expected-silent: session expiry surfaces as a sign-in notice, not a crash.
             identity?.let {
                 handleAuthenticationRequired(it, "Session expired during sign-in bootstrap.")
             }
         } catch (error: ProfileProtocolException) {
+            // expected-silent: malformed profile surfaces as a sign-in notice, not a crash.
             failSignIn(identity, error.message, clearCredentials = true)
         } catch (error: Exception) {
+            // expected-silent: network failure surfaces as a sign-in notice, not a crash.
             failSignIn(
                 identity,
                 error.message ?: appContext.getString(R.string.google_sign_in_did_not_complete),
@@ -1066,6 +1070,7 @@ class TimerRepository(
             auth.clear()
             scrubDeletedAccount(deletionGeneration)
         } catch (error: Exception) {
+            CrashReporter.report(error)
             if (local.accountDeletionState == AccountDeletionRemoteCommitted) {
                 runCatching { scrubDeletedAccount(deletionGeneration) }
                 return
@@ -1130,6 +1135,7 @@ class TimerRepository(
             }
             if (foreground) centralizedSyncRuntime.requestRevisionOpen()
         } catch (error: Exception) {
+            CrashReporter.report(error)
             actionMutex.withLock {
                 if (pendingAccountSwitch !== candidate) return@withLock
                 accountSwitch = accountSwitch?.copy(
@@ -1870,8 +1876,10 @@ class TimerRepository(
                 "Session expired. Sign in again to retry the exact saved history choice.",
             )
         } catch (error: ApiException) {
+            // expected-silent: server rejection surfaces as resolution UI, not a crash.
             handleResolutionApiFailure(identity, error)
         } catch (error: IOException) {
+            // expected-silent: offline failure surfaces as resolution retry, not a crash.
             failBootstrapResolution(
                 identity,
                 error.message ?: appContext.getString(
@@ -1879,6 +1887,7 @@ class TimerRepository(
                 ),
             )
         } catch (error: Exception) {
+            CrashReporter.report(error)
             failBootstrapResolution(
                 identity,
                 error.message ?: appContext.getString(
@@ -2005,15 +2014,19 @@ class TimerRepository(
             val bootstrap = fetchTimedBootstrap()
             completeAuthentication(profile, bootstrap.response, identity, bootstrap.clockSample)
         } catch (error: IOException) {
+            // expected-silent: offline failure surfaces as a bootstrap notice, not a crash.
             failProfileRestore(
                 identity,
                 error.message ?: appContext.getString(R.string.could_not_verify_signed_in_account),
             )
         } catch (_: AuthenticationRequired) {
+            // expected-silent: session expiry surfaces as a bootstrap notice, not a crash.
             handleAuthenticationRequired(identity, "Session expired while refreshing account bootstrap.")
         } catch (error: ProfileProtocolException) {
+            // expected-silent: malformed profile surfaces as a bootstrap notice, not a crash.
             failProfileRestore(identity, error.message, clearCredentials = true)
         } catch (error: Exception) {
+            // expected-silent: bootstrap failure surfaces as a notice with retry, not a crash.
             failProfileRestore(
                 identity,
                 error.message ?: appContext.getString(R.string.could_not_validate_account_bootstrap),
@@ -2944,6 +2957,7 @@ class TimerRepository(
     } catch (error: CancellationException) {
         throw error
     } catch (error: Exception) {
+        CrashReporter.report(error)
         val message = projectionFailureMessage(error)
         mutationFailure = message
         notice = message

@@ -17,6 +17,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import me.egigoka.pomodorough.crash.CrashReporter
 
 internal data class IrohEndpointSession(
     val endpoint: Endpoint,
@@ -161,9 +162,11 @@ internal class IrohEndpointLifecycle(
         return try {
             binding.bind()
         } catch (error: IrohSecretVaultException) {
+            // expected-silent: vault recovery is reported through the recovery UI, not a crash.
             onEvent(IrohEndpointEvent.RecoveryRequired(error.recoveryKind, nextContext.roomId))
             throw error
         } catch (error: Exception) {
+            CrashReporter.report(error)
             onEvent(IrohEndpointEvent.Status(
                 IrohConnectionStatus.UNAVAILABLE,
                 nextContext.roomId,
@@ -179,6 +182,7 @@ internal class IrohEndpointLifecycle(
     ): String = try {
         binding.ticket(bound)
     } catch (error: Exception) {
+        CrashReporter.report(error)
         runCatching { bound.shutdown() }
         bound.close()
         onEvent(IrohEndpointEvent.Status(
