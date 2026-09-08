@@ -364,6 +364,9 @@ internal class IrohRoomOrchestration(
     private suspend fun rollbackJoinedRoom(preparation: JoinPreparation?) {
         service.stop()
         if (preparation?.createdRoom == true) {
+            // A31: best-effort cleanup, stays silent. The join failure that
+            // triggered rollback is reported via recoverPersistedRoute below;
+            // a discard failure carries no new signal and must not mask it.
             runCatching { persistence.discardIncompleteInactiveRoom(preparation.roomId) }
         }
     }
@@ -396,6 +399,10 @@ internal class IrohRoomOrchestration(
         }
         val ticket = service.start(context, startPeriodicSync)
         if (!permitsEndpoint(owner)) {
+            // A31: quarantine raced start; stop is best-effort cleanup of a
+            // discarded endpoint and stays silent. Cancellation is the
+            // signal (not a crash); the quarantine itself is already
+            // published via permitsEndpoint/accountQuarantined.
             service.stop()
             throw CancellationException("Iroh endpoint stopped by account or lifecycle quarantine")
         }
@@ -540,6 +547,10 @@ internal class IrohRoomOrchestration(
         kind: IrohIdentityRecoveryKind,
         failed: Boolean = false,
     ) {
+        // A31: stop is quarantine teardown, not a new failure. Vault
+        // recovery surfaces via the recovery UI (identityRecovery state);
+        // a stop failure here propagates to the caller's existing
+        // CrashReporter path instead of reporting a second event.
         try {
             service.stop()
         } finally {

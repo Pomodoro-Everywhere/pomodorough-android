@@ -18,11 +18,14 @@ object SentryScrubber {
     // writes secrets there. A27 extends token query/JSON keys (secret,
     // cookie, session, api_key) plus `#` fragments. A28 redacts phone/IP in
     // free text and drops geo city/region outright. A29 scrubs identifying
-    // device hardware strings beyond truncation. The app never calls
-    // Sentry.setUser and never puts invites, tokens, or emails into
-    // contexts; Device/App/Os values come from the Sentry Android SDK
-    // (hardware model, OS version, app build). The scrub below is defense
-    // in depth, pinned by SentryScrubberResidualsTest
+    // device hardware strings beyond truncation. A30 hardens key filtering
+    // for bare `auth`/`private_key` plus neighboring bearer/ticket/dsn and
+    // Iroh device/peer/endpoint/room keys. A31 hardens free text for
+    // `;`-separated params, single-quoted JSON, and dot/base64url invites.
+    // The app never calls Sentry.setUser and never puts invites, tokens, or
+    // emails into contexts; Device/App/Os values come from the Sentry
+    // Android SDK (hardware model, OS version, app build). The scrub below
+    // is defense in depth, pinned by SentryScrubberResidualsTest
     // and SentryNoUserOrContextAuditTest.
     const val REDACTED = "[REDACTED]"
     const val REDACTED_EMAIL = "[REDACTED_EMAIL]"
@@ -37,11 +40,23 @@ object SentryScrubber {
 
     private val email = Regex("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")
     private val authScheme = Regex("(?i)\\b(Bearer|Basic)\\s+[A-Za-z0-9\\-._~+/=]+")
-    private val tokenQuery = Regex("(?i)([?&#](token|id_token|access_token|refresh_token|invite|code|secret|cookie|session|api_key|apikey)=)[^&\\s\"';]+")
+    // A31: `;` joins matrix-style params (`;token=…;other=1`); the value
+    // class already stops at `;`, so only the prefix needs it. Key list
+    // mirrors isSensitiveKey (plus `code`, which stays query/JSON-only so
+    // numeric `code: 7` diagnostics survive key filtering).
+    private val tokenQuery = Regex("(?i)([?&#;](token|id_token|access_token|refresh_token|invite|code|secret|cookie|session|api_key|apikey|auth|authorization|password|passwd|credential|private_key|privatekey|bearer|ticket|dsn|device|peer|endpoint|room)=)[^&\\s\"';]+")
     private val tokenJson = Regex(
-        "(?i)(\"(token|id_token|access_token|refresh_token|authorization|password|passwd|credential|secret|cookie|invite|session|api_key|apikey)\"\\s*:\\s*\")[^\"]+\"",
+        "(?i)(\"(token|id_token|access_token|refresh_token|authorization|password|passwd|credential|secret|cookie|invite|session|api_key|apikey|auth|private_key|privatekey|bearer|ticket|dsn|device|peer|endpoint|room|code)\"\\s*:\\s*\")[^\"]+\"",
     )
-    private val invite = Regex("pomodorough1[A-Za-z0-9]+")
+    // A31: single-quoted JSON (`{'token': 'abc'}`) from loose loggers;
+    // same key list as tokenJson, quote-agnostic on both key and value.
+    private val tokenJsonSingle = Regex(
+        "(?i)('(token|id_token|access_token|refresh_token|authorization|password|passwd|credential|secret|cookie|invite|session|api_key|apikey|auth|private_key|privatekey|bearer|ticket|dsn|device|peer|endpoint|room|code)'\\s*:\\s*')[^']+'",
+    )
+    // A31: invites are `pomodorough1.` + base64url (`A-Za-z0-9_-`); the dot
+    // is optional so pre-dot payloads still match. Strictly broader than
+    // the old `[A-Za-z0-9]+` tail.
+    private val invite = Regex("pomodorough1\\.?[A-Za-z0-9_-]+")
     // A28: direct peers learn IPs and phone numbers can sit in free text
     // where key filtering cannot see them. IPv6 first so mapped
     // `::ffff:1.2.3.4` drops as one unit.
@@ -60,6 +75,7 @@ object SentryScrubber {
         scrubbed = authScheme.replace(scrubbed, REDACTED_AUTHORIZATION)
         scrubbed = tokenQuery.replace(scrubbed, "$1$REDACTED_TOKEN")
         scrubbed = tokenJson.replace(scrubbed, "$1$REDACTED_TOKEN\"")
+        scrubbed = tokenJsonSingle.replace(scrubbed, "$1$REDACTED_TOKEN'")
         scrubbed = invite.replace(scrubbed, REDACTED_INVITE)
         // Truncation before phone/IP: UUID tails are long digit runs that
         // would otherwise match the phone candidate pattern.
@@ -124,6 +140,10 @@ object SentryScrubber {
 
     private fun scrubAny(parentKey: String, value: Any?): Any? {
         if (value == null) return null
+        // A31: typed contexts survive key filtering; `device` is sensitive
+        // as a data key but the typed `device`/`app`/`os` objects must reach
+        // their dedicated scrubbers below, not become REDACTED here.
+        if (value is Device || value is App || value is OperatingSystem) return value
         if (isSensitiveKey(parentKey)) return REDACTED
         return when (value) {
             is String -> scrubDataValue(parentKey, value) ?: REDACTED
@@ -139,17 +159,40 @@ object SentryScrubber {
 
     private fun isSensitiveKey(key: String): Boolean {
         val normalized = key.lowercase()
+        // A30: bare `auth` is a substring hit on purpose (covers `auth`,
+        // `authToken`, `clientAuth`; also matches `oauth`/`author`
+        // fail-closed: hiding a display name beats leaking a token).
+        // `private_key`/`privatekey` mirror the `api_key`/`apikey` pair
+        // (`privateKey` lowercases to `privatekey`). `bearer`/`ticket`/`dsn`
+        // close neighboring gaps (auth headers, Iroh endpoint tickets,
+        // Sentry DSNs). `code` stays query/JSON-only: mechanism `code: 7`
+        // diagnostics must survive, and substring `code` would also hide
+        // `encode`/`codec`/`errorcode`.
+        // A31: `device`/`peer`/`endpoint`/`room` are substring hits on
+        // purpose. IrohHello carries deviceId/endpointTicket/roomId
+        // (identifying or room-access-granting); over-filtering a display
+        // string beats leaking a route. `room` covers roomId/roomName.
         return normalized.contains("token") ||
             normalized.contains("authorization") ||
+            normalized.contains("auth") ||
+            normalized.contains("bearer") ||
             normalized.contains("invite") ||
+            normalized.contains("ticket") ||
+            normalized.contains("dsn") ||
             normalized.contains("cookie") ||
             normalized.contains("secret") ||
+            normalized.contains("private_key") ||
+            normalized.contains("privatekey") ||
             normalized.contains("session") ||
             normalized.contains("api_key") ||
             normalized.contains("apikey") ||
             normalized.contains("password") ||
             normalized.contains("passwd") ||
             normalized.contains("credential") ||
+            normalized.contains("device") ||
+            normalized.contains("peer") ||
+            normalized.contains("endpoint") ||
+            normalized.contains("room") ||
             normalized == "email"
     }
 
@@ -165,6 +208,10 @@ object SentryScrubber {
     }
 
     private fun scrubEventTags(event: SentryEvent) {
+        // A31: this is the only app `setTag` write; values pass through
+        // scrubDataValue so sensitive keys stay opaque. No production file
+        // outside `crash/` calls `setTag`/`configureScope` (pinned by
+        // SentryNoUserOrContextAuditTest); the SDK never adds tags itself.
         event.tags?.toMap()?.forEach { (key, value) ->
             event.setTag(key, scrubDataValue(key, value) ?: REDACTED)
         }
@@ -242,6 +289,10 @@ object SentryScrubber {
         device.locale = scrubText(device.locale)
         // A29: identifying hardware strings are user-visible in crash
         // reports; truncation alone leaks prefix/suffix, so scrub them.
+        // A31: model strings can embed invites/tokens/IPs/phones from
+        // pairing logs; scrubText keeps clean models (`Pixel 8`) while
+        // redacting embedded secrets. `device`/`model` keys stay opaque
+        // via isSensitiveKey when they appear as data keys.
         device.manufacturer = scrubText(device.manufacturer)
         device.brand = scrubText(device.brand)
         device.family = scrubText(device.family)

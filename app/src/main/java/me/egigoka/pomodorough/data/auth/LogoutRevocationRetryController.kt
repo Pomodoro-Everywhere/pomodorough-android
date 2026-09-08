@@ -55,7 +55,12 @@ internal class LogoutRevocationRetryController(
         } catch (error: CancellationException) {
             throw error
         } catch (_: Exception) {
-            // Pending obligation is durable retry state; next attempt uses bounded backoff.
+            // A31: stays silent by intent, no CrashReporter. Pending logout
+            // is durable retry state (survives restart via TokenVault); every
+            // transient network/auth failure retries with bounded backoff
+            // above. Reporting each would spam Sentry with peer/offline
+            // noise and no app-bug signal; terminal outcome surfaces via
+            // hasPendingLogout UI, not a crash.
         }
     }
 }

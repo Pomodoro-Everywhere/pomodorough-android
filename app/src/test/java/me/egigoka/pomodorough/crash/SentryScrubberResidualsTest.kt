@@ -208,4 +208,36 @@ class SentryScrubberResidualsTest {
         assertTrue(checkNotNull(device.archs).none { it?.contains("ada@example.com") == true })
         assertTrue(checkNotNull(device.archs).contains("arm64"))
     }
+
+    @Test
+    fun devicePeerEndpointRoomKeysStayOpaque() {
+        val event = SentryEvent()
+        event.setExtra("deviceId", "device-secret")
+        event.setExtra("peerId", "peer-secret")
+        event.setExtra("roomId", "room-secret")
+        event.setExtra("deviceModel", "Pixel 8")
+        event.setExtra("retryCount", 3)
+        SentryScrubber.scrubEvent(event)
+        assertEquals(SentryScrubber.REDACTED, event.getExtra("deviceId"))
+        assertEquals(SentryScrubber.REDACTED, event.getExtra("peerId"))
+        assertEquals(SentryScrubber.REDACTED, event.getExtra("roomId"))
+        assertEquals(SentryScrubber.REDACTED, event.getExtra("deviceModel"))
+        assertEquals(3, event.getExtra("retryCount"))
+    }
+
+    @Test
+    fun dottedDeviceModelInviteLosesPayload() {
+        val event = SentryEvent()
+        event.contexts.setDevice(
+            Device().apply {
+                model = "join pomodorough1.eyJ2IjoxLCJyb29tSWQiOiJhYmMifQ-_8"
+                modelId = "https://host/sync;auth=auth-secret"
+            },
+        )
+        SentryScrubber.scrubEvent(event)
+        val device = event.contexts.device!!
+        assertFalse(checkNotNull(device.model).contains("pomodorough1"))
+        assertFalse(checkNotNull(device.model).contains("eyJ2Ijox"))
+        assertFalse(checkNotNull(device.modelId).contains("auth-secret"))
+    }
 }

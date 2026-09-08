@@ -26,6 +26,35 @@ class GitignoreSecretsTest {
         assertTrue("tracked env files would leak secrets: $tracked", tracked.isEmpty())
     }
 
+    @Test
+    fun editorAndMergeArtifactsAreIgnored() {
+        val lines = gitignoreLines()
+        assertTrue("expected `.vscode/` rule", lines.contains(".vscode/"))
+        assertTrue("expected `*.orig` rule", lines.contains("*.orig"))
+        assertTrue("expected `*.swp` rule", lines.contains("*.swp"))
+        val root = requireNotNull(gitignoreFile().parentFile) { "gitignore parent" }
+        listOf(
+            ".vscode/settings.json",
+            "src/.vscode/settings.json",
+            "merge.orig",
+            "src/merge.orig",
+            "notes.swp",
+            "src/notes.swp",
+        ).forEach { sample ->
+            assertTrue("$sample must be ignored", isIgnoredByGit(root, sample))
+        }
+        val tracked = gitLsFiles(root).filter { path ->
+            path.contains(".vscode/") || path.endsWith(".orig") || path.endsWith(".swp")
+        }
+        assertTrue("tracked editor artifacts would leak: $tracked", tracked.isEmpty())
+    }
+
+    private fun isIgnoredByGit(root: File, path: String): Boolean {
+        // A31: proof via real gitignore semantics, not hand-rolled matching.
+        val process = ProcessBuilder("git", "check-ignore", "-q", path).directory(root).start()
+        return process.waitFor() == 0
+    }
+
     private fun isIgnored(lines: List<String>, path: String): Boolean {
         val name = path.substringAfterLast('/')
         return lines.any { rule ->

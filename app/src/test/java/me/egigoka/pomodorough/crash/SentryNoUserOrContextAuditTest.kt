@@ -41,6 +41,39 @@ class SentryNoUserOrContextAuditTest {
             line.contains("contexts.app =")
     }
 
+    @Test
+    fun appNeverWritesTagsOrScopesOutsideScrubber() {
+        val root = productionRoot()
+        val offenders = mutableListOf<String>()
+        root.walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .filter { "me/egigoka/pomodorough/crash/" !in it.path }
+            .forEach { file ->
+                file.readLines().forEachIndexed { index, line ->
+                    if (isTagOrScopeWrite(line)) {
+                        offenders += "${file.relativeTo(root)}:${index + 1}: $line"
+                    }
+                }
+            }
+        assertTrue(
+            "app must not write Sentry tags or scopes outside crash/ " +
+                "(only SentryScrubber.setTag is audited): $offenders",
+            offenders.isEmpty(),
+        )
+    }
+
+    private fun isTagOrScopeWrite(line: String): Boolean {
+        val trimmed = line.trim()
+        if (trimmed.startsWith("//")) return false
+        // A31: setTag/configureScope audit. SentryScrubber.setTag is the
+        // single allowed writer (inside crash/, filtered above) and its
+        // values pass through scrubDataValue. No app path configures scope.
+        return line.contains("Sentry.setTag(") ||
+            line.contains(".setTag(") ||
+            line.contains("Sentry.configureScope") ||
+            line.contains("configureScope(")
+    }
+
     private fun productionRoot(): File {
         val root = sequenceOf(File("src/main/java"), File("app/src/main/java"))
             .firstOrNull(File::isDirectory)

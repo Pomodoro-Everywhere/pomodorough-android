@@ -195,4 +195,93 @@ class SentryScrubberAdversarialTest {
         assertFalse(scrubbed.contains("10.0.0.8"))
         assertFalse(scrubbed.contains("pomodorough1"))
     }
+
+    @Test
+    fun bareAuthAndPrivateKeyKeysStayOpaque() {
+        val event = SentryEvent()
+        event.setExtra("auth", "auth-secret")
+        event.setExtra("AuthToken", "token-secret")
+        event.setExtra("private_key", "key-secret")
+        event.setExtra("privateKey", "key-secret")
+        event.setExtra("bearer", "bearer-secret")
+        event.setExtra("endpointTicket", "ticket-secret")
+        event.setExtra("sentryDsn", "https://x@y/1")
+        event.setExtra("retryCount", 3)
+        val crumb = Breadcrumb()
+        crumb.message = "sign-in"
+        crumb.setData("clientAuth", "auth-secret")
+        crumb.setData("roomSecret", "room-secret")
+        crumb.setData("attempt", 1)
+        event.breadcrumbs = listOf(crumb)
+        SentryScrubber.scrubEvent(event)
+        assertEquals(SentryScrubber.REDACTED, event.getExtra("auth"))
+        assertEquals(SentryScrubber.REDACTED, event.getExtra("AuthToken"))
+        assertEquals(SentryScrubber.REDACTED, event.getExtra("private_key"))
+        assertEquals(SentryScrubber.REDACTED, event.getExtra("privateKey"))
+        assertEquals(SentryScrubber.REDACTED, event.getExtra("bearer"))
+        assertEquals(SentryScrubber.REDACTED, event.getExtra("endpointTicket"))
+        assertEquals(SentryScrubber.REDACTED, event.getExtra("sentryDsn"))
+        assertEquals(3, event.getExtra("retryCount"))
+        val scrubbedCrumb = event.breadcrumbs!!.single()
+        assertEquals(SentryScrubber.REDACTED, scrubbedCrumb.getData("clientAuth"))
+        assertEquals(SentryScrubber.REDACTED, scrubbedCrumb.getData("roomSecret"))
+        assertEquals(1, scrubbedCrumb.getData("attempt"))
+    }
+
+    @Test
+    fun semicolonQueryParametersKeepKeyButLoseValue() {
+        val scrubbed = checkNotNull(
+            SentryScrubber.scrubText(
+                "https://host/sync?token=abc123;auth=auth-secret;other=1",
+            ),
+        )
+        assertTrue(scrubbed.contains("token="))
+        assertTrue(scrubbed.contains("auth="))
+        assertFalse(scrubbed.contains("abc123"))
+        assertFalse(scrubbed.contains("auth-secret"))
+        assertTrue(scrubbed.contains("other=1"))
+        val leading = checkNotNull(
+            SentryScrubber.scrubText("https://host/sync;session=sess99;other=1"),
+        )
+        assertTrue(leading.contains("session="))
+        assertFalse(leading.contains("sess99"))
+        assertTrue(leading.contains("other=1"))
+    }
+
+    @Test
+    fun singleAndDoubleQuotedJsonValuesAreStripped() {
+        val doubleScrubbed = checkNotNull(
+            SentryScrubber.scrubText("""{"auth": "auth-secret", "ok": true}"""),
+        )
+        assertFalse(doubleScrubbed.contains("auth-secret"))
+        val singleScrubbed = checkNotNull(
+            SentryScrubber.scrubText("{'token': 'abc123', 'auth': 'auth-secret', 'ok': true}"),
+        )
+        assertFalse(singleScrubbed.contains("abc123"))
+        assertFalse(singleScrubbed.contains("auth-secret"))
+        assertTrue(singleScrubbed.contains(SentryScrubber.REDACTED_TOKEN))
+        val privateScrubbed = checkNotNull(
+            SentryScrubber.scrubText("{'private_key': 'key-secret', 'ok': true}"),
+        )
+        assertFalse(privateScrubbed.contains("key-secret"))
+    }
+
+    @Test
+    fun dottedInviteWithBase64UrlTailIsFullyRedacted() {
+        val dotted = "pomodorough1.eyJ2IjoxLCJyb29tSWQiOiJhYmMifQ-_8"
+        val scrubbed = checkNotNull(SentryScrubber.scrubText("join $dotted now"))
+        assertFalse(scrubbed.contains("pomodorough1"))
+        assertFalse(scrubbed.contains("eyJ2Ijox"))
+        assertTrue(scrubbed.contains(SentryScrubber.REDACTED_INVITE))
+        val legacy = checkNotNull(
+            SentryScrubber.scrubText("join pomodorough1SECRET99 now"),
+        )
+        assertFalse(legacy.contains("pomodorough1"))
+        val query = checkNotNull(
+            SentryScrubber.scrubText("https://host/join?invite=$dotted&other=1"),
+        )
+        assertTrue(query.contains("invite="))
+        assertFalse(query.contains("eyJ2Ijox"))
+        assertTrue(query.contains("other=1"))
+    }
 }

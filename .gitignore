@@ -35,3 +35,6 @@ keystore.properties
 secrets.properties
 *.p12
 *.pem
+.vscode/
+*.orig
+*.swp
