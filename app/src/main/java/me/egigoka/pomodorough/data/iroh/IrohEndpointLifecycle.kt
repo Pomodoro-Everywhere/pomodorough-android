@@ -183,6 +183,9 @@ internal class IrohEndpointLifecycle(
         binding.ticket(bound)
     } catch (error: Exception) {
         CrashReporter.report(error)
+        // expected-silent: shutdown is best-effort cleanup of a discarded
+        // endpoint. The ticket failure above is already reported and close()
+        // always runs next, so a shutdown failure carries no new signal.
         runCatching { bound.shutdown() }
         bound.close()
         onEvent(IrohEndpointEvent.Status(
@@ -231,6 +234,9 @@ internal class IrohEndpointLifecycle(
         endpointTicket = null
         context = null
         if (closing != null) {
+            // expected-silent: stop is routine lifecycle teardown. Shutdown is
+            // best-effort and close() always runs next, so a shutdown failure
+            // here carries no new signal beyond the stop itself.
             runCatching { closing.shutdown() }
             closing.close()
         }

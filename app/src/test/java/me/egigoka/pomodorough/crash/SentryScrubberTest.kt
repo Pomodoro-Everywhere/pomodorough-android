@@ -86,7 +86,7 @@ class SentryScrubberTest {
         val long = "550e8400-e29b-41d4-a716-446655440000"
         val scrubbed = checkNotNull(SentryScrubber.scrubText("room $long opened"))
         assertFalse(scrubbed.contains(long))
-        assertTrue(scrubbed.contains("550e8400"))
+        assertEquals("room 550e…00 opened", scrubbed)
         assertEquals("timer-1", SentryScrubber.scrubText("timer-1"))
     }
 

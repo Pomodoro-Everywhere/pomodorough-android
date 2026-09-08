@@ -1073,7 +1073,7 @@ class TimerRepository(
         } catch (error: Exception) {
             CrashReporter.report(error)
             if (local.accountDeletionState == AccountDeletionRemoteCommitted) {
-                runCatching { scrubDeletedAccount(deletionGeneration) }
+                retryCommittedAccountScrub({ scrubDeletedAccount(deletionGeneration) })
                 return
             }
             actionMutex.withLock {

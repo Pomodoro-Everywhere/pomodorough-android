@@ -1,6 +1,7 @@
 package me.egigoka.pomodorough.data.iroh
 
 import computer.iroh.Endpoint
+import computer.iroh.NoHandle
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -8,6 +9,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import me.egigoka.pomodorough.crash.CrashReporter
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -81,5 +83,51 @@ class IrohEndpointCrashReportingTest {
     private class FailingBinding(private val failure: Exception) : IrohEndpointBinding {
         override suspend fun bind(): Endpoint = throw failure
         override fun ticket(endpoint: Endpoint): String = error("unreachable")
+    }
+
+    @Test
+    fun ticketFailureReportsOnceWhenShutdownAlsoFails() = runTest {
+        val reported = mutableListOf<Throwable>()
+        val previous = CrashReporter.delegate
+        CrashReporter.delegate = reported::add
+        val events = mutableListOf<IrohEndpointEvent>()
+        val ticketFailure = RuntimeException("ticket failed")
+        val lifecycle = IrohEndpointLifecycle(
+            TicketFailingBinding(IrohShutdownFailingEndpoint(), ticketFailure),
+            { events += it },
+            StandardTestDispatcher(testScheduler),
+        )
+        try {
+            val failure = runCatching {
+                lifecycle.start(
+                    IrohServiceContext("room", ByteArray(32) { 7 }, "device", null),
+                    false,
+                    { _, _ -> awaitCancellation() },
+                    { awaitCancellation() },
+                )
+            }.exceptionOrNull()
+            runCurrent()
+            assertSame(ticketFailure, failure)
+            assertEquals(listOf(ticketFailure), reported)
+            assertTrue(events.any {
+                it is IrohEndpointEvent.Status && it.status == IrohConnectionStatus.UNAVAILABLE
+            })
+        } finally {
+            CrashReporter.delegate = previous
+            lifecycle.close()
+        }
+    }
+
+    private class TicketFailingBinding(
+        private val endpoint: Endpoint,
+        private val failure: Exception,
+    ) : IrohEndpointBinding {
+        override suspend fun bind(): Endpoint = endpoint
+        override fun ticket(endpoint: Endpoint): String = throw failure
+    }
+
+    private class IrohShutdownFailingEndpoint : Endpoint(NoHandle) {
+        override suspend fun shutdown(): Unit = throw RuntimeException("shutdown failed")
+        override fun isClosed() = false
     }
 }

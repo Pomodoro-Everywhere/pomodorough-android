@@ -50,11 +50,49 @@ class CrashReporterTest {
     @Test
     fun delegateFailureDoesNotThrow() {
         val previous = CrashReporter.delegate
+        val previousHook = CrashReporter.onReporterFailure
         CrashReporter.delegate = { throw RuntimeException("sentry down") }
+        CrashReporter.onReporterFailure = null
         try {
             CrashReporter.report(RuntimeException("boom"))
         } finally {
             CrashReporter.delegate = previous
+            CrashReporter.onReporterFailure = previousHook
+        }
+    }
+
+    @Test
+    fun delegateFailureReachesFallbackHook() {
+        val previous = CrashReporter.delegate
+        val previousHook = CrashReporter.onReporterFailure
+        val failures = mutableListOf<Pair<Throwable, Throwable>>()
+        CrashReporter.delegate = { throw RuntimeException("sentry down") }
+        CrashReporter.onReporterFailure = { original, failure ->
+            failures += original to failure
+        }
+        try {
+            val original = RuntimeException("boom")
+            CrashReporter.report(original)
+            assertEquals(1, failures.size)
+            assertTrue(failures.single().first === original)
+            assertEquals("sentry down", failures.single().second.message)
+        } finally {
+            CrashReporter.delegate = previous
+            CrashReporter.onReporterFailure = previousHook
+        }
+    }
+
+    @Test
+    fun fallbackHookFailureDoesNotThrow() {
+        val previous = CrashReporter.delegate
+        val previousHook = CrashReporter.onReporterFailure
+        CrashReporter.delegate = { throw RuntimeException("sentry down") }
+        CrashReporter.onReporterFailure = { _, _ -> throw RuntimeException("hook down") }
+        try {
+            CrashReporter.report(RuntimeException("boom"))
+        } finally {
+            CrashReporter.delegate = previous
+            CrashReporter.onReporterFailure = previousHook
         }
     }
 }

@@ -25,15 +25,15 @@ object SentryScrubber {
     const val REDACTED_TOKEN = "[REDACTED_TOKEN]"
     const val REDACTED_INVITE = "[REDACTED_INVITE]"
     const val REDACTED_AUTHORIZATION = "[REDACTED_AUTHORIZATION]"
-    const val MAX_ID_VISIBLE_PREFIX = 8
-    const val MAX_ID_VISIBLE_SUFFIX = 4
+    const val MAX_ID_VISIBLE_PREFIX = 4
+    const val MAX_ID_VISIBLE_SUFFIX = 2
     const val MIN_ID_LENGTH_TO_TRUNCATE = 20
 
     private val email = Regex("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")
     private val authScheme = Regex("(?i)\\b(Bearer|Basic)\\s+[A-Za-z0-9\\-._~+/=]+")
-    private val tokenQuery = Regex("(?i)([?&](token|id_token|access_token|refresh_token)=)[^&\\s]+")
+    private val tokenQuery = Regex("(?i)([?&](token|id_token|access_token|refresh_token|invite|code)=)[^&\\s]+")
     private val tokenJson = Regex(
-        "(?i)(\"(token|id_token|access_token|refresh_token|authorization)\"\\s*:\\s*\")[^\"]+\"",
+        "(?i)(\"(token|id_token|access_token|refresh_token|authorization|password|passwd|credential)\"\\s*:\\s*\")[^\"]+\"",
     )
     private val invite = Regex("pomodorough1[A-Za-z0-9]+")
     private val longId = Regex("(?<!\\[)\\b[A-Za-z0-9_-]{20,}\\b(?!\\])")
@@ -112,6 +112,9 @@ object SentryScrubber {
             normalized.contains("invite") ||
             normalized.contains("cookie") ||
             normalized.contains("secret") ||
+            normalized.contains("password") ||
+            normalized.contains("passwd") ||
+            normalized.contains("credential") ||
             normalized == "email"
     }
 
