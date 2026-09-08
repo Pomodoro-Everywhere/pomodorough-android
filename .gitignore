@@ -29,6 +29,7 @@ __pycache__/
 google-services.json
 sentry.properties
 .env
+.env.*
 *.log
 keystore.properties
 secrets.properties

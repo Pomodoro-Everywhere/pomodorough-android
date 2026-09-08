@@ -127,8 +127,7 @@ class SentryScrubberResidualsTest {
             geo = Geo().apply {
                 city = "hi ada@example.com"
                 region = "clean"
-            }
-        }
+            }        }
         SentryScrubber.scrubEvent(event)
         val user = event.user!!
         assertEquals(SentryScrubber.REDACTED_EMAIL, user.email)
@@ -136,8 +135,8 @@ class SentryScrubberResidualsTest {
         assertFalse(user.id!!.contains("446655440000"))
         assertEquals(SentryScrubber.REDACTED, user.data!!["invite"])
         assertEquals("free", user.data!!["plan"])
-        assertFalse(user.geo!!.city!!.contains("ada@example.com"))
-        assertEquals("clean", user.geo!!.region)
+        assertEquals(SentryScrubber.REDACTED, user.geo!!.city)
+        assertEquals(SentryScrubber.REDACTED, user.geo!!.region)
     }
 
     @Test
@@ -167,5 +166,46 @@ class SentryScrubberResidualsTest {
         assertTrue(event.contexts.app!!.viewNames!!.contains("timer"))
         assertFalse(event.contexts.operatingSystem!!.rawDescription!!.contains("pomodorough1"))
         assertEquals("Android", event.contexts.operatingSystem!!.name)
+    }
+
+    @Test
+    fun cleanGeoCityAndRegionStillDrop() {
+        val event = SentryEvent()
+        event.user = User().apply {
+            geo = Geo().apply {
+                city = "Springfield"
+                region = "Illinois"
+                countryCode = "US"
+            }
+        }
+        SentryScrubber.scrubEvent(event)
+        assertEquals(SentryScrubber.REDACTED, event.user!!.geo!!.city)
+        assertEquals(SentryScrubber.REDACTED, event.user!!.geo!!.region)
+        assertEquals("US", event.user!!.geo!!.countryCode)
+    }
+
+    @Test
+    fun deviceHardwareStringsLoseSecretsBeyondTruncation() {
+        val event = SentryEvent()
+        event.contexts.setDevice(
+            Device().apply {
+                name = "Ada ada@example.com"
+                manufacturer = "sync ada@example.com"
+                brand = "join pomodorough1SECRET99"
+                family = "https://host/sync?token=secret123"
+                model = "call +1 415-555-1234"
+                modelId = "peer 192.168.1.10"
+                archs = arrayOf("arm64", "note ada@example.com")
+            },
+        )
+        SentryScrubber.scrubEvent(event)
+        val device = event.contexts.device!!
+        assertFalse(checkNotNull(device.manufacturer).contains("ada@example.com"))
+        assertFalse(checkNotNull(device.brand).contains("pomodorough1"))
+        assertFalse(checkNotNull(device.family).contains("secret123"))
+        assertFalse(checkNotNull(device.model).contains("415-555-1234"))
+        assertFalse(checkNotNull(device.modelId).contains("192.168.1.10"))
+        assertTrue(checkNotNull(device.archs).none { it?.contains("ada@example.com") == true })
+        assertTrue(checkNotNull(device.archs).contains("arm64"))
     }
 }

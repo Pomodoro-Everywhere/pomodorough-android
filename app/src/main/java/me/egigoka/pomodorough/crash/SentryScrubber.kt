@@ -15,27 +15,42 @@ import io.sentry.protocol.User
 object SentryScrubber {
     // Residual coverage (A23): stacktrace frames/registers, User name/data/geo,
     // and typed Device/App/Os contexts are scrubbed even though no app path
-    // writes secrets there. The app never calls Sentry.setUser and never puts
-    // invites, tokens, or emails into contexts; Device/App/Os values come from
-    // the Sentry Android SDK (hardware model, OS version, app build). The
-    // scrub below is defense in depth, pinned by SentryScrubberResidualsTest
+    // writes secrets there. A27 extends token query/JSON keys (secret,
+    // cookie, session, api_key) plus `#` fragments. A28 redacts phone/IP in
+    // free text and drops geo city/region outright. A29 scrubs identifying
+    // device hardware strings beyond truncation. The app never calls
+    // Sentry.setUser and never puts invites, tokens, or emails into
+    // contexts; Device/App/Os values come from the Sentry Android SDK
+    // (hardware model, OS version, app build). The scrub below is defense
+    // in depth, pinned by SentryScrubberResidualsTest
     // and SentryNoUserOrContextAuditTest.
     const val REDACTED = "[REDACTED]"
     const val REDACTED_EMAIL = "[REDACTED_EMAIL]"
     const val REDACTED_TOKEN = "[REDACTED_TOKEN]"
     const val REDACTED_INVITE = "[REDACTED_INVITE]"
     const val REDACTED_AUTHORIZATION = "[REDACTED_AUTHORIZATION]"
+    const val REDACTED_PHONE = "[REDACTED_PHONE]"
+    const val REDACTED_IP = "[REDACTED_IP]"
     const val MAX_ID_VISIBLE_PREFIX = 4
     const val MAX_ID_VISIBLE_SUFFIX = 2
     const val MIN_ID_LENGTH_TO_TRUNCATE = 20
 
     private val email = Regex("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")
     private val authScheme = Regex("(?i)\\b(Bearer|Basic)\\s+[A-Za-z0-9\\-._~+/=]+")
-    private val tokenQuery = Regex("(?i)([?&](token|id_token|access_token|refresh_token|invite|code)=)[^&\\s]+")
+    private val tokenQuery = Regex("(?i)([?&#](token|id_token|access_token|refresh_token|invite|code|secret|cookie|session|api_key|apikey)=)[^&\\s\"';]+")
     private val tokenJson = Regex(
-        "(?i)(\"(token|id_token|access_token|refresh_token|authorization|password|passwd|credential)\"\\s*:\\s*\")[^\"]+\"",
+        "(?i)(\"(token|id_token|access_token|refresh_token|authorization|password|passwd|credential|secret|cookie|invite|session|api_key|apikey)\"\\s*:\\s*\")[^\"]+\"",
     )
     private val invite = Regex("pomodorough1[A-Za-z0-9]+")
+    // A28: direct peers learn IPs and phone numbers can sit in free text
+    // where key filtering cannot see them. IPv6 first so mapped
+    // `::ffff:1.2.3.4` drops as one unit.
+    private val ipv4 = Regex("\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b")
+    private val ipv6 = Regex(
+        "(?i)(?<![0-9a-z:.])(?:[0-9a-f]{0,4}:){2,7}(?:[0-9a-f]{0,4}|(?:\\d{1,3}\\.){3}\\d{1,3})(?![0-9a-z:.])",
+    )
+    private val phoneCandidate = Regex("\\+?[0-9][0-9\\s\\-.()]{7,}[0-9]")
+    private val dateLike = Regex("^\\d{4}-\\d{2}-\\d{2}$")
     private val longId = Regex("(?<!\\[)\\b[A-Za-z0-9_-]{20,}\\b(?!\\])")
 
     fun scrubText(value: String?): String? {
@@ -46,7 +61,24 @@ object SentryScrubber {
         scrubbed = tokenQuery.replace(scrubbed, "$1$REDACTED_TOKEN")
         scrubbed = tokenJson.replace(scrubbed, "$1$REDACTED_TOKEN\"")
         scrubbed = invite.replace(scrubbed, REDACTED_INVITE)
-        return truncateLongIds(scrubbed)
+        // Truncation before phone/IP: UUID tails are long digit runs that
+        // would otherwise match the phone candidate pattern.
+        scrubbed = truncateLongIds(scrubbed)
+        scrubbed = scrubPhones(scrubbed)
+        scrubbed = ipv6.replace(scrubbed, REDACTED_IP)
+        scrubbed = ipv4.replace(scrubbed, REDACTED_IP)
+        return scrubbed
+    }
+
+    private fun scrubPhones(value: String): String = phoneCandidate.replace(value) { match ->
+        val candidate = match.value
+        if (isPhoneLike(candidate)) REDACTED_PHONE else candidate
+    }
+
+    private fun isPhoneLike(candidate: String): Boolean {
+        if (candidate.count(Char::isDigit) < 7) return false
+        if (dateLike.matches(candidate)) return false
+        return true
     }
 
     fun scrubBreadcrumb(crumb: Breadcrumb): Breadcrumb {
@@ -112,6 +144,9 @@ object SentryScrubber {
             normalized.contains("invite") ||
             normalized.contains("cookie") ||
             normalized.contains("secret") ||
+            normalized.contains("session") ||
+            normalized.contains("api_key") ||
+            normalized.contains("apikey") ||
             normalized.contains("password") ||
             normalized.contains("passwd") ||
             normalized.contains("credential") ||
@@ -205,6 +240,14 @@ object SentryScrubber {
         device.name = scrubText(device.name)
         device.id = scrubText(device.id)
         device.locale = scrubText(device.locale)
+        // A29: identifying hardware strings are user-visible in crash
+        // reports; truncation alone leaks prefix/suffix, so scrub them.
+        device.manufacturer = scrubText(device.manufacturer)
+        device.brand = scrubText(device.brand)
+        device.family = scrubText(device.family)
+        device.model = scrubText(device.model)
+        device.modelId = scrubText(device.modelId)
+        device.archs = device.archs?.map { scrubText(it) ?: REDACTED }?.toTypedArray()
         device.unknown?.toMap()?.forEach { (key, value) ->
             if (value == null) return@forEach
             device.unknown = device.unknown?.toMutableMap()?.also {
@@ -294,8 +337,10 @@ object SentryScrubber {
     }
 
     private fun scrubGeo(geo: Geo) {
-        geo.city = scrubText(geo.city)
-        geo.region = scrubText(geo.region)
+        // A28: city/region are precise location even when clean; drop them
+        // instead of passing them through free-text scrubbing.
+        if (geo.city != null) geo.city = REDACTED
+        if (geo.region != null) geo.region = REDACTED
         geo.countryCode = scrubText(geo.countryCode)
         geo.unknown?.toMap()?.forEach { (key, value) ->
             if (value == null) return@forEach
