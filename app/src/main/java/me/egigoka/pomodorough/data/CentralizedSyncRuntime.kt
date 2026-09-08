@@ -235,6 +235,8 @@ internal class CentralizedSyncRuntime(
         syncOnce(identity)
         SyncIterationResult.Success
     } catch (_: AuthenticationRequired) {
+        // expected-silent: session expiry surfaces as a sign-in notice via
+        // AuthenticationExpired, not a crash.
         host.accept(CentralizedSyncRuntimeEvent.AuthenticationExpired(identity))
         SyncIterationResult.Stop
     } catch (error: CancellationException) {

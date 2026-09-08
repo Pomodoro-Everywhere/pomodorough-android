@@ -13,6 +13,8 @@ class CrashReportingSilenceTest {
             "me/egigoka/pomodorough/data/iroh/IrohRoomOrchestration.kt",
             "me/egigoka/pomodorough/data/iroh/IrohEndpointLifecycle.kt",
             "me/egigoka/pomodorough/data/iroh/IrohIncomingRpcHandler.kt",
+            "me/egigoka/pomodorough/data/TimerSyncValidation.kt",
+            "me/egigoka/pomodorough/data/CentralizedSyncRuntime.kt",
         )
         var markers = 0
         files.forEach { relativePath ->
@@ -23,7 +25,7 @@ class CrashReportingSilenceTest {
                 assertSilentCatchBody(relativePath, lines, index)
             }
         }
-        assertTrue("expected-silent markers shrank to $markers, update this audit", markers >= 24)
+        assertTrue("expected-silent markers shrank to $markers, update this audit", markers >= 35)
     }
 
     private fun assertSilentCatchBody(relativePath: String, lines: List<String>, marker: Int) {

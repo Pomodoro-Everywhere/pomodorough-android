@@ -386,6 +386,8 @@ internal object TimerSyncValidation {
         try {
             values.forEach(validator)
         } catch (_: Exception) {
+            // expected-silent: queued item detail normalizes to a queue-specific protocol
+            // error surfacing as sync UI, not a crash.
             throw SyncProtocolException("Queued $kind is invalid")
         }
     }

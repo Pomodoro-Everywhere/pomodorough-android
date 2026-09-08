@@ -10,6 +10,7 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import me.egigoka.pomodorough.data.auth.AuthenticationRequired
 import okhttp3.sse.EventSourceListener
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
@@ -102,6 +103,55 @@ class CentralizedSyncRuntimeTest {
             delays,
             accepted.filterIsInstance<CentralizedSyncRuntimeEvent.Retrying>().map { it.delayMs },
         )
+        runtime.shutdown()
+    }
+
+    @Test
+    fun authenticationExpiryEmitsExpiredEventWithoutRetrying() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        var calls = 0
+        val accepted = mutableListOf<CentralizedSyncRuntimeEvent>()
+        val host = FakeCentralizedSyncRuntimeHost(
+            prepare = { syncAttempt(accountGeneration = 1) },
+            accept = { accepted += it },
+        )
+        val runtime = runtime(dispatcher, host) {
+            calls += 1
+            throw AuthenticationRequired()
+        }
+
+        runtime.requestSync(force = true)
+        runCurrent()
+
+        assertEquals(1, calls)
+        val identity = SyncAttemptIdentity(1, "attempt-id")
+        val expected = CentralizedSyncRuntimeEvent.AuthenticationExpired(identity)
+        assertEquals(listOf(expected), accepted)
+        runtime.shutdown()
+    }
+
+    @Test
+    fun unexpectedFailureEmitsLocalFailureWithoutRetrying() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        var calls = 0
+        val accepted = mutableListOf<CentralizedSyncRuntimeEvent>()
+        val host = FakeCentralizedSyncRuntimeHost(
+            prepare = { syncAttempt(accountGeneration = 1) },
+            accept = { accepted += it },
+        )
+        val failure = RuntimeException("boom")
+        val runtime = runtime(dispatcher, host) {
+            calls += 1
+            throw failure
+        }
+
+        runtime.requestSync(force = true)
+        runCurrent()
+
+        assertEquals(1, calls)
+        val event = accepted.filterIsInstance<CentralizedSyncRuntimeEvent.LocalFailure>().single()
+        assertEquals(SyncAttemptIdentity(1, "attempt-id"), event.identity)
+        assertSame(failure, event.error)
         runtime.shutdown()
     }
 
