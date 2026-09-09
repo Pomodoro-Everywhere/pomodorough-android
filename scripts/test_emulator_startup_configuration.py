@@ -8,6 +8,7 @@ from pathlib import Path
 
 
 WORKFLOW = Path(__file__).resolve().parents[1] / ".github/workflows/ci.yml"
+RUNNER_SCRIPT = Path(__file__).resolve().parents[1] / ".github/scripts/run-android-emulator.py"
 EMULATOR_COMMAND = "python3 .github/scripts/run-android-emulator.py"
 SDK_ACTION = "android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407"
 EMULATOR_STEPS = {
@@ -195,6 +196,27 @@ class EmulatorStartupConfigurationTests(unittest.TestCase):
                 documentation = self.step(job, "Check documentation links")
                 self.assertIn(f"          {command}\n", documentation)
                 self.assertIn("          python3 scripts/check_workflow_pins.py\n", documentation)
+
+    def test_emulator_caches_exist_with_versioned_keys_and_consumer_paths(self) -> None:
+        runner = RUNNER_SCRIPT.read_text(encoding="utf-8")
+        build_tools = re.search(r'^BUILD_TOOLS = "([^"]+)"$', runner, re.MULTILINE)
+        self.assertIsNotNone(build_tools)
+        self.assertEqual(build_tools[1], "37.0.0")
+        self.assertIn('ANDROID_CACHE_REVISION: "1"', self.workflow)
+        for job in EMULATOR_STEPS:
+            with self.subTest(job=job):
+                cache = self.step(job, "Cache emulator SDK and system image")
+                self.assertIn("img${{ env.ANDROID_CACHE_REVISION }}", cache)
+                self.assertIn("api${{ matrix.api-level }}", cache)
+                self.assertIn("build-tools/37.0.0", cache)
+                self.assertIn("-build37.0.0", cache)
+                self.assertIn("img${{ env.ANDROID_CACHE_REVISION }}-api${{ matrix.api-level }}-", cache)
+                self.assertNotIn("android-emulator-${{ runner.os }}-api${{ matrix.api-level }}-\n", cache)
+        smoke = self.step("release-smoke", "Cache emulator SDK and system image")
+        self.assertIn("tools${{ env.ANDROID_BUILD_TOOLS_VERSION }}", smoke)
+        self.assertIn("build-tools/${{ env.ANDROID_BUILD_TOOLS_VERSION }}", smoke)
+        connected = self.step("connected", "Cache emulator SDK and system image")
+        self.assertNotIn("ANDROID_BUILD_TOOLS_VERSION", connected)
 
 
 if __name__ == "__main__":

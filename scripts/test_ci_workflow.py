@@ -17,6 +17,7 @@ SMOKE_SCRIPT = ROOT / ".github" / "scripts" / "smoke-packaged-release.sh"
 INSTRUMENTED_SCRIPT = ROOT / ".github" / "scripts" / "run-instrumented-tests.sh"
 RELEASE_IROH_SOURCE = ROOT / "app" / "src" / "androidTest" / "java" / "me" / "egigoka" / "pomodorough" / "releaseiroh" / "ReleaseIrohSmokeInstrumentation.java"
 PROVENANCE_SCRIPT = ROOT / "scripts" / "verify_shared_core_provenance.py"
+EMULATOR_RUNNER_SCRIPT = ROOT / ".github" / "scripts" / "run-android-emulator.py"
 VALID_WASM = b"\0asm\x01\0\0\0"
 DIFFERENT_VALID_WASM = VALID_WASM + b"\0\x01\0"
 
@@ -274,6 +275,13 @@ class CIWorkflowTests(unittest.TestCase):
 
         self.assertIn("\n    needs: verify\n", release_job)
         self.assertNotIn("needs: [verify, connected]", release_job)
+        # Overlap is intentional: release feedback must not wait on the
+        # connected matrix, at the accepted cost of burning smoke minutes
+        # when connected fails. Assert the rationale so nobody reverts.
+        self.assertIn("Accepted cost:", release_job)
+        self.assertIn("release-smoke emulator minutes", release_job)
+        self.assertIn("never waits on the 8-cell connected matrix", release_job)
+        self.assertIn("do not add", release_job.lower())
         release_workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("\n    needs: ci\n", release_workflow)
 
@@ -429,6 +437,88 @@ class CIWorkflowTests(unittest.TestCase):
         self.assertIn('adb install --no-incremental --abi "$runtime_abi" "$smoke_apk"', script)
         self.assertEqual(2, script.count("adb install --no-incremental "))
         self.assertIn("grep -Fq 'Status: ok'", script)
+
+    def test_rust_target_cache_is_exact_key_only(self) -> None:
+        workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+        toolchain = workflow.split(
+            "- name: Cache Rust toolchain and cargo registry", 1
+        )[1].split("- name: Cache shared core build output", 1)[0]
+        target = workflow.split("- name: Cache shared core build output", 1)[1].split(
+            "- name: Rebuild and verify pinned shared core", 1
+        )[0]
+
+        self.assertIn("~/.cargo/registry", toolchain)
+        self.assertIn("~/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu", toolchain)
+        self.assertNotIn("pomodorough-core-source/target", toolchain)
+        self.assertIn("key: rust-toolchain-1.97.1-${{ runner.os }}-${{ env.CORE_COMMIT }}", toolchain)
+        self.assertIn("restore-keys:", toolchain)
+
+        self.assertIn("pomodorough-core-source/target", target)
+        self.assertIn("key: rust-core-target-1.97.1-${{ runner.os }}-${{ env.CORE_COMMIT }}", target)
+        self.assertNotIn("restore-keys:", target)
+        self.assertNotIn("~/.cargo/registry", target)
+
+    def test_sdk_cache_keys_carry_image_revision_and_verify_after_restore(self) -> None:
+        workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+        verify = workflow.split("  verify:", 1)[1].split("\n  connected:", 1)[0]
+
+        self.assertIn('ANDROID_CACHE_REVISION: "1"', workflow)
+        self.assertIn(
+            "key: android-sdk-verify-${{ runner.os }}-img${{ env.ANDROID_CACHE_REVISION }}-"
+            "api${{ env.ANDROID_API_LEVEL }}-tools${{ env.ANDROID_BUILD_TOOLS_VERSION }}",
+            verify,
+        )
+        self.assertIn(
+            "/usr/local/lib/android/sdk/platforms/android-${{ env.ANDROID_API_LEVEL }}",
+            verify,
+        )
+        self.assertIn(
+            "/usr/local/lib/android/sdk/build-tools/${{ env.ANDROID_BUILD_TOOLS_VERSION }}",
+            verify,
+        )
+        self.assertIn(
+            'sdkmanager "platforms;android-${ANDROID_API_LEVEL}" "build-tools;${ANDROID_BUILD_TOOLS_VERSION}"',
+            verify,
+        )
+        self.assertLess(
+            verify.index("Install Android platform and build tools"),
+            verify.index("Verify Android SDK packages after cache restore"),
+        )
+        verification = verify.split("Verify Android SDK packages after cache restore", 1)[1]
+        self.assertIn("sdkmanager --list_installed", verification)
+        self.assertIn('grep -F "platforms;android-${ANDROID_API_LEVEL}"', verification)
+        self.assertIn('grep -F "build-tools;${ANDROID_BUILD_TOOLS_VERSION}"', verification)
+        for key in (
+            "android-emulator-${{ runner.os }}-img${{ env.ANDROID_CACHE_REVISION }}-",
+            "android-smoke-${{ runner.os }}-img${{ env.ANDROID_CACHE_REVISION }}-",
+        ):
+            self.assertIn(key, workflow)
+
+    def test_cache_steps_embed_current_versions_and_match_consumers(self) -> None:
+        workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+        runner = EMULATOR_RUNNER_SCRIPT.read_text(encoding="utf-8")
+        runner_build_tools = re.search(r'^BUILD_TOOLS = "([^"]+)"$', runner, re.MULTILINE)
+        self.assertIsNotNone(runner_build_tools)
+        self.assertEqual(runner_build_tools[1], "37.0.0")
+
+        self.assertIn("rustup toolchain install 1.97.1 --profile minimal", workflow)
+        self.assertIn("cargo +1.97.1 build --release", workflow)
+        for key in (
+            "rust-toolchain-1.97.1-${{ runner.os }}-${{ env.CORE_COMMIT }}",
+            "rust-core-target-1.97.1-${{ runner.os }}-${{ env.CORE_COMMIT }}",
+        ):
+            self.assertIn(key, workflow)
+
+        connected = workflow.split("  connected:", 1)[1].split("\n  release-smoke:", 1)[0]
+        self.assertIn("/usr/local/lib/android/sdk/build-tools/37.0.0", connected)
+        self.assertIn("android-emulator-${{ runner.os }}-img", connected)
+        self.assertIn("-x86_64-build37.0.0", connected)
+        release_job = workflow.split("  release-smoke:", 1)[1].split(
+            "\n  dependency-review:", 1
+        )[0]
+        self.assertIn("/usr/local/lib/android/sdk/build-tools/37.0.0", release_job)
+        self.assertIn("/usr/local/lib/android/sdk/build-tools/${{ env.ANDROID_BUILD_TOOLS_VERSION }}", release_job)
+        self.assertIn("-build37.0.0-tools${{ env.ANDROID_BUILD_TOOLS_VERSION }}", release_job)
 
 
 if __name__ == "__main__":

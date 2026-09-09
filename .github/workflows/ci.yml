@@ -44,6 +44,11 @@ env:
   JAVA_VERSION: "21"
   ANDROID_API_LEVEL: "36"
   ANDROID_BUILD_TOOLS_VERSION: "36.0.0"
+  # Runner image policy: jobs pin runs-on ubuntu-24.04, whose hosted image
+  # updates in place. ANDROID_CACHE_REVISION is the manual image-revision
+  # component of SDK/emulator cache keys; bump it when GitHub refreshes the
+  # ubuntu-24.04 image so stale SDK/system-image bytes cannot be reused.
+  ANDROID_CACHE_REVISION: "1"
   CORE_COMMIT: "70169bb05c1e046c54c6be3b0760ef0015243bb7"
   CORE_SHA256: "7d220f35d927931f8f97d9c453071a3a9bb23a9082e5b9a3b9d42fdd16de8f79"
   TZ: Etc/UTC
@@ -128,17 +133,26 @@ jobs:
           path: pomodorough-core-source
           persist-credentials: false
 
-      - name: Cache Rust toolchain and cargo
+      - name: Cache Rust toolchain and cargo registry
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             ~/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu
-            pomodorough-core-source/target
           key: rust-toolchain-1.97.1-${{ runner.os }}-${{ env.CORE_COMMIT }}
           restore-keys: |
             rust-toolchain-1.97.1-${{ runner.os }}-
+
+      # Shared core build output is only valid for the exact pinned core
+      # commit; no restore-keys fallback so a stale target/ can never be
+      # reused across CORE_COMMIT bumps.
+      - name: Cache shared core build output
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            pomodorough-core-source/target
+          key: rust-core-target-1.97.1-${{ runner.os }}-${{ env.CORE_COMMIT }}
 
       - name: Rebuild and verify pinned shared core
         shell: bash
@@ -166,19 +180,27 @@ jobs:
           grep -Fx "CORE_COMMIT=$CORE_COMMIT" app/src/main/assets/shared_core.properties
           grep -Fx "CORE_SHA256=$CORE_SHA256" app/src/main/assets/shared_core.properties
 
+      # SDK cache is performance-only: the install step below always runs
+      # sdkmanager after restore, and verification fails closed on a corrupt
+      # or partial cache instead of feeding the release build.
       - name: Cache Android SDK packages
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             /usr/local/lib/android/sdk/platforms/android-${{ env.ANDROID_API_LEVEL }}
             /usr/local/lib/android/sdk/build-tools/${{ env.ANDROID_BUILD_TOOLS_VERSION }}
-          key: android-sdk-verify-${{ runner.os }}-api${{ env.ANDROID_API_LEVEL }}-tools${{ env.ANDROID_BUILD_TOOLS_VERSION }}
+          key: android-sdk-verify-${{ runner.os }}-img${{ env.ANDROID_CACHE_REVISION }}-api${{ env.ANDROID_API_LEVEL }}-tools${{ env.ANDROID_BUILD_TOOLS_VERSION }}
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
 
       - name: Install Android platform and build tools
         run: sdkmanager "platforms;android-${ANDROID_API_LEVEL}" "build-tools;${ANDROID_BUILD_TOOLS_VERSION}"
+
+      - name: Verify Android SDK packages after cache restore
+        run: |
+          sdkmanager --list_installed | grep -F "platforms;android-${ANDROID_API_LEVEL}"
+          sdkmanager --list_installed | grep -F "build-tools;${ANDROID_BUILD_TOOLS_VERSION}"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
@@ -376,6 +398,9 @@ jobs:
       - name: Assemble connected test APKs before emulator boot
         run: ./gradlew --no-daemon --stacktrace :app:assembleDebug :app:assembleDebugAndroidTest
 
+      # Emulator cache is performance-only: run-android-emulator.py setup()
+      # always reinstalls platform, emulator, image, and build-tools after
+      # restore, so a corrupt cache fails closed instead of booting stale.
       - name: Cache emulator SDK and system image
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
@@ -385,9 +410,9 @@ jobs:
             /usr/local/lib/android/sdk/emulator
             /usr/local/lib/android/sdk/platform-tools
             /usr/local/lib/android/sdk/build-tools/37.0.0
-          key: android-emulator-${{ runner.os }}-api${{ matrix.api-level }}-x86_64-build37.0.0
+          key: android-emulator-${{ runner.os }}-img${{ env.ANDROID_CACHE_REVISION }}-api${{ matrix.api-level }}-x86_64-build37.0.0
           restore-keys: |
-            android-emulator-${{ runner.os }}-api${{ matrix.api-level }}-
+            android-emulator-${{ runner.os }}-img${{ env.ANDROID_CACHE_REVISION }}-api${{ matrix.api-level }}-
 
       - name: Set up emulator SDK
         uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
@@ -431,6 +456,10 @@ jobs:
     if: inputs.upload-release-bundle
     # Release smoke overlaps debug connected tests: it only needs verify's
     # bundle, and final publishing stays gated on the full ci result.
+    # Accepted cost: a commit whose connected tests fail still burns
+    # release-smoke emulator minutes. Kept intentionally so release packaging
+    # feedback never waits on the 8-cell connected matrix; do not add
+    # connected to needs without a release-latency justification.
     needs: verify
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -479,6 +508,8 @@ jobs:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
 
+      # Same performance-only contract as connected: the emulator runner
+      # reinstalls SDK packages after restore before booting the guest.
       - name: Cache emulator SDK and system image
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
@@ -489,10 +520,10 @@ jobs:
             /usr/local/lib/android/sdk/platform-tools
             /usr/local/lib/android/sdk/build-tools/37.0.0
             /usr/local/lib/android/sdk/build-tools/${{ env.ANDROID_BUILD_TOOLS_VERSION }}
-          key: android-smoke-${{ runner.os }}-api${{ matrix.api-level }}-${{ matrix.architecture }}-build37.0.0
+          key: android-smoke-${{ runner.os }}-img${{ env.ANDROID_CACHE_REVISION }}-api${{ matrix.api-level }}-${{ matrix.architecture }}-build37.0.0-tools${{ env.ANDROID_BUILD_TOOLS_VERSION }}
           restore-keys: |
-            android-smoke-${{ runner.os }}-api${{ matrix.api-level }}-
-            android-emulator-${{ runner.os }}-api${{ matrix.api-level }}-
+            android-smoke-${{ runner.os }}-img${{ env.ANDROID_CACHE_REVISION }}-api${{ matrix.api-level }}-
+            android-emulator-${{ runner.os }}-img${{ env.ANDROID_CACHE_REVISION }}-api${{ matrix.api-level }}-
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
