@@ -167,7 +167,7 @@ class EmulatorStartupConfigurationTests(unittest.TestCase):
         self.assertIn("python3 -m unittest scripts/test_android_startup_diagnostics.py scripts/test_android_diagnostic_capture.py -v", connected)
         self.assertIn('assert os.environ["GITHUB_RUN_ATTEMPT"] == "1"', self.job("candidate-source"))
         release = self.job("release-smoke")
-        self.assertIn("    needs: [verify, connected]\n", release)
+        self.assertIn("    needs: verify\n", release)
         self.assertIn("    if: inputs.upload-release-bundle\n", release)
         self.assertIn("    timeout-minutes: 30\n", release)
         finish = self.step("connected", "Finish Android startup diagnostics")

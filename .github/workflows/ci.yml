@@ -128,6 +128,18 @@ jobs:
           path: pomodorough-core-source
           persist-credentials: false
 
+      - name: Cache Rust toolchain and cargo
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu
+            pomodorough-core-source/target
+          key: rust-toolchain-1.97.1-${{ runner.os }}-${{ env.CORE_COMMIT }}
+          restore-keys: |
+            rust-toolchain-1.97.1-${{ runner.os }}-
+
       - name: Rebuild and verify pinned shared core
         shell: bash
         run: |
@@ -153,6 +165,14 @@ jobs:
             app/src/main/assets/pomodorough_core.wasm
           grep -Fx "CORE_COMMIT=$CORE_COMMIT" app/src/main/assets/shared_core.properties
           grep -Fx "CORE_SHA256=$CORE_SHA256" app/src/main/assets/shared_core.properties
+
+      - name: Cache Android SDK packages
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            /usr/local/lib/android/sdk/platforms/android-${{ env.ANDROID_API_LEVEL }}
+            /usr/local/lib/android/sdk/build-tools/${{ env.ANDROID_BUILD_TOOLS_VERSION }}
+          key: android-sdk-verify-${{ runner.os }}-api${{ env.ANDROID_API_LEVEL }}-tools${{ env.ANDROID_BUILD_TOOLS_VERSION }}
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
@@ -356,6 +376,19 @@ jobs:
       - name: Assemble connected test APKs before emulator boot
         run: ./gradlew --no-daemon --stacktrace :app:assembleDebug :app:assembleDebugAndroidTest
 
+      - name: Cache emulator SDK and system image
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            /usr/local/lib/android/sdk/platforms/android-${{ matrix.api-level }}
+            /usr/local/lib/android/sdk/system-images/android-${{ matrix.api-level }}
+            /usr/local/lib/android/sdk/emulator
+            /usr/local/lib/android/sdk/platform-tools
+            /usr/local/lib/android/sdk/build-tools/37.0.0
+          key: android-emulator-${{ runner.os }}-api${{ matrix.api-level }}-x86_64-build37.0.0
+          restore-keys: |
+            android-emulator-${{ runner.os }}-api${{ matrix.api-level }}-
+
       - name: Set up emulator SDK
         uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
         with:
@@ -396,7 +429,9 @@ jobs:
   release-smoke:
     name: Clean-install packaged release payload (API ${{ matrix.api-level }}, ${{ matrix.runtime-abi }})
     if: inputs.upload-release-bundle
-    needs: [verify, connected]
+    # Release smoke overlaps debug connected tests: it only needs verify's
+    # bundle, and final publishing stays gated on the full ci result.
+    needs: verify
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
@@ -443,6 +478,21 @@ jobs:
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Cache emulator SDK and system image
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            /usr/local/lib/android/sdk/platforms/android-${{ matrix.api-level }}
+            /usr/local/lib/android/sdk/system-images/android-${{ matrix.api-level }}
+            /usr/local/lib/android/sdk/emulator
+            /usr/local/lib/android/sdk/platform-tools
+            /usr/local/lib/android/sdk/build-tools/37.0.0
+            /usr/local/lib/android/sdk/build-tools/${{ env.ANDROID_BUILD_TOOLS_VERSION }}
+          key: android-smoke-${{ runner.os }}-api${{ matrix.api-level }}-${{ matrix.architecture }}-build37.0.0
+          restore-keys: |
+            android-smoke-${{ runner.os }}-api${{ matrix.api-level }}-
+            android-emulator-${{ runner.os }}-api${{ matrix.api-level }}-
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3

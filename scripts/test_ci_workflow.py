@@ -10,6 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 BUILD_FILE = ROOT / "app" / "build.gradle.kts"
 PROGUARD_FILE = ROOT / "app" / "proguard-rules.pro"
 SMOKE_SCRIPT = ROOT / ".github" / "scripts" / "smoke-packaged-release.sh"
@@ -265,13 +266,16 @@ class CIWorkflowTests(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode == 0, passes, result.stdout + result.stderr)
 
-    def test_release_smoke_depends_on_complete_connected_matrix(self) -> None:
+    def test_release_smoke_overlaps_connected_matrix(self) -> None:
         workflow = CI_WORKFLOW.read_text(encoding="utf-8")
         release_job = workflow.split("  release-smoke:", 1)[1].split(
             "\n  dependency-review:", 1
         )[0]
 
-        self.assertIn("needs: [verify, connected]", release_job)
+        self.assertIn("\n    needs: verify\n", release_job)
+        self.assertNotIn("needs: [verify, connected]", release_job)
+        release_workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("\n    needs: ci\n", release_workflow)
 
     def test_release_runtime_matrix_executes_every_packaged_abi(self) -> None:
         workflow = CI_WORKFLOW.read_text(encoding="utf-8")
