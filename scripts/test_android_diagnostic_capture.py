@@ -72,12 +72,14 @@ class DiagnosticCaptureTests(unittest.TestCase):
 class StartupWorkflowTests(unittest.TestCase):
     def test_preboot_observer_and_always_finish_share_retained_directory(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        verify = workflow.split("  verify:\n", 1)[1].split("  connected:\n", 1)[0]
         connected = workflow.split("  connected:\n", 1)[1].split("  release-smoke:\n", 1)[0]
         adapter = "python3 .github/scripts/android-startup-diagnostics.py"
         self.assertIn('python3 .github/scripts/run-android-emulator.py', connected)
         self.assertIn('--startup-diagnostics "$STARTUP_DIAGNOSTICS"', connected)
         self.assertIn("STARTUP_DIAGNOSTICS: app/build/reports/androidTests/startup-api-", connected)
-        self.assertIn("scripts/test_android_diagnostic_capture.py -v", connected)
+        self.assertIn("scripts/test_android_diagnostic_capture.py -v", verify)
+        self.assertNotIn("scripts/test_android_diagnostic_capture.py -v", connected)
         finish = connected.split("      - name: Finish Android startup diagnostics\n", 1)[1]
         finish = finish.split("      - name:", 1)[0]
         self.assertIn("        if: always()", finish)

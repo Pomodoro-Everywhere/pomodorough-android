@@ -29,6 +29,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Test release publication guards
+        run: python3 -m unittest scripts/test_release_workflow.py -v
+
       - name: Validate tag, version name, and version code
         env:
           GH_TOKEN: ${{ github.token }}
@@ -185,10 +188,11 @@ jobs:
               printf '%s\n' "${expected_assets[@]}" | sort > expected-manifest-assets.txt
               awk '{print $2}' SHA256SUMS.txt | sed 's|^\*||' | sort > actual-manifest-assets.txt
               cmp expected-manifest-assets.txt actual-manifest-assets.txt
-              for asset in "${expected_assets[@]}"; do
-                gh attestation verify "$asset" --repo "$GITHUB_REPOSITORY"
-              done
-              gh attestation verify SHA256SUMS.txt --repo "$GITHUB_REPOSITORY"
+              # Wait for every check; normalize failures so exit 255 cannot stop queued checks.
+              # shellcheck disable=SC2016 # Expand arguments in the child shell.
+              printf '%s\0' "${expected_release_assets[@]}" |
+                xargs -0 -n 1 -P 4 bash -c \
+                  'gh attestation verify "$1" --repo "$GITHUB_REPOSITORY" || exit 1' _
             )
           }
 

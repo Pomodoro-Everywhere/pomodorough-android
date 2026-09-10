@@ -161,11 +161,17 @@ class EmulatorStartupConfigurationTests(unittest.TestCase):
 
     def test_prerequisite_gates_and_diagnostic_retention_remain_strict(self) -> None:
         connected = self.job("connected")
+        verify = self.job("verify")
         self.assertIn("    needs: candidate-source\n", connected)
         self.assertIn("    timeout-minutes: 60\n", connected)
-        self.assertIn("python3 -m unittest scripts/test_android_readiness.py -v", connected)
-        self.assertIn("python3 -m unittest discover -s scripts -p test_android_startup_phase.py -v", connected)
-        self.assertIn("python3 -m unittest scripts/test_android_startup_diagnostics.py scripts/test_android_diagnostic_capture.py -v", connected)
+        for gate in (
+            "python3 -m unittest scripts/test_android_readiness.py -v",
+            "python3 -m unittest discover -s scripts -p test_android_startup_phase.py -v",
+            "python3 -m unittest scripts/test_android_startup_diagnostics.py "
+            "scripts/test_android_diagnostic_capture.py -v",
+        ):
+            self.assertIn(gate, verify)
+            self.assertNotIn(gate, connected)
         self.assertIn('assert os.environ["GITHUB_RUN_ATTEMPT"] == "1"', self.job("candidate-source"))
         release = self.job("release-smoke")
         self.assertIn("    needs: verify\n", release)
@@ -185,17 +191,17 @@ class EmulatorStartupConfigurationTests(unittest.TestCase):
                 self.assertIn("          retention-days: 14\n", step)
                 self.assertIn(path, step)
 
-    def test_documentation_checks_run_old_and_new_regressions_in_both_jobs(self) -> None:
+    def test_documentation_checks_run_once_in_verify(self) -> None:
         command = (
             "python3 -m unittest scripts/test_check_localization.py scripts/test_ci_workflow.py "
-            "scripts/test_release_runtime_abi.py scripts/test_emulator_startup_configuration.py "
+            "scripts/test_ci_source_checks.py scripts/test_release_runtime_abi.py "
+            "scripts/test_emulator_startup_configuration.py "
             "scripts/test_android_emulator_lifecycle.py -v"
         )
-        for job in ("verify", "connected"):
-            with self.subTest(job=job):
-                documentation = self.step(job, "Check documentation links")
-                self.assertIn(f"          {command}\n", documentation)
-                self.assertIn("          python3 scripts/check_workflow_pins.py\n", documentation)
+        documentation = self.step("verify", "Check documentation links")
+        self.assertIn(f"          {command}\n", documentation)
+        self.assertIn("          python3 scripts/check_workflow_pins.py\n", documentation)
+        self.assertNotIn("Check documentation links", self.job("connected"))
 
     def test_emulator_caches_exist_with_versioned_keys_and_consumer_paths(self) -> None:
         runner = RUNNER_SCRIPT.read_text(encoding="utf-8")

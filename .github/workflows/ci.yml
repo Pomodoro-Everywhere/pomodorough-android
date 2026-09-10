@@ -116,8 +116,18 @@ jobs:
           python3 scripts/check_docs.py
           python3 scripts/check_protocol_fixture.py
           python3 scripts/check_workflow_pins.py
-          python3 -m unittest scripts/test_check_localization.py scripts/test_ci_workflow.py scripts/test_release_runtime_abi.py scripts/test_emulator_startup_configuration.py scripts/test_android_emulator_lifecycle.py -v
+          python3 -m unittest scripts/test_check_localization.py scripts/test_ci_workflow.py scripts/test_ci_source_checks.py scripts/test_release_runtime_abi.py scripts/test_emulator_startup_configuration.py scripts/test_android_emulator_lifecycle.py -v
           python3 scripts/check_localization.py
+
+      # These fixtures test source, not a device or matrix configuration.
+      # Run once here; publication requires verify plus every connected cell.
+      - name: Check Android readiness adapter
+        run: |
+          python3 -m unittest scripts/test_android_readiness.py -v
+          python3 -m unittest discover -s scripts -p test_android_startup_phase.py -v
+
+      - name: Check Android startup diagnostics
+        run: python3 -m unittest scripts/test_android_startup_diagnostics.py scripts/test_android_diagnostic_capture.py -v
 
       - name: Set up JDK
         uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
@@ -370,14 +380,6 @@ jobs:
       - name: Verify checked out source
         run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
-      - name: Check documentation links
-        run: |
-          python3 scripts/check_docs.py
-          python3 scripts/check_protocol_fixture.py
-          python3 scripts/check_workflow_pins.py
-          python3 -m unittest scripts/test_check_localization.py scripts/test_ci_workflow.py scripts/test_release_runtime_abi.py scripts/test_emulator_startup_configuration.py scripts/test_android_emulator_lifecycle.py -v
-          python3 scripts/check_localization.py
-
       - name: Set up JDK
         uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
@@ -386,14 +388,6 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
-
-      - name: Check Android readiness adapter
-        run: |
-          python3 -m unittest scripts/test_android_readiness.py -v
-          python3 -m unittest discover -s scripts -p test_android_startup_phase.py -v
-
-      - name: Check Android startup diagnostics
-        run: python3 -m unittest scripts/test_android_startup_diagnostics.py scripts/test_android_diagnostic_capture.py -v
 
       - name: Assemble connected test APKs before emulator boot
         run: ./gradlew --no-daemon --stacktrace :app:assembleDebug :app:assembleDebugAndroidTest

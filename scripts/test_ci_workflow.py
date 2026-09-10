@@ -169,10 +169,10 @@ class CIWorkflowTests(unittest.TestCase):
         command = "./gradlew --no-daemon --stacktrace :app:assembleDebug :app:assembleDebugAndroidTest"
         self.assertEqual(connected.count(command), 1)
         self.assertLess(connected.index(command), connected.index("- name: Run connected tests"))
-        self.assertIn("python3 -m unittest scripts/test_android_readiness.py -v", connected)
+        self.assertIn("python3 -m unittest scripts/test_android_readiness.py -v", workflow)
         self.assertIn("python3 .github/scripts/run-android-emulator.py", connected)
         self.assertIn("--api-level ${{ matrix.api-level }} --architecture x86_64", connected)
-        self.assertIn("scripts/test_android_emulator_lifecycle.py -v", connected)
+        self.assertIn("scripts/test_android_emulator_lifecycle.py -v", workflow)
         self.assertNotIn("ReactiveCircus/android-emulator-runner@", connected)
         self.assertIn("fail-fast: false", connected)
 
