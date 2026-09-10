@@ -41,6 +41,7 @@ internal class IrohIncomingRpcHandler(
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
+                // expected-silent: listener socket closed or failed; loop ends via Unavailable event, not a crash.
                 onEvent(IrohIncomingRpcEvent.Unavailable(error.message))
                 return@supervisorScope
             } ?: return@supervisorScope
@@ -164,6 +165,7 @@ internal class IrohIncomingRpcHandler(
             else -> throw IllegalArgumentException("Request kind is unavailable after hello")
         }
     } catch (error: Exception) {
+        // expected-silent: peer request mapping failure replies as protocol error, not a crash.
         errorResponse(message, context, error)
     }
 

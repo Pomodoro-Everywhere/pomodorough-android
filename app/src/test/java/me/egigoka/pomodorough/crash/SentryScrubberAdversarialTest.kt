@@ -284,4 +284,95 @@ class SentryScrubberAdversarialTest {
         assertFalse(query.contains("eyJ2Ijox"))
         assertTrue(query.contains("other=1"))
     }
+
+    @Test
+    fun oidcCamelAndNonceJsonLosesValue() {
+        val scrubbed = checkNotNull(
+            SentryScrubber.scrubText(
+                "{\"idToken\": \"id-secret\", \"challenge\": \"chall-secret\", " +
+                    "\"nonce\": \"nonce-secret\", \"ok\": true}",
+            ),
+        )
+        assertFalse(scrubbed.contains("id-secret"))
+        assertFalse(scrubbed.contains("chall-secret"))
+        assertFalse(scrubbed.contains("nonce-secret"))
+        assertTrue(scrubbed.contains(SentryScrubber.REDACTED_TOKEN))
+        assertTrue(scrubbed.contains("\"ok\""))
+    }
+
+    @Test
+    fun tokenFamilyCamelJsonLosesValue() {
+        val scrubbed = checkNotNull(
+            SentryScrubber.scrubText(
+                "{\"accessToken\": \"access-secret\", " +
+                    "\"refreshToken\": \"refresh-secret\", " +
+                    "\"csrfToken\": \"csrf-secret\", " +
+                    "\"deviceId\": \"device-secret\", \"ok\": true}",
+            ),
+        )
+        assertFalse(scrubbed.contains("access-secret"))
+        assertFalse(scrubbed.contains("refresh-secret"))
+        assertFalse(scrubbed.contains("csrf-secret"))
+        assertFalse(scrubbed.contains("device-secret"))
+        assertTrue(scrubbed.contains(SentryScrubber.REDACTED_TOKEN))
+        assertTrue(scrubbed.contains("\"ok\""))
+    }
+
+    @Test
+    fun oidcSingleQuotedJsonLosesValue() {
+        val scrubbed = checkNotNull(
+            SentryScrubber.scrubText(
+                "{'idToken': 'id-secret', 'challenge': 'chall-secret', " +
+                    "'nonce': 'nonce-secret', 'ok': true}",
+            ),
+        )
+        assertFalse(scrubbed.contains("id-secret"))
+        assertFalse(scrubbed.contains("chall-secret"))
+        assertFalse(scrubbed.contains("nonce-secret"))
+        assertTrue(scrubbed.contains(SentryScrubber.REDACTED_TOKEN))
+    }
+
+    @Test
+    fun oidcQueryKeepsKeyButLosesValue() {
+        val scrubbed = checkNotNull(
+            SentryScrubber.scrubText(
+                "https://host/cb?idToken=id-secret&challenge=chall-secret" +
+                    "&nonce=nonce-secret&other=1",
+            ),
+        )
+        assertTrue(scrubbed.contains("idToken="))
+        assertTrue(scrubbed.contains("challenge="))
+        assertTrue(scrubbed.contains("nonce="))
+        assertFalse(scrubbed.contains("id-secret"))
+        assertFalse(scrubbed.contains("chall-secret"))
+        assertFalse(scrubbed.contains("nonce-secret"))
+        assertTrue(scrubbed.contains(SentryScrubber.REDACTED_TOKEN))
+        assertTrue(scrubbed.contains("other=1"))
+    }
+
+    @Test
+    fun challengeAndNonceExtrasStayOpaque() {
+        val event = SentryEvent()
+        event.setExtra("challenge", "chall-secret")
+        event.setExtra("nonce", "nonce-secret")
+        event.setExtra("idToken", "id-secret")
+        event.setExtra("csrfToken", "csrf-secret")
+        event.setExtra("retryCount", 3)
+        val crumb = Breadcrumb()
+        crumb.message = "auth"
+        crumb.setData("challenge", "chall-secret")
+        crumb.setData("nonce", "nonce-secret")
+        crumb.setData("attempt", 1)
+        event.breadcrumbs = listOf(crumb)
+        SentryScrubber.scrubEvent(event)
+        assertEquals(SentryScrubber.REDACTED, event.getExtra("challenge"))
+        assertEquals(SentryScrubber.REDACTED, event.getExtra("nonce"))
+        assertEquals(SentryScrubber.REDACTED, event.getExtra("idToken"))
+        assertEquals(SentryScrubber.REDACTED, event.getExtra("csrfToken"))
+        assertEquals(3, event.getExtra("retryCount"))
+        val scrubbedCrumb = event.breadcrumbs!!.single()
+        assertEquals(SentryScrubber.REDACTED, scrubbedCrumb.getData("challenge"))
+        assertEquals(SentryScrubber.REDACTED, scrubbedCrumb.getData("nonce"))
+        assertEquals(1, scrubbedCrumb.getData("attempt"))
+    }
 }

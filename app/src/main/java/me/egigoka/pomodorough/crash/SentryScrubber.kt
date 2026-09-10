@@ -44,14 +44,19 @@ object SentryScrubber {
     // class already stops at `;`, so only the prefix needs it. Key list
     // mirrors isSensitiveKey (plus `code`, which stays query/JSON-only so
     // numeric `code: 7` diagnostics survive key filtering).
-    private val tokenQuery = Regex("(?i)([?&#;](token|id_token|access_token|refresh_token|invite|code|secret|cookie|session|api_key|apikey|auth|authorization|password|passwd|credential|private_key|privatekey|bearer|ticket|dsn|device|peer|endpoint|room)=)[^&\\s\"';]+")
+    // A40: `nonce`/`challenge` are OIDC exchange secrets (NativeChallenge,
+    // NativeExchangeRequest); camelCase `idToken`/`accessToken`/
+    // `refreshToken`/`csrfToken`/`deviceId` appear in raw JSON/query text
+    // where isSensitiveKey substring matching cannot see them. `id_?token`
+    // style covers snake + camel via (?i); bare `csrf` covers the prefix.
+    private val tokenQuery = Regex("(?i)([?&#;](token|id_?token|access_?token|refresh_?token|csrf_?token|csrf|nonce|challenge|device_?id|invite|code|secret|cookie|session|api_key|apikey|auth|authorization|password|passwd|credential|private_key|privatekey|bearer|ticket|dsn|device|peer|endpoint|room)=)[^&\\s\"';]+")
     private val tokenJson = Regex(
-        "(?i)(\"(token|id_token|access_token|refresh_token|authorization|password|passwd|credential|secret|cookie|invite|session|api_key|apikey|auth|private_key|privatekey|bearer|ticket|dsn|device|peer|endpoint|room|code)\"\\s*:\\s*\")[^\"]+\"",
+        "(?i)(\"(token|id_?token|access_?token|refresh_?token|csrf_?token|csrf|nonce|challenge|device_?id|authorization|password|passwd|credential|secret|cookie|invite|session|api_key|apikey|auth|private_key|privatekey|bearer|ticket|dsn|device|peer|endpoint|room|code)\"\\s*:\\s*\")[^\"]+\"",
     )
     // A31: single-quoted JSON (`{'token': 'abc'}`) from loose loggers;
     // same key list as tokenJson, quote-agnostic on both key and value.
     private val tokenJsonSingle = Regex(
-        "(?i)('(token|id_token|access_token|refresh_token|authorization|password|passwd|credential|secret|cookie|invite|session|api_key|apikey|auth|private_key|privatekey|bearer|ticket|dsn|device|peer|endpoint|room|code)'\\s*:\\s*')[^']+'",
+        "(?i)('(token|id_?token|access_?token|refresh_?token|csrf_?token|csrf|nonce|challenge|device_?id|authorization|password|passwd|credential|secret|cookie|invite|session|api_key|apikey|auth|private_key|privatekey|bearer|ticket|dsn|device|peer|endpoint|room|code)'\\s*:\\s*')[^']+'",
     )
     // A31: invites are `pomodorough1.` + base64url (`A-Za-z0-9_-`); the dot
     // is optional so pre-dot payloads still match. Strictly broader than
@@ -172,7 +177,12 @@ object SentryScrubber {
         // purpose. IrohHello carries deviceId/endpointTicket/roomId
         // (identifying or room-access-granting); over-filtering a display
         // string beats leaking a route. `room` covers roomId/roomName.
+        // A40: `nonce`/`challenge` are OIDC exchange secrets; `csrf`
+        // covers bare csrf plus csrfToken (which also contains `token`).
         return normalized.contains("token") ||
+            normalized.contains("nonce") ||
+            normalized.contains("challenge") ||
+            normalized.contains("csrf") ||
             normalized.contains("authorization") ||
             normalized.contains("auth") ||
             normalized.contains("bearer") ||

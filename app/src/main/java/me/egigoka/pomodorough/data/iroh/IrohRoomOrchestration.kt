@@ -102,6 +102,7 @@ internal class IrohRoomOrchestration(
             publish((snapshot ?: IrohNetworkState()).copy(mode = mode, transitioning = false))
             if (mode == ReplicationMode.IROH && isForeground()) startIfNeeded()
         } catch (error: Exception) {
+            // expected-silent: route change failure surfaces as UNAVAILABLE status, not a crash.
             recoverPersistedRoute(error, "Replication route could not be changed")
         }
     }
@@ -128,6 +129,7 @@ internal class IrohRoomOrchestration(
             secret.fill(0)
             publish(service.state.value.copy(invite = invite, message = null))
         } catch (error: Exception) {
+            // expected-silent: room creation failure surfaces as UNAVAILABLE status, not a crash.
             handleCreateFailure(roomId, error)
         }
     }
@@ -142,6 +144,7 @@ internal class IrohRoomOrchestration(
             connectJoinedRoom(decoded)
             completeJoinedRoom(decoded.roomId)
         } catch (error: Exception) {
+            // expected-silent: room join failure surfaces as UNAVAILABLE status, not a crash.
             rollbackJoinedRoom(preparation)
             recoverPersistedRoute(error, "Iroh room could not be joined")
         } finally {
@@ -159,6 +162,7 @@ internal class IrohRoomOrchestration(
             invite = null
             publish(IrohNetworkState(mode = ReplicationMode.OFFLINE, transitioning = false))
         } catch (error: Exception) {
+            // expected-silent: room leave failure surfaces as UNAVAILABLE status, not a crash.
             recoverPersistedRoute(error, "Iroh room could not be left")
         }
     }
@@ -280,6 +284,7 @@ internal class IrohRoomOrchestration(
             try {
                 startIfNeeded()
             } catch (error: IrohSecretVaultException) {
+                // expected-silent: vault recovery is reported through the recovery UI, not a crash.
                 quarantineRecovery(error.recoveryKind)
             }
         }

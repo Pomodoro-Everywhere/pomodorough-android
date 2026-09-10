@@ -242,6 +242,7 @@ internal class CentralizedSyncRuntime(
     } catch (error: CancellationException) {
         throw error
     } catch (error: Exception) {
+        // expected-silent: sync failure surfaces as retry/terminal UI via handleSyncFailure, not a crash.
         handleSyncFailure(identity, error, retryDelay)
     }
 

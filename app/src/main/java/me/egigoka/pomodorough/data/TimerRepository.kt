@@ -810,6 +810,7 @@ class TimerRepository(
                 )
             }
         } catch (error: Exception) {
+            // expected-silent: local reset failure surfaces as a notice with corrupt data kept, not a crash.
             actionMutex.withLock {
                 notice = error.message
                     ?: appContext.getString(R.string.local_account_reset_failed_corrupt_data_was_kept)
@@ -893,6 +894,7 @@ class TimerRepository(
                 )
             }
         } catch (error: Exception) {
+            // expected-silent: sign-out scrub failure surfaces as a notice with local data kept, not a crash.
             actionMutex.withLock {
                 notice = error.message ?: appContext.getString(R.string.sign_out_failed_local_timer_data_was_kept)
                 publish()
@@ -924,6 +926,7 @@ class TimerRepository(
             auth.prepareLogout()
             true
         } catch (error: Exception) {
+            // expected-silent: remote sign-out preservation failure surfaces as a notice, not a crash.
             actionMutex.withLock {
                 notice = error.message ?: "Could not preserve remote sign-out work"
                 publish()
@@ -1467,6 +1470,7 @@ class TimerRepository(
         if (saved) afterLocalMutation()
         expired
     } catch (error: Exception) {
+        // expected-silent: expired-timer projection failure surfaces as room conflict, not a crash.
         conflict = error.message ?: appContext.getString(R.string.iroh_room_projection_could_not_be_refreshed)
         publish()
         false
@@ -2443,6 +2447,7 @@ class TimerRepository(
             publish()
             return null
         } catch (error: SharedCoreException) {
+            CrashReporter.report(error)
             notice = appContext.getString(R.string.shared_core_unavailable)
             publish()
             return null
@@ -2602,6 +2607,7 @@ class TimerRepository(
                 replication?.afterLocalMutation()
                 reloadWorkspace(ReplicationMode.IROH)
             } catch (error: Exception) {
+                // expected-silent: post-mutation refresh failure surfaces as room conflict, not a crash.
                 conflict = error.message ?: appContext.getString(R.string.iroh_room_operation_could_not_be_recorded)
                 publish()
             }
