@@ -149,6 +149,7 @@ internal class RevisionStreamLifecycle(
             try {
                 eventSource = open(listener())
             } catch (_: AuthenticationRequired) {
+                // expected-silent: session expiry surfaces as sign-in notice via expire, not a crash.
                 expireAuthentication(admitted.accountGeneration)
             }
         }

@@ -2420,6 +2420,9 @@ class TimerRepository(
     private fun authoritativeTask(task: FocusTask, identityValidated: Boolean): FocusTask? {
         val authoritative = if (identityValidated) task else taskFromSharedCore(task.title) ?: return null
         if (authoritative.id == task.id) return authoritative
+        CrashReporter.report(
+            CoreProjectionException.InvalidOutput("Shared Core task identity mismatch"),
+        )
         notice = appContext.getString(R.string.shared_core_invalid_output)
         publish()
         return null
@@ -2469,6 +2472,9 @@ class TimerRepository(
             utf8Bytes != normalizedTitle.toByteArray(StandardCharsets.UTF_8).size ||
             utf8Bytes > 512
         ) {
+            CrashReporter.report(
+                CoreProjectionException.InvalidOutput("Shared Core task identity output invalid"),
+            )
             notice = appContext.getString(R.string.shared_core_invalid_output)
             publish()
             return null

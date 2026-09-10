@@ -13,6 +13,14 @@ class CrashReportingSilenceTest {
         "me/egigoka/pomodorough/data/iroh/IrohIncomingRpcHandler.kt",
         "me/egigoka/pomodorough/data/TimerSyncValidation.kt",
         "me/egigoka/pomodorough/data/CentralizedSyncRuntime.kt",
+        "me/egigoka/pomodorough/data/RevisionStreamLifecycle.kt",
+        "me/egigoka/pomodorough/data/iroh/IrohPeerSynchronization.kt",
+        "me/egigoka/pomodorough/data/auth/AuthRepository.kt",
+        "me/egigoka/pomodorough/data/time/TrustedClock.kt",
+        "me/egigoka/pomodorough/data/CoreProjectionDispatcher.kt",
+        "me/egigoka/pomodorough/data/CoreSynchronizationDispatchers.kt",
+        "me/egigoka/pomodorough/data/CoreTimerPolicyDispatchers.kt",
+        "me/egigoka/pomodorough/data/api/PomodoroughApi.kt",
     )
 
     @Test
@@ -26,7 +34,7 @@ class CrashReportingSilenceTest {
                 assertSilentCatchBody(relativePath, lines, index)
             }
         }
-        assertTrue("expected-silent markers shrank to $markers, update this audit", markers >= 48)
+        assertTrue("expected-silent markers shrank to $markers, update this audit", markers >= 50)
     }
 
     @Test

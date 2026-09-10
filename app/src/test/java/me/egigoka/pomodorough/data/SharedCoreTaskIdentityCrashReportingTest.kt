@@ -7,6 +7,48 @@ import org.junit.Test
 
 class SharedCoreTaskIdentityCrashReportingTest {
     @Test
+    fun shapeMismatchReportsWhileOperationValidationStaysSilent() {
+        val lines = productionFile("me/egigoka/pomodorough/data/TimerRepository.kt")
+            .readText().lines()
+        val start = lines.indexOfFirst { it.contains("private fun taskFromSharedCore") }
+        assertTrue("taskFromSharedCore not found", start >= 0)
+        val end = lines.subList(start + 1, lines.size)
+            .indexOfFirst { it.contains("private fun ") }
+            .let { if (it < 0) lines.size else start + 1 + it }
+        val mismatch = (start until end).firstOrNull {
+            lines[it].contains("shared_core_invalid_output")
+        }
+        assertTrue("shape-mismatch notice not found", mismatch != null)
+        val window = lines.subList(maxOf(start, mismatch!! - 6), mismatch + 3).joinToString("\n")
+        assertTrue("shape mismatch must report via CrashReporter", window.contains("CrashReporter.report("))
+        assertTrue(
+            "shape mismatch must keep invalid-output notice",
+            window.contains("shared_core_invalid_output"),
+        )
+    }
+
+    @Test
+    fun identityMismatchReportsWhileOperationValidationStaysSilent() {
+        val lines = productionFile("me/egigoka/pomodorough/data/TimerRepository.kt")
+            .readText().lines()
+        val start = lines.indexOfFirst { it.contains("private fun authoritativeTask") }
+        assertTrue("authoritativeTask not found", start >= 0)
+        val end = lines.subList(start + 1, lines.size)
+            .indexOfFirst { it.contains("private fun ") }
+            .let { if (it < 0) lines.size else start + 1 + it }
+        val body = lines.subList(start, end).joinToString("\n")
+        assertTrue("id mismatch must report via CrashReporter", body.contains("CrashReporter.report("))
+        assertTrue(
+            "id mismatch must wrap as InvalidOutput",
+            body.contains("InvalidOutput"),
+        )
+        assertTrue(
+            "id mismatch must keep invalid-output notice",
+            body.contains("shared_core_invalid_output"),
+        )
+    }
+
+    @Test
     fun abiLoadReportsWhileOperationValidationStaysSilent() {
         val lines = productionFile("me/egigoka/pomodorough/data/TimerRepository.kt")
             .readText().lines()

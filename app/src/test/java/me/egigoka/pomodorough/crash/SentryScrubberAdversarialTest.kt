@@ -351,6 +351,85 @@ class SentryScrubberAdversarialTest {
     }
 
     @Test
+    fun verifierStateQueryKeepsKeyButLosesValue() {
+        val scrubbed = checkNotNull(
+            SentryScrubber.scrubText(
+                "https://host/cb?verifier=verifier-secret" +
+                    "&code_verifier=code-secret&state=state-secret&other=1",
+            ),
+        )
+        assertTrue(scrubbed.contains("verifier="))
+        assertTrue(scrubbed.contains("code_verifier="))
+        assertTrue(scrubbed.contains("state="))
+        assertFalse(scrubbed.contains("verifier-secret"))
+        assertFalse(scrubbed.contains("code-secret"))
+        assertFalse(scrubbed.contains("state-secret"))
+        assertTrue(scrubbed.contains(SentryScrubber.REDACTED_TOKEN))
+        assertTrue(scrubbed.contains("other=1"))
+    }
+
+    @Test
+    fun verifierStateJsonLosesValue() {
+        val doubleScrubbed = checkNotNull(
+            SentryScrubber.scrubText(
+                "{\"verifier\": \"verifier-secret\", " +
+                    "\"code_verifier\": \"code-secret\", " +
+                    "\"state\": \"state-secret\", \"ok\": true}",
+            ),
+        )
+        assertFalse(doubleScrubbed.contains("verifier-secret"))
+        assertFalse(doubleScrubbed.contains("code-secret"))
+        assertFalse(doubleScrubbed.contains("state-secret"))
+        assertTrue(doubleScrubbed.contains(SentryScrubber.REDACTED_TOKEN))
+        assertTrue(doubleScrubbed.contains("\"ok\""))
+        val singleScrubbed = checkNotNull(
+            SentryScrubber.scrubText(
+                "{'verifier': 'verifier-secret', 'code_verifier': 'code-secret', " +
+                    "'state': 'state-secret', 'ok': true}",
+            ),
+        )
+        assertFalse(singleScrubbed.contains("verifier-secret"))
+        assertFalse(singleScrubbed.contains("code-secret"))
+        assertFalse(singleScrubbed.contains("state-secret"))
+        assertTrue(singleScrubbed.contains(SentryScrubber.REDACTED_TOKEN))
+    }
+
+    @Test
+    fun verifierStateExtrasStayOpaqueWhileLookalikesSurvive() {
+        val event = SentryEvent()
+        event.setExtra("verifier", "verifier-secret")
+        event.setExtra("code_verifier", "code-secret")
+        event.setExtra("state", "state-secret")
+        event.setExtra("statement", "quarterly statement draft")
+        event.setExtra("stateFlow", "stateFlow idle")
+        event.setExtra("retryCount", 3)
+        val crumb = Breadcrumb()
+        crumb.message = "auth"
+        crumb.setData("verifier", "verifier-secret")
+        crumb.setData("state", "state-secret")
+        crumb.setData("statement", "quarterly statement draft")
+        crumb.setData("attempt", 1)
+        event.breadcrumbs = listOf(crumb)
+        SentryScrubber.scrubEvent(event)
+        assertEquals(SentryScrubber.REDACTED, event.getExtra("verifier"))
+        assertEquals(SentryScrubber.REDACTED, event.getExtra("code_verifier"))
+        assertEquals(SentryScrubber.REDACTED, event.getExtra("state"))
+        assertEquals("quarterly statement draft", event.getExtra("statement"))
+        assertEquals("stateFlow idle", event.getExtra("stateFlow"))
+        assertEquals(3, event.getExtra("retryCount"))
+        val scrubbedCrumb = event.breadcrumbs!!.single()
+        assertEquals(SentryScrubber.REDACTED, scrubbedCrumb.getData("verifier"))
+        assertEquals(SentryScrubber.REDACTED, scrubbedCrumb.getData("state"))
+        assertEquals("quarterly statement draft", scrubbedCrumb.getData("statement"))
+        assertEquals(1, scrubbedCrumb.getData("attempt"))
+        val text = checkNotNull(
+            SentryScrubber.scrubText("statement draft stateFlow idle ok"),
+        )
+        assertTrue(text.contains("statement"))
+        assertTrue(text.contains("stateFlow"))
+    }
+
+    @Test
     fun challengeAndNonceExtrasStayOpaque() {
         val event = SentryEvent()
         event.setExtra("challenge", "chall-secret")

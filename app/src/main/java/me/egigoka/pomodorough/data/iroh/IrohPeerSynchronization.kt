@@ -131,6 +131,7 @@ internal class IrohPeerSynchronization(
                 syncPeer(endpoint, context, owner, peer)
                 synchronized = true
             } catch (error: Exception) {
+                // expected-silent: per-peer failure continues across peers with status events, not a crash.
                 currentCoroutineContext().ensureActive()
                 if (error is CancellationException && error !is TimeoutCancellationException) throw error
                 if (runCatching { dependencies.snapshot(context.roomId).conflict }

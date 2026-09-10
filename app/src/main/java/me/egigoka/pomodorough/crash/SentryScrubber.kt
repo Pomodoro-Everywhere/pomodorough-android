@@ -49,14 +49,17 @@ object SentryScrubber {
     // `refreshToken`/`csrfToken`/`deviceId` appear in raw JSON/query text
     // where isSensitiveKey substring matching cannot see them. `id_?token`
     // style covers snake + camel via (?i); bare `csrf` covers the prefix.
-    private val tokenQuery = Regex("(?i)([?&#;](token|id_?token|access_?token|refresh_?token|csrf_?token|csrf|nonce|challenge|device_?id|invite|code|secret|cookie|session|api_key|apikey|auth|authorization|password|passwd|credential|private_key|privatekey|bearer|ticket|dsn|device|peer|endpoint|room)=)[^&\\s\"';]+")
+    // A43: `verifier`/`code_verifier` are PKCE exchange secrets and `state`
+    // is the OIDC CSRF token; all three are exact query/JSON keys so
+    // `statement`/`stateFlow` diagnostics survive key filtering.
+    private val tokenQuery = Regex("(?i)([?&#;](token|id_?token|access_?token|refresh_?token|csrf_?token|csrf|nonce|challenge|verifier|code_verifier|state|device_?id|invite|code|secret|cookie|session|api_key|apikey|auth|authorization|password|passwd|credential|private_key|privatekey|bearer|ticket|dsn|device|peer|endpoint|room)=)[^&\\s\"';]+")
     private val tokenJson = Regex(
-        "(?i)(\"(token|id_?token|access_?token|refresh_?token|csrf_?token|csrf|nonce|challenge|device_?id|authorization|password|passwd|credential|secret|cookie|invite|session|api_key|apikey|auth|private_key|privatekey|bearer|ticket|dsn|device|peer|endpoint|room|code)\"\\s*:\\s*\")[^\"]+\"",
+        "(?i)(\"(token|id_?token|access_?token|refresh_?token|csrf_?token|csrf|nonce|challenge|verifier|code_verifier|state|device_?id|authorization|password|passwd|credential|secret|cookie|invite|session|api_key|apikey|auth|private_key|privatekey|bearer|ticket|dsn|device|peer|endpoint|room|code)\"\\s*:\\s*\")[^\"]+\"",
     )
     // A31: single-quoted JSON (`{'token': 'abc'}`) from loose loggers;
     // same key list as tokenJson, quote-agnostic on both key and value.
     private val tokenJsonSingle = Regex(
-        "(?i)('(token|id_?token|access_?token|refresh_?token|csrf_?token|csrf|nonce|challenge|device_?id|authorization|password|passwd|credential|secret|cookie|invite|session|api_key|apikey|auth|private_key|privatekey|bearer|ticket|dsn|device|peer|endpoint|room|code)'\\s*:\\s*')[^']+'",
+        "(?i)('(token|id_?token|access_?token|refresh_?token|csrf_?token|csrf|nonce|challenge|verifier|code_verifier|state|device_?id|authorization|password|passwd|credential|secret|cookie|invite|session|api_key|apikey|auth|private_key|privatekey|bearer|ticket|dsn|device|peer|endpoint|room|code)'\\s*:\\s*')[^']+'",
     )
     // A31: invites are `pomodorough1.` + base64url (`A-Za-z0-9_-`); the dot
     // is optional so pre-dot payloads still match. Strictly broader than
@@ -179,9 +182,13 @@ object SentryScrubber {
         // string beats leaking a route. `room` covers roomId/roomName.
         // A40: `nonce`/`challenge` are OIDC exchange secrets; `csrf`
         // covers bare csrf plus csrfToken (which also contains `token`).
+        // A43: `verifier` is a PKCE exchange secret (substring covers
+        // `code_verifier`/`codeVerifier`); `state` is exact-only so
+        // `statement`/`stateFlow` diagnostics survive key filtering.
         return normalized.contains("token") ||
             normalized.contains("nonce") ||
             normalized.contains("challenge") ||
+            normalized.contains("verifier") ||
             normalized.contains("csrf") ||
             normalized.contains("authorization") ||
             normalized.contains("auth") ||
@@ -203,6 +210,7 @@ object SentryScrubber {
             normalized.contains("peer") ||
             normalized.contains("endpoint") ||
             normalized.contains("room") ||
+            normalized == "state" ||
             normalized == "email"
     }
 
