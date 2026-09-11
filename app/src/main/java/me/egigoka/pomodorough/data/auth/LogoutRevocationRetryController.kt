@@ -55,7 +55,7 @@ internal class LogoutRevocationRetryController(
         } catch (error: CancellationException) {
             throw error
         } catch (_: Exception) {
-            // A31: stays silent by intent, no CrashReporter. Pending logout
+            // expected-silent: stays silent by intent, no CrashReporter. Pending logout
             // is durable retry state (survives restart via TokenVault); every
             // transient network/auth failure retries with bounded backoff
             // above. Reporting each would spam Sentry with peer/offline

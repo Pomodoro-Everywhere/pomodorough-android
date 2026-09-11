@@ -81,6 +81,8 @@ internal object UuidV7 {
                 randomLow = (randomLow shl 8) or (random[index].toLong() and 0xff)
             }
             randomLow = randomLow and MaxRandomLow
+            // expected-silent: batch-headroom miss retries with fresh entropy
+            // below; exhaustion after 16 draws throws IllegalArgumentException.
             runCatching {
                 return sequence(
                     timestampMs = timestampMs,

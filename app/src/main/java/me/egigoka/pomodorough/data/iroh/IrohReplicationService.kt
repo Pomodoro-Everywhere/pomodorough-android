@@ -162,6 +162,9 @@ class IrohReplicationService(
         endpointMark: String? = _state.value.endpointMark,
         message: String? = null,
     ) {
+        // expected-silent: snapshot failure keeps the last published state and
+        // still publishes the new status event; storage errors surface through
+        // the repository sync-failure UI, not a second crash here.
         val snapshot = roomId?.let { runCatching { store.snapshot(it) }.getOrNull() }
         _state.value = (snapshot ?: _state.value).copy(
             status = if (snapshot?.conflict != null) IrohConnectionStatus.CONFLICT else status,

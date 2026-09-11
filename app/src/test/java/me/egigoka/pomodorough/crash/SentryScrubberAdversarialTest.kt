@@ -430,6 +430,105 @@ class SentryScrubberAdversarialTest {
     }
 
     @Test
+    fun compoundSecretQueryKeepsKeyButLosesValue() {
+        val scrubbed = checkNotNull(
+            SentryScrubber.scrubText(
+                "https://host/cb?codeVerifier=cv-aa&code_verifier=cv-ab" +
+                    "&codeChallenge=cc-aa&code_challenge=cc-ab" +
+                    "&clientSecret=cs-aa&client_secret=cs-ab" +
+                    "&sessionId=si-aa&session_id=si-ab" +
+                    "&authToken=at-aa&auth_token=at-ab" +
+                    "&roomId=ri-aa&room_id=ri-ab" +
+                    "&roomSecret=rs-aa&room_secret=rs-ab" +
+                    "&endpointTicket=et-aa&endpoint_ticket=et-ab&other=1",
+            ),
+        )
+        listOf(
+            "codeVerifier=", "code_verifier=", "codeChallenge=",
+            "code_challenge=", "clientSecret=", "client_secret=",
+            "sessionId=", "session_id=", "authToken=", "auth_token=",
+            "roomId=", "room_id=", "roomSecret=", "room_secret=",
+            "endpointTicket=", "endpoint_ticket=",
+        ).forEach { assertTrue(scrubbed.contains(it)) }
+        listOf(
+            "cv-aa", "cv-ab", "cc-aa", "cc-ab", "cs-aa", "cs-ab",
+            "si-aa", "si-ab", "at-aa", "at-ab", "ri-aa", "ri-ab",
+            "rs-aa", "rs-ab", "et-aa", "et-ab",
+        ).forEach { assertFalse(scrubbed.contains(it)) }
+        assertTrue(scrubbed.contains(SentryScrubber.REDACTED_TOKEN))
+        assertTrue(scrubbed.contains("other=1"))
+    }
+
+    @Test
+    fun compoundSecretDoubleQuotedJsonLosesValue() {
+        val scrubbed = checkNotNull(
+            SentryScrubber.scrubText(
+                "{\"codeVerifier\": \"cv-aa\", \"code_verifier\": \"cv-ab\", " +
+                    "\"codeChallenge\": \"cc-aa\", \"code_challenge\": \"cc-ab\", " +
+                    "\"clientSecret\": \"cs-aa\", \"client_secret\": \"cs-ab\", " +
+                    "\"sessionId\": \"si-aa\", \"session_id\": \"si-ab\", " +
+                    "\"authToken\": \"at-aa\", \"auth_token\": \"at-ab\", " +
+                    "\"roomId\": \"ri-aa\", \"room_id\": \"ri-ab\", " +
+                    "\"roomSecret\": \"rs-aa\", \"room_secret\": \"rs-ab\", " +
+                    "\"endpointTicket\": \"et-aa\", " +
+                    "\"endpoint_ticket\": \"et-ab\", \"ok\": true}",
+            ),
+        )
+        listOf(
+            "cv-aa", "cv-ab", "cc-aa", "cc-ab", "cs-aa", "cs-ab",
+            "si-aa", "si-ab", "at-aa", "at-ab", "ri-aa", "ri-ab",
+            "rs-aa", "rs-ab", "et-aa", "et-ab",
+        ).forEach { assertFalse(scrubbed.contains(it)) }
+        assertTrue(scrubbed.contains("\"codeVerifier\""))
+        assertTrue(scrubbed.contains("\"session_id\""))
+        assertTrue(scrubbed.contains(SentryScrubber.REDACTED_TOKEN))
+        assertTrue(scrubbed.contains("\"ok\""))
+    }
+
+    @Test
+    fun compoundSecretSingleQuotedJsonLosesValue() {
+        val scrubbed = checkNotNull(
+            SentryScrubber.scrubText(
+                "{'codeVerifier': 'cv-aa', 'code_challenge': 'cc-ab', " +
+                    "'clientSecret': 'cs-aa', 'sessionId': 'si-aa', " +
+                    "'authToken': 'at-aa', 'roomId': 'ri-aa', " +
+                    "'roomSecret': 'rs-aa', 'endpointTicket': 'et-aa', " +
+                    "'ok': true}",
+            ),
+        )
+        listOf(
+            "cv-aa", "cc-ab", "cs-aa", "si-aa",
+            "at-aa", "ri-aa", "rs-aa", "et-aa",
+        ).forEach { assertFalse(scrubbed.contains(it)) }
+        assertTrue(scrubbed.contains(SentryScrubber.REDACTED_TOKEN))
+    }
+
+    @Test
+    fun compoundSecretExtrasStayOpaqueWhileCodeStaysQueryJsonOnly() {
+        val event = SentryEvent()
+        event.setExtra("codeVerifier", "cv-aa")
+        event.setExtra("codeChallenge", "cc-aa")
+        event.setExtra("clientSecret", "cs-aa")
+        event.setExtra("sessionId", "si-aa")
+        event.setExtra("authToken", "at-aa")
+        event.setExtra("roomId", "ri-aa")
+        event.setExtra("roomSecret", "rs-aa")
+        event.setExtra("endpointTicket", "et-aa")
+        event.setExtra("code", 7)
+        event.setExtra("retryCount", 3)
+        SentryScrubber.scrubEvent(event)
+        assertEquals(SentryScrubber.REDACTED, event.getExtra("codeVerifier"))
+        assertEquals(SentryScrubber.REDACTED, event.getExtra("codeChallenge"))
+        assertEquals(SentryScrubber.REDACTED, event.getExtra("clientSecret"))
+        assertEquals(SentryScrubber.REDACTED, event.getExtra("sessionId"))
+        assertEquals(SentryScrubber.REDACTED, event.getExtra("authToken"))
+        assertEquals(SentryScrubber.REDACTED, event.getExtra("roomId"))
+        assertEquals(SentryScrubber.REDACTED, event.getExtra("roomSecret"))
+        assertEquals(SentryScrubber.REDACTED, event.getExtra("endpointTicket"))
+        assertEquals(7, event.getExtra("code"))
+        assertEquals(3, event.getExtra("retryCount"))
+    }
+    @Test
     fun challengeAndNonceExtrasStayOpaque() {
         val event = SentryEvent()
         event.setExtra("challenge", "chall-secret")

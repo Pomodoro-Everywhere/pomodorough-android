@@ -52,14 +52,21 @@ object SentryScrubber {
     // A43: `verifier`/`code_verifier` are PKCE exchange secrets and `state`
     // is the OIDC CSRF token; all three are exact query/JSON keys so
     // `statement`/`stateFlow` diagnostics survive key filtering.
-    private val tokenQuery = Regex("(?i)([?&#;](token|id_?token|access_?token|refresh_?token|csrf_?token|csrf|nonce|challenge|verifier|code_verifier|state|device_?id|invite|code|secret|cookie|session|api_key|apikey|auth|authorization|password|passwd|credential|private_key|privatekey|bearer|ticket|dsn|device|peer|endpoint|room)=)[^&\\s\"';]+")
+    // A46: compound keys miss exact matching (`codeVerifier` !=
+    // `code_verifier`, `clientSecret` != `secret`, `sessionId` !=
+    // `session`, `authToken` != `auth`/`token`, `roomId`/`roomSecret`
+    // != `room`/`secret`, `endpointTicket` != `endpoint`/`ticket`,
+    // `codeChallenge` != `challenge`). `x_?y` covers snake + camel via
+    // (?i) like `refresh_?token`. `state` stays exact-only and `code`
+    // stays query/JSON-only per A43.
+    private val tokenQuery = Regex("(?i)([?&#;](token|id_?token|access_?token|refresh_?token|csrf_?token|csrf|nonce|challenge|code_?challenge|verifier|code_?verifier|client_?secret|session_?id|auth_?token|room_?id|room_?secret|endpoint_?ticket|state|device_?id|invite|code|secret|cookie|session|api_key|apikey|auth|authorization|password|passwd|credential|private_key|privatekey|bearer|ticket|dsn|device|peer|endpoint|room)=)[^&\\s\"';]+")
     private val tokenJson = Regex(
-        "(?i)(\"(token|id_?token|access_?token|refresh_?token|csrf_?token|csrf|nonce|challenge|verifier|code_verifier|state|device_?id|authorization|password|passwd|credential|secret|cookie|invite|session|api_key|apikey|auth|private_key|privatekey|bearer|ticket|dsn|device|peer|endpoint|room|code)\"\\s*:\\s*\")[^\"]+\"",
+        "(?i)(\"(token|id_?token|access_?token|refresh_?token|csrf_?token|csrf|nonce|challenge|code_?challenge|verifier|code_?verifier|client_?secret|session_?id|auth_?token|room_?id|room_?secret|endpoint_?ticket|state|device_?id|authorization|password|passwd|credential|secret|cookie|invite|session|api_key|apikey|auth|private_key|privatekey|bearer|ticket|dsn|device|peer|endpoint|room|code)\"\\s*:\\s*\")[^\"]+\"",
     )
     // A31: single-quoted JSON (`{'token': 'abc'}`) from loose loggers;
     // same key list as tokenJson, quote-agnostic on both key and value.
     private val tokenJsonSingle = Regex(
-        "(?i)('(token|id_?token|access_?token|refresh_?token|csrf_?token|csrf|nonce|challenge|verifier|code_verifier|state|device_?id|authorization|password|passwd|credential|secret|cookie|invite|session|api_key|apikey|auth|private_key|privatekey|bearer|ticket|dsn|device|peer|endpoint|room|code)'\\s*:\\s*')[^']+'",
+        "(?i)('(token|id_?token|access_?token|refresh_?token|csrf_?token|csrf|nonce|challenge|code_?challenge|verifier|code_?verifier|client_?secret|session_?id|auth_?token|room_?id|room_?secret|endpoint_?ticket|state|device_?id|authorization|password|passwd|credential|secret|cookie|invite|session|api_key|apikey|auth|private_key|privatekey|bearer|ticket|dsn|device|peer|endpoint|room|code)'\\s*:\\s*')[^']+'",
     )
     // A31: invites are `pomodorough1.` + base64url (`A-Za-z0-9_-`); the dot
     // is optional so pre-dot payloads still match. Strictly broader than

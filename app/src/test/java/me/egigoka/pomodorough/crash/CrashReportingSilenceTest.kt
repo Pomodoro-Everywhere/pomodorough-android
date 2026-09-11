@@ -1,6 +1,7 @@
 package me.egigoka.pomodorough.crash
 
 import java.io.File
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -21,7 +22,65 @@ class CrashReportingSilenceTest {
         "me/egigoka/pomodorough/data/CoreSynchronizationDispatchers.kt",
         "me/egigoka/pomodorough/data/CoreTimerPolicyDispatchers.kt",
         "me/egigoka/pomodorough/data/api/PomodoroughApi.kt",
+        "me/egigoka/pomodorough/core/SharedCore.kt",
+        "me/egigoka/pomodorough/crash/CrashReporter.kt",
+        "me/egigoka/pomodorough/data/AccountDeletionScrubRetry.kt",
+        "me/egigoka/pomodorough/data/CentralizedSyncCoordinator.kt",
+        "me/egigoka/pomodorough/data/SyncWireBounds.kt",
+        "me/egigoka/pomodorough/data/SynchronizedProjectionRequest.kt",
+        "me/egigoka/pomodorough/data/TimerLocalInitialization.kt",
+        "me/egigoka/pomodorough/data/UuidV7.kt",
+        "me/egigoka/pomodorough/data/auth/LogoutRevocationRetryController.kt",
+        "me/egigoka/pomodorough/data/auth/TokenVault.kt",
+        "me/egigoka/pomodorough/data/iroh/IrohCanonicalRecordPersistence.kt",
+        "me/egigoka/pomodorough/data/iroh/IrohEndpointTransport.kt",
+        "me/egigoka/pomodorough/data/iroh/IrohReplicationService.kt",
+        "me/egigoka/pomodorough/data/iroh/IrohRoomMetadataPersistence.kt",
+        "me/egigoka/pomodorough/data/iroh/IrohSecretVault.kt",
+        "me/egigoka/pomodorough/data/iroh/protocol/CanonicalRecordCodec.kt",
+        "me/egigoka/pomodorough/data/iroh/protocol/EndpointIdentity.kt",
+        "me/egigoka/pomodorough/data/iroh/protocol/InviteCodec.kt",
+        "me/egigoka/pomodorough/data/iroh/protocol/RpcMessageCodec.kt",
+        "me/egigoka/pomodorough/data/local/TimerMigrations.kt",
+        "me/egigoka/pomodorough/domain/SettingsReducer.kt",
+        "me/egigoka/pomodorough/domain/TaskReducer.kt",
+        "me/egigoka/pomodorough/domain/TimerPresentation.kt",
+        "me/egigoka/pomodorough/timer/TimerAlarmReceiver.kt",
+        "me/egigoka/pomodorough/timer/TimerAlarmScheduler.kt",
+        "me/egigoka/pomodorough/ui/UiComponents.kt",
     )
+
+    @Test
+    fun everyFileWithCatchOrRunCatchingIsAudited() {
+        val root = productionRoot()
+        val expected = auditedFiles.toSet()
+        val offenders = root.walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .map { it.relativeTo(root).invariantSeparatorsPath }
+            .filter { relative ->
+                val text = File(root, relative).readText()
+                text.contains("catch (") || text.contains("runCatching")
+            }
+            .filter { it !in expected }
+            .toList()
+        assertTrue("add silent-catch audit coverage for: $offenders", offenders.isEmpty())
+    }
+
+    @Test
+    fun auditedFilesAllExist() {
+        val missing = auditedFiles.filter { !File(productionRoot(), it).isFile }
+        assertTrue("audited files are missing: $missing", missing.isEmpty())
+    }
+
+    @Test
+    fun logoutRetrySilenceUsesStandardMarker() {
+        val text = File(
+            productionRoot(),
+            "me/egigoka/pomodorough/data/auth/LogoutRevocationRetryController.kt",
+        ).readText()
+        assertTrue(text.contains("expected-silent:"))
+        assertFalse(text.contains("A31:"))
+    }
 
     @Test
     fun expectedSilentBranchesNeverReport() {
@@ -34,7 +93,7 @@ class CrashReportingSilenceTest {
                 assertSilentCatchBody(relativePath, lines, index)
             }
         }
-        assertTrue("expected-silent markers shrank to $markers, update this audit", markers >= 50)
+        assertTrue("expected-silent markers shrank to $markers, update this audit", markers >= 58)
     }
 
     @Test

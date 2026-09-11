@@ -436,6 +436,8 @@ internal fun historyDescription(item: HistoryItem, taskTitle: String?, showPendi
 @Composable
 internal fun formatHistoryDate(item: HistoryItem): String {
     val value = item.completedAt ?: item.endedAt ?: return stringResource(R.string.time_not_recorded)
+    // expected-silent: malformed timestamp falls back to the not-recorded
+    // label; display formatting must never crash the history list.
     return runCatching {
         DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM, FormatStyle.SHORT)
             .withLocale(Locale.getDefault())

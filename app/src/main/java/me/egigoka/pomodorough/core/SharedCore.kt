@@ -107,6 +107,9 @@ class SharedCore internal constructor(
             try {
                 release(pointer, bytes.size.toLong())
             } catch (cleanup: Throwable) {
+                // expected-silent: cleanup failure is recorded as unusableCause
+                // and suppressed onto the primary failure, which is rethrown
+                // below; reporting here would duplicate the primary crash.
                 unusableCause = cleanup
                 cause.addSuppressed(cleanup)
             }
@@ -132,6 +135,9 @@ class SharedCore internal constructor(
             try {
                 release(pointer, length)
             } catch (cleanup: Throwable) {
+                // expected-silent: cleanup failure is folded into the release
+                // accumulator and rethrown when there is no primary failure;
+                // reporting here would duplicate the primary crash.
                 unusableCause = cleanup
                 if (failure == null) {
                     failure = cleanup

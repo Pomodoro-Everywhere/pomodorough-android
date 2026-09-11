@@ -25,6 +25,8 @@ object CrashReporter {
         } catch (failure: Throwable) {
             runCatching { Log.e(Tag, "CrashReporter delegate failed", failure) }
             runCatching { onReporterFailure?.invoke(error, failure) }
+            // expected-silent: last-resort logging must never recurse into
+            // reporting; delegate failure stays in Logcat plus the test hook.
         }
     }
 }
