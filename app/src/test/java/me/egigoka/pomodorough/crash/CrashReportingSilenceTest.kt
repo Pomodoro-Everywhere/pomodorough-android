@@ -58,6 +58,16 @@ class CrashReportingSilenceTest {
         "me/egigoka/pomodorough/data/TimerRepository.kt" to "fun confirmAccountSwitchInternal(",
         "me/egigoka/pomodorough/data/TimerRepository.kt" to "fun commitLocalAccountReset(",
         "me/egigoka/pomodorough/data/TimerRepository.kt" to "fun logoutInternal(",
+        "me/egigoka/pomodorough/data/iroh/IrohRoomOrchestration.kt" to "fun setMode(",
+        "me/egigoka/pomodorough/data/iroh/IrohRoomOrchestration.kt" to "fun createRoom(",
+        "me/egigoka/pomodorough/data/iroh/IrohRoomOrchestration.kt" to "fun joinRoom(",
+        "me/egigoka/pomodorough/data/iroh/IrohRoomOrchestration.kt" to "fun leaveRoom(",
+        "me/egigoka/pomodorough/data/TimerRepository.kt" to "fun prepareRemoteLogout(",
+        "me/egigoka/pomodorough/data/TimerRepository.kt" to "fun refreshResolutionBootstrap(",
+        "me/egigoka/pomodorough/data/TimerRepository.kt" to "fun recoverCorruptedResolution(",
+        "me/egigoka/pomodorough/data/TimerRepository.kt" to "fun performBootstrapResolution(",
+        "me/egigoka/pomodorough/data/TimerRepository.kt" to "fun restoreProfile(",
+        "me/egigoka/pomodorough/data/iroh/IrohIncomingRpcHandler.kt" to "fun readAuthenticatedRequest(",
     )
 
     @Test
@@ -136,9 +146,11 @@ class CrashReportingSilenceTest {
 
     @Test
     fun suspendGenericCatchesRethrowCancellation() {
-        // A48: suspend generic catches must rethrow CancellationException first.
+        // A48+A49: suspend generic catches must rethrow CancellationException first.
         // TimerAlarmReceiver.deliver stays silent intentionally,
         // pinned by TimerAlarmDeliveryPolicyTest.cancellationStaysSilent.
+        // IrohPeerSynchronization per-peer TimeoutCancellationException swallow stays,
+        // pinned by IrohPeerSynchronizationTimeoutTest + A49 comment in syncPeers.
         cancellationGuardSites.forEach { (relativePath, funSig) ->
             assertHasCancellationGuard(relativePath, funSig)
         }

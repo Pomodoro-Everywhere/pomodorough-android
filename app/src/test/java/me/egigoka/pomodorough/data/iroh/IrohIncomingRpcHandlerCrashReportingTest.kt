@@ -11,6 +11,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runTest
 import me.egigoka.pomodorough.crash.CrashReporter
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -220,6 +221,31 @@ class IrohIncomingRpcHandlerCrashReportingTest {
             val context = IrohServiceContext("room", ByteArray(32) { 1 }, "device", null)
             val result = handler.response(inventoryRequest("room", "request-3"), context)
             assertTrue(result is IrohRpcMessage.Error)
+            assertTrue(reported.isEmpty())
+        } finally {
+            CrashReporter.delegate = previous
+        }
+    }
+
+    @Test
+    fun readAuthenticatedRequestCancellationPropagatesWithoutNull() = runTest {
+        val reported = mutableListOf<Throwable>()
+        val previous = CrashReporter.delegate
+        CrashReporter.delegate = reported::add
+        try {
+            val cancellation = CancellationException("gone")
+            val handler = handler()
+            val failure = runCatching {
+                handler.readAuthenticatedRequest(
+                    FakeRecvStream(cancellation),
+                    IrohServiceContext("room", ByteArray(32) { 1 }, "device", null),
+                )
+            }.exceptionOrNull()
+            // A49: transport withTimeout may rewrap the carrier, so assert
+            // CancellationException type + message propagate (not null) rather
+            // than strict identity. Must not be swallowed to null or reported.
+            assertTrue(failure is CancellationException)
+            assertEquals("gone", (failure as CancellationException).message)
             assertTrue(reported.isEmpty())
         } finally {
             CrashReporter.delegate = previous

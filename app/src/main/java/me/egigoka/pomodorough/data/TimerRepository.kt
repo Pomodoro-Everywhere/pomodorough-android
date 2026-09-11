@@ -929,6 +929,8 @@ class TimerRepository(
         return try {
             auth.prepareLogout()
             true
+        } catch (error: CancellationException) {
+            throw error
         } catch (error: Exception) {
             // expected-silent: remote sign-out preservation failure surfaces as a notice, not a crash.
             actionMutex.withLock {
@@ -1609,6 +1611,8 @@ class TimerRepository(
         val identity = actionMutex.withLock { currentAttemptIdentity() }
         val refreshed = try {
             fetchTimedBootstrap()
+        } catch (error: CancellationException) {
+            throw error
         } catch (_: AuthenticationRequired) {
             // expected-silent: session expiry surfaces as resolution error, not a crash.
             handleAuthenticationRequired(
@@ -1718,6 +1722,8 @@ class TimerRepository(
                 bootstrap.clockSample,
                 repreviewResolution = true,
             )
+        } catch (error: CancellationException) {
+            throw error
         } catch (_: AuthenticationRequired) {
             // expected-silent: session expiry surfaces as corrupted recovery, not a crash.
             expireResolutionRecovery(identity)
@@ -1888,6 +1894,8 @@ class TimerRepository(
             ) ?: return
             if (shouldSync) requestSync(force = true)
             if (foreground) centralizedSyncRuntime.requestRevisionOpen()
+        } catch (error: CancellationException) {
+            throw error
         } catch (error: BootstrapConflictException) {
             // expected-silent: server conflict surfaces as resolution UI, not a crash.
             handleBootstrapConflict(identity, error)
@@ -2035,6 +2043,8 @@ class TimerRepository(
             val profile = fetchValidatedProfile()
             val bootstrap = fetchTimedBootstrap()
             completeAuthentication(profile, bootstrap.response, identity, bootstrap.clockSample)
+        } catch (error: CancellationException) {
+            throw error
         } catch (error: IOException) {
             // expected-silent: offline failure surfaces as a bootstrap notice, not a crash.
             failProfileRestore(

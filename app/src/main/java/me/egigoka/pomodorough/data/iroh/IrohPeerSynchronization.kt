@@ -131,6 +131,10 @@ internal class IrohPeerSynchronization(
                 syncPeer(endpoint, context, owner, peer)
                 synchronized = true
             } catch (error: Exception) {
+                // A49 pinned: TimeoutCancellationException from syncPeer withTimeout(45s)
+                // is a per-peer deadline, intentionally swallowed to continue across peers.
+                // Plain CancellationException (outer scope cancel/generation change) must
+                // propagate via the rethrow below. See IrohPeerSynchronizationTimeoutTest.
                 // expected-silent: per-peer failure continues across peers with status events, not a crash.
                 currentCoroutineContext().ensureActive()
                 if (error is CancellationException && error !is TimeoutCancellationException) throw error

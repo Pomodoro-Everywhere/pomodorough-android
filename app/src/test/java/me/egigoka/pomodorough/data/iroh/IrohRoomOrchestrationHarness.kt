@@ -34,6 +34,10 @@ internal class IrohRoomOrchestrationHarness(
     var capturedProjection = IrohRoomProjection(workspace, 5)
     var preparedRoom: Pair<IrohRoomEntity, Boolean>? = null
     var startFailure: Exception? = null
+    var setModeFailure: Exception? = null
+    var createRoomFailure: Exception? = null
+    var prepareJoinedRoomFailure: Exception? = null
+    var leaveFailure: Exception? = null
     var discardCount = 0
     var captureCount = 0
     var startCount = 0
@@ -73,6 +77,7 @@ internal class IrohRoomOrchestrationHarness(
             replicationSettings = { settings },
             discardIncompleteRooms = { discardCount += 1 },
             setMode = { mode ->
+                setModeFailure?.let { throw it }
                 modes += mode
                 settings = ReplicationSettingsEntity(mode = mode.name, activeRoomId = settings.activeRoomId)
                 state.value = state.value.copy(mode = mode)
@@ -83,6 +88,7 @@ internal class IrohRoomOrchestrationHarness(
                 capturedProjection
             },
             createRoom = { name ->
+                createRoomFailure?.let { throw it }
                 createdNames += name
                 val secret = checkNotNull(roomSecret)
                 val created = room(IrohProtocolV1.roomId(secret), name)
@@ -96,10 +102,12 @@ internal class IrohRoomOrchestrationHarness(
             activeRoom = { room },
             activeRoomSecret = { roomSecret?.copyOf() },
             prepareJoinedRoom = { invite, _ ->
+                prepareJoinedRoomFailure?.let { throw it }
                 preparedRoom ?: (room(invite.roomId, invite.roomName) to true)
             },
             discardIncompleteInactiveRoom = { discardedRooms += it },
             leaveActiveRoom = {
+                leaveFailure?.let { throw it }
                 settings = ReplicationSettingsEntity(mode = ReplicationMode.OFFLINE.name)
                 room = null
             },

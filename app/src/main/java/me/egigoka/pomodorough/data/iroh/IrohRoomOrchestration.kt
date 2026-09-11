@@ -101,6 +101,8 @@ internal class IrohRoomOrchestration(
             val snapshot = room?.let { persistence.snapshot(it.roomId) }
             publish((snapshot ?: IrohNetworkState()).copy(mode = mode, transitioning = false))
             if (mode == ReplicationMode.IROH && isForeground()) startIfNeeded()
+        } catch (error: CancellationException) {
+            throw error
         } catch (error: Exception) {
             // expected-silent: route change failure surfaces as UNAVAILABLE status, not a crash.
             recoverPersistedRoute(error, "Replication route could not be changed")
@@ -128,6 +130,8 @@ internal class IrohRoomOrchestration(
             invite = IrohRoomInvite(room.roomId, room.roomName, ticket, secret).encode()
             secret.fill(0)
             publish(service.state.value.copy(invite = invite, message = null))
+        } catch (error: CancellationException) {
+            throw error
         } catch (error: Exception) {
             // expected-silent: room creation failure surfaces as UNAVAILABLE status, not a crash.
             handleCreateFailure(roomId, error)
@@ -143,6 +147,8 @@ internal class IrohRoomOrchestration(
             preparation = prepareJoinedRoom(decoded)
             connectJoinedRoom(decoded)
             completeJoinedRoom(decoded.roomId)
+        } catch (error: CancellationException) {
+            throw error
         } catch (error: Exception) {
             // expected-silent: room join failure surfaces as UNAVAILABLE status, not a crash.
             rollbackJoinedRoom(preparation)
@@ -161,6 +167,8 @@ internal class IrohRoomOrchestration(
             persistence.leaveActiveRoom()
             invite = null
             publish(IrohNetworkState(mode = ReplicationMode.OFFLINE, transitioning = false))
+        } catch (error: CancellationException) {
+            throw error
         } catch (error: Exception) {
             // expected-silent: room leave failure surfaces as UNAVAILABLE status, not a crash.
             recoverPersistedRoute(error, "Iroh room could not be left")

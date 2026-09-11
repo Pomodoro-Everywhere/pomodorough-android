@@ -142,6 +142,8 @@ internal class IrohIncomingRpcHandler(
         context: IrohServiceContext,
     ): IrohRpcMessage? = try {
         transport.readMessage(recv, context.roomSecret)
+    } catch (error: CancellationException) {
+        throw error
     } catch (error: IOException) {
         // expected-silent: untrusted peer sent a truncated frame or dropped the
         // stream; the request is skipped without responding.

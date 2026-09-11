@@ -1,8 +1,10 @@
 package me.egigoka.pomodorough.data.iroh
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import me.egigoka.pomodorough.crash.CrashReporter
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -49,6 +51,97 @@ class IrohOrchestrationCrashReportingTest {
                 harness.state.value.identityRecovery ==
                     IrohIdentityRecoveryKind.KEY_INVALIDATED_OR_MISSING
             }
+            assertTrue(reported.isEmpty())
+        } finally {
+            CrashReporter.delegate = previous
+            harness.orchestration.close()
+        }
+    }
+
+    @Test
+    fun setModeCancellationPropagatesWithoutUnavailable() = runTest {
+        val reported = mutableListOf<Throwable>()
+        val previous = CrashReporter.delegate
+        CrashReporter.delegate = reported::add
+        val harness = IrohRoomOrchestrationHarness()
+        try {
+            harness.orchestration.initialize()
+            val cancellation = CancellationException("gone")
+            harness.setModeFailure = cancellation
+            val failure = runCatching {
+                harness.orchestration.setMode(ReplicationMode.IROH)
+            }.exceptionOrNull()
+            assertSame(cancellation, failure)
+            assertTrue(harness.state.value.status != IrohConnectionStatus.UNAVAILABLE)
+            assertTrue(reported.isEmpty())
+        } finally {
+            CrashReporter.delegate = previous
+            harness.orchestration.close()
+        }
+    }
+
+    @Test
+    fun createRoomCancellationPropagatesWithoutUnavailable() = runTest {
+        val reported = mutableListOf<Throwable>()
+        val previous = CrashReporter.delegate
+        CrashReporter.delegate = reported::add
+        val harness = IrohRoomOrchestrationHarness()
+        try {
+            harness.orchestration.initialize()
+            val cancellation = CancellationException("gone")
+            harness.createRoomFailure = cancellation
+            val failure = runCatching {
+                harness.orchestration.createRoom("Room")
+            }.exceptionOrNull()
+            assertSame(cancellation, failure)
+            assertTrue(harness.state.value.status != IrohConnectionStatus.UNAVAILABLE)
+            assertTrue(reported.isEmpty())
+        } finally {
+            CrashReporter.delegate = previous
+            harness.orchestration.close()
+        }
+    }
+
+    @Test
+    fun joinRoomCancellationPropagatesWithoutUnavailable() = runTest {
+        val reported = mutableListOf<Throwable>()
+        val previous = CrashReporter.delegate
+        CrashReporter.delegate = reported::add
+        val harness = IrohRoomOrchestrationHarness()
+        try {
+            harness.orchestration.initialize()
+            val cancellation = CancellationException("gone")
+            harness.prepareJoinedRoomFailure = cancellation
+            val failure = runCatching {
+                harness.orchestration.joinRoom(harness.invite())
+            }.exceptionOrNull()
+            assertSame(cancellation, failure)
+            assertTrue(harness.state.value.status != IrohConnectionStatus.UNAVAILABLE)
+            assertTrue(reported.isEmpty())
+        } finally {
+            CrashReporter.delegate = previous
+            harness.orchestration.close()
+        }
+    }
+
+    @Test
+    fun leaveRoomCancellationPropagatesWithoutUnavailable() = runTest {
+        val reported = mutableListOf<Throwable>()
+        val previous = CrashReporter.delegate
+        CrashReporter.delegate = reported::add
+        val harness = IrohRoomOrchestrationHarness(
+            initialMode = ReplicationMode.IROH,
+            activeRoomId = "room-test0001",
+        )
+        try {
+            harness.orchestration.initialize()
+            val cancellation = CancellationException("gone")
+            harness.leaveFailure = cancellation
+            val failure = runCatching {
+                harness.orchestration.leaveRoom()
+            }.exceptionOrNull()
+            assertSame(cancellation, failure)
+            assertTrue(harness.state.value.status != IrohConnectionStatus.UNAVAILABLE)
             assertTrue(reported.isEmpty())
         } finally {
             CrashReporter.delegate = previous

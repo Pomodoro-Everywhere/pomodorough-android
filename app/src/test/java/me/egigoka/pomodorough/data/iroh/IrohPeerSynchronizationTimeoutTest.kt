@@ -146,6 +146,30 @@ class IrohPeerSynchronizationTimeoutTest {
     }
 
     @Test
+    fun perPeerTimeoutSwallowIsPinnedWhilePlainCancellationPropagates() = runTest {
+        // A49 pinned: TimeoutCancellationException from syncPeer withTimeout(45s)
+        // is a per-peer deadline and continues across peers; plain
+        // CancellationException must propagate unchanged without status events.
+        val timeoutFixture = PeerFixture { peer ->
+            if (peer.endpointId == "stalled") withTimeout(30_000) { awaitCancellation() }
+        }
+        val timeoutJob = launch { timeoutFixture.sync.syncNow() }
+        advanceTimeBy(30_000)
+        runCurrent()
+        timeoutJob.join()
+        assertTrue(timeoutJob.isCompleted && !timeoutJob.isCancelled)
+        assertEquals(listOf("stalled", "healthy"), timeoutFixture.attempts)
+        assertEquals(IrohConnectionStatus.LISTENING, timeoutFixture.statuses.last())
+
+        val cancellation = CancellationException("service stopped")
+        val cancelFixture = PeerFixture { throw cancellation }
+        val failure = runCatching { cancelFixture.sync.syncNow() }.exceptionOrNull()
+        assertCancellationPropagated(cancellation, failure)
+        assertEquals(listOf("stalled"), cancelFixture.attempts)
+        assertTrue(cancelFixture.statuses.isEmpty())
+    }
+
+    @Test
     fun cancellationProvenanceAcceptsOriginalAndRecoveredForms() {
         val cancellation = CancellationException("service stopped").apply {
             initCause(IOException("original cause"))
