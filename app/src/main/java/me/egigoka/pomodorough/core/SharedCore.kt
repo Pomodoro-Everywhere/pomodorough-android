@@ -249,8 +249,8 @@ class SharedCore internal constructor(
 
     companion object {
         const val ASSET_NAME = "pomodorough_core.wasm"
-        const val CORE_COMMIT = "6561ce0e33584ff642e74eb84f412f4382c73b7a"
-        const val CORE_SHA256 = "cdb4e6184d8e88e36e20ed798372218c023fcdbf55f8b97bb015cb17f1e6cab8"
+        const val CORE_COMMIT = "7cdc404cb5d0ae7aed0c675dfc9e1c0faf8f39af"
+        const val CORE_SHA256 = "3fec2bf5ea6fc0c2a8ddec862fbaed0cb2fabe14e466ee4dfa3fb80b99d4da49"
 
         private const val MAX_OPERATION_BYTES = 256
         private const val MAX_TRANSFER_BYTES = 16 * 1024 * 1024
