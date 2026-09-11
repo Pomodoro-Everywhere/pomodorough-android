@@ -155,7 +155,7 @@ internal class IrohIncomingRpcHandler(
         null
     }
 
-    private suspend fun response(
+    internal suspend fun response(
         message: IrohRpcMessage,
         context: IrohServiceContext,
     ): IrohRpcMessage = try {
@@ -164,6 +164,8 @@ internal class IrohIncomingRpcHandler(
             is IrohRpcMessage.Operations -> operationsResponse(message, context)
             else -> throw IllegalArgumentException("Request kind is unavailable after hello")
         }
+    } catch (error: CancellationException) {
+        throw error
     } catch (error: Exception) {
         // expected-silent: peer request mapping failure replies as protocol error, not a crash.
         errorResponse(message, context, error)

@@ -809,6 +809,8 @@ class TimerRepository(
                     reason = AccountWorkspaceReason.LocalAccountResetStarted,
                 )
             }
+        } catch (error: CancellationException) {
+            throw error
         } catch (error: Exception) {
             // expected-silent: local reset failure surfaces as a notice with corrupt data kept, not a crash.
             actionMutex.withLock {
@@ -893,6 +895,8 @@ class TimerRepository(
                     reason = AccountWorkspaceReason.LogoutStarted,
                 )
             }
+        } catch (error: CancellationException) {
+            throw error
         } catch (error: Exception) {
             // expected-silent: sign-out scrub failure surfaces as a notice with local data kept, not a crash.
             actionMutex.withLock {
@@ -1073,6 +1077,8 @@ class TimerRepository(
             }
             auth.clear()
             scrubDeletedAccount(deletionGeneration)
+        } catch (error: CancellationException) {
+            throw error
         } catch (error: Exception) {
             CrashReporter.report(error)
             if (local.accountDeletionState == AccountDeletionRemoteCommitted) {
@@ -1138,6 +1144,8 @@ class TimerRepository(
                 installAccountSwitch(candidate)
             }
             if (foreground) centralizedSyncRuntime.requestRevisionOpen()
+        } catch (error: CancellationException) {
+            throw error
         } catch (error: Exception) {
             CrashReporter.report(error)
             actionMutex.withLock {
@@ -1469,6 +1477,8 @@ class TimerRepository(
         }
         if (saved) afterLocalMutation()
         expired
+    } catch (error: CancellationException) {
+        throw error
     } catch (error: Exception) {
         // expected-silent: expired-timer projection failure surfaces as room conflict, not a crash.
         conflict = error.message ?: appContext.getString(R.string.iroh_room_projection_could_not_be_refreshed)
@@ -2612,6 +2622,8 @@ class TimerRepository(
             try {
                 replication?.afterLocalMutation()
                 reloadWorkspace(ReplicationMode.IROH)
+            } catch (error: CancellationException) {
+                throw error
             } catch (error: Exception) {
                 // expected-silent: post-mutation refresh failure surfaces as room conflict, not a crash.
                 conflict = error.message ?: appContext.getString(R.string.iroh_room_operation_could_not_be_recorded)

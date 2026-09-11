@@ -7,10 +7,12 @@ import computer.iroh.Incoming
 import computer.iroh.NoHandle
 import computer.iroh.RecvStream
 import java.io.IOException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runTest
 import me.egigoka.pomodorough.crash.CrashReporter
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -163,6 +165,67 @@ class IrohIncomingRpcHandlerCrashReportingTest {
         }
     }
 
+    @Test
+    fun inventoryCancellationPropagatesWithoutErrorResponse() = runTest {
+        val reported = mutableListOf<Throwable>()
+        val previous = CrashReporter.delegate
+        CrashReporter.delegate = reported::add
+        try {
+            val cancellation = CancellationException("gone")
+            val handler = handlerWithDependencies(
+                inventory = { _, _, _ -> throw cancellation },
+                operations = { _, _ -> emptyList() },
+            )
+            val context = IrohServiceContext("room", ByteArray(32) { 1 }, "device", null)
+            val message = inventoryRequest("room", "request-1")
+            val failure = runCatching { handler.response(message, context) }.exceptionOrNull()
+            assertSame(cancellation, failure)
+            assertTrue(reported.isEmpty())
+        } finally {
+            CrashReporter.delegate = previous
+        }
+    }
+
+    @Test
+    fun operationsCancellationPropagatesWithoutErrorResponse() = runTest {
+        val reported = mutableListOf<Throwable>()
+        val previous = CrashReporter.delegate
+        CrashReporter.delegate = reported::add
+        try {
+            val cancellation = CancellationException("gone")
+            val handler = handlerWithDependencies(
+                inventory = { _, _, _ -> emptyList<IrohInventoryEntry>() to null },
+                operations = { _, _ -> throw cancellation },
+            )
+            val context = IrohServiceContext("room", ByteArray(32) { 1 }, "device", null)
+            val message = operationsRequest("room", "request-2")
+            val failure = runCatching { handler.response(message, context) }.exceptionOrNull()
+            assertSame(cancellation, failure)
+            assertTrue(reported.isEmpty())
+        } finally {
+            CrashReporter.delegate = previous
+        }
+    }
+
+    @Test
+    fun mappingFailureStillReturnsErrorResponse() = runTest {
+        val reported = mutableListOf<Throwable>()
+        val previous = CrashReporter.delegate
+        CrashReporter.delegate = reported::add
+        try {
+            val handler = handlerWithDependencies(
+                inventory = { _, _, _ -> throw IllegalStateException("store broken") },
+                operations = { _, _ -> emptyList() },
+            )
+            val context = IrohServiceContext("room", ByteArray(32) { 1 }, "device", null)
+            val result = handler.response(inventoryRequest("room", "request-3"), context)
+            assertTrue(result is IrohRpcMessage.Error)
+            assertTrue(reported.isEmpty())
+        } finally {
+            CrashReporter.delegate = previous
+        }
+    }
+
     private fun handler(): IrohIncomingRpcHandler {
         val transport = IrohEndpointTransport()
         val authentication = IrohPeerAuthentication(
@@ -204,6 +267,47 @@ class IrohIncomingRpcHandlerCrashReportingTest {
             {},
         )
     }
+
+    private fun handlerWithDependencies(
+        inventory: suspend (String, String?, Int) -> Pair<List<IrohInventoryEntry>, String?>,
+        operations: suspend (String, List<IrohInventoryReference>) -> List<IrohOperationRecord>,
+    ): IrohIncomingRpcHandler {
+        val transport = IrohEndpointTransport()
+        val authentication = IrohPeerAuthentication(
+            transport,
+            IrohPeerAuthorization(IrohEndpointTicketIdentity { it }),
+            { "local-ticket" },
+            {},
+        )
+        return IrohIncomingRpcHandler(
+            FakeSessions(),
+            authentication,
+            transport,
+            IrohIncomingRpcDependencies(inventory, operations),
+            {},
+        )
+    }
+
+    private fun inventoryRequest(roomId: String, requestId: String) = IrohRpcMessage.Inventory(
+        IrohInventoryRequest(
+            protocolVersion = IrohProtocolV1.Version,
+            roomId = roomId,
+            requestId = requestId,
+            kind = "inventory",
+            after = null,
+            limit = 10,
+        ),
+    )
+
+    private fun operationsRequest(roomId: String, requestId: String) = IrohRpcMessage.Operations(
+        IrohOperationsRequest(
+            protocolVersion = IrohProtocolV1.Version,
+            roomId = roomId,
+            requestId = requestId,
+            kind = "operations",
+            refs = emptyList(),
+        ),
+    )
 
     private class FakeSessions : IrohEndpointSessionSource {
         override fun session() = null

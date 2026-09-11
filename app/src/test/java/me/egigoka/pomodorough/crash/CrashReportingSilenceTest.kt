@@ -50,6 +50,16 @@ class CrashReportingSilenceTest {
         "me/egigoka/pomodorough/ui/UiComponents.kt",
     )
 
+    private val cancellationGuardSites = listOf(
+        "me/egigoka/pomodorough/data/iroh/IrohIncomingRpcHandler.kt" to "fun response(",
+        "me/egigoka/pomodorough/data/TimerRepository.kt" to "fun afterLocalMutation(",
+        "me/egigoka/pomodorough/data/TimerRepository.kt" to "fun finishExpiredIrohTimer(",
+        "me/egigoka/pomodorough/data/TimerRepository.kt" to "fun deleteAccountInternal(",
+        "me/egigoka/pomodorough/data/TimerRepository.kt" to "fun confirmAccountSwitchInternal(",
+        "me/egigoka/pomodorough/data/TimerRepository.kt" to "fun commitLocalAccountReset(",
+        "me/egigoka/pomodorough/data/TimerRepository.kt" to "fun logoutInternal(",
+    )
+
     @Test
     fun everyFileWithCatchOrRunCatchingIsAudited() {
         val root = productionRoot()
@@ -122,6 +132,38 @@ class CrashReportingSilenceTest {
                 )
             }
         }
+    }
+
+    @Test
+    fun suspendGenericCatchesRethrowCancellation() {
+        // A48: suspend generic catches must rethrow CancellationException first.
+        // TimerAlarmReceiver.deliver stays silent intentionally,
+        // pinned by TimerAlarmDeliveryPolicyTest.cancellationStaysSilent.
+        cancellationGuardSites.forEach { (relativePath, funSig) ->
+            assertHasCancellationGuard(relativePath, funSig)
+        }
+    }
+
+    private fun assertHasCancellationGuard(relativePath: String, funSig: String) {
+        val lines = productionFile(relativePath).readText().lines()
+        val start = lines.indexOfFirst { it.contains(funSig) }
+        assertTrue("$relativePath $funSig missing", start >= 0)
+        val window = lines.subList(start, minOf(lines.size, start + 60))
+        val cancelIndex = window.indexOfFirst {
+            it.contains("catch (") && it.contains("CancellationException")
+        }
+        assertTrue("$relativePath $funSig must catch CancellationException first", cancelIndex >= 0)
+        val genericIndex = window.indexOfFirst {
+            it.contains("catch (") && it.contains(": Exception)")
+        }
+        assertTrue("$relativePath $funSig must keep generic catch", genericIndex >= 0)
+        assertTrue(
+            "$relativePath $funSig guard must precede generic catch",
+            cancelIndex < genericIndex,
+        )
+        val rethrows = window.subList(cancelIndex, minOf(window.size, cancelIndex + 3))
+            .any { it.contains("throw ") }
+        assertTrue("$relativePath $funSig guard must rethrow", rethrows)
     }
 
     private fun isAuditedCatch(lines: List<String>, catchIndex: Int): Boolean {
