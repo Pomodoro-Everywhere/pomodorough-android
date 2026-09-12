@@ -16,6 +16,7 @@ import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -58,6 +59,8 @@ internal class TimerAlarmDeliveryPolicy(
             } else {
                 TimerAlarmDeliveryResult.CompletedWithoutNotification
             }
+        } catch (error: CancellationException) {
+            throw error
         } catch (error: Exception) {
             CrashReporter.report(error)
             TimerAlarmDeliveryResult.CompletedWithoutNotification
@@ -207,6 +210,8 @@ class TimerAlarmReceiver : BroadcastReceiver() {
                 if (result == TimerAlarmDeliveryResult.CompletedWithoutNotification) {
                     Log.w(Tag, "Timer completed without posting a notification")
                 }
+            } catch (error: CancellationException) {
+                throw error
             } catch (error: Exception) {
                 Log.e(Tag, "Could not finish expired timer", error)
                 CrashReporter.report(error)

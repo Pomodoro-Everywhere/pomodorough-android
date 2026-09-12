@@ -104,7 +104,7 @@ internal class IrohRoomOrchestration(
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
-            // expected-silent: route change failure surfaces as UNAVAILABLE status, not a crash.
+            if (error !is IrohSecretVaultException) CrashReporter.report(error)
             recoverPersistedRoute(error, "Replication route could not be changed")
         }
     }
@@ -133,7 +133,7 @@ internal class IrohRoomOrchestration(
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
-            // expected-silent: room creation failure surfaces as UNAVAILABLE status, not a crash.
+            if (error !is IrohSecretVaultException) CrashReporter.report(error)
             handleCreateFailure(roomId, error)
         }
     }
@@ -150,8 +150,8 @@ internal class IrohRoomOrchestration(
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
-            // expected-silent: room join failure surfaces as UNAVAILABLE status, not a crash.
             rollbackJoinedRoom(preparation)
+            if (error !is IrohSecretVaultException) CrashReporter.report(error)
             recoverPersistedRoute(error, "Iroh room could not be joined")
         } finally {
             decoded?.roomSecret?.fill(0)
@@ -170,7 +170,7 @@ internal class IrohRoomOrchestration(
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
-            // expected-silent: room leave failure surfaces as UNAVAILABLE status, not a crash.
+            if (error !is IrohSecretVaultException) CrashReporter.report(error)
             recoverPersistedRoute(error, "Iroh room could not be left")
         }
     }
@@ -307,11 +307,17 @@ internal class IrohRoomOrchestration(
             onSuccess = { true },
             onFailure = { error ->
                 if (error is CancellationException) throw error
-                publish(service.state.value.copy(
-                    status = IrohConnectionStatus.UNAVAILABLE,
-                    message = error.message ?: "Saved Iroh operations could not be recovered",
-                ))
-                false
+                if (error is IrohSecretVaultException) {
+                    quarantineRecovery(error.recoveryKind)
+                    false
+                } else {
+                    CrashReporter.report(error)
+                    publish(service.state.value.copy(
+                        status = IrohConnectionStatus.UNAVAILABLE,
+                        message = error.message ?: "Saved Iroh operations could not be recovered",
+                    ))
+                    false
+                }
             },
         )
     }
@@ -381,7 +387,12 @@ internal class IrohRoomOrchestration(
             // A31: best-effort cleanup, stays silent. The join failure that
             // triggered rollback is reported via recoverPersistedRoute below;
             // a discard failure carries no new signal and must not mask it.
+            // Cancellation still propagates: a cancelled discard must not
+            // read as a successful rollback.
             runCatching { persistence.discardIncompleteInactiveRoom(preparation.roomId) }
+                .onFailure { error ->
+                    if (error is CancellationException) throw error
+                }
         }
     }
 

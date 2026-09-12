@@ -21,7 +21,7 @@ class IrohRoomStore(
     private val workspaceCoordinator: LocalWorkspaceCoordinator = LocalWorkspaceCoordinator(),
     random: SecureRandom = SecureRandom(),
     currentTimeMillis: () -> Long = System::currentTimeMillis,
-) {
+) : IrohReplicationStore {
     private val projection = IrohRoomProjectionPersistence(
         rooms = dao,
         records = dao,
@@ -80,7 +80,7 @@ class IrohRoomStore(
         endpointId: String,
     ): Pair<IrohRoomEntity, Boolean> = metadata.prepareJoinedRoom(invite, endpointId)
 
-    suspend fun activateJoinedRoom(roomId: String): IrohRoomProjection =
+    override suspend fun activateJoinedRoom(roomId: String): IrohRoomProjection =
         metadata.activateJoinedRoom(roomId)
 
     suspend fun activateExistingRoom(roomId: String): IrohRoomProjection =
@@ -92,35 +92,35 @@ class IrohRoomStore(
 
     suspend fun captureLocalOperations(): IrohRoomProjection = canonicalRecords.captureLocalOperations()
 
-    suspend fun insertRemoteRecords(roomId: String, records: List<IrohOperationRecord>) =
+    override suspend fun insertRemoteRecords(roomId: String, records: List<IrohOperationRecord>) =
         canonicalRecords.insertRemoteRecords(roomId, records)
 
-    suspend fun refreshProjection(roomId: String): IrohRoomProjection =
+    override suspend fun refreshProjection(roomId: String): IrohRoomProjection =
         canonicalRecords.refreshProjection(roomId)
 
-    suspend fun inventory(
+    override suspend fun inventory(
         roomId: String,
         after: String?,
         limit: Int,
     ): Pair<List<IrohInventoryEntry>, String?> = inventoryReferences.inventory(roomId, after, limit)
 
-    suspend fun operations(
+    override suspend fun operations(
         roomId: String,
         references: List<IrohInventoryReference>,
     ): List<IrohOperationRecord> = inventoryReferences.operations(roomId, references)
 
-    suspend fun missingReferences(
+    override suspend fun missingReferences(
         roomId: String,
         remote: List<IrohInventoryEntry>,
     ): List<IrohInventoryReference> = inventoryReferences.missingReferences(roomId, remote)
 
-    suspend fun upsertPeer(peer: IrohPeerEntity) = peerRegistry.upsertPeer(peer)
+    override suspend fun upsertPeer(peer: IrohPeerEntity) = peerRegistry.upsertPeer(peer)
 
-    suspend fun peers(roomId: String): List<IrohPeerEntity> = peerRegistry.peers(roomId)
+    override suspend fun peers(roomId: String): List<IrohPeerEntity> = peerRegistry.peers(roomId)
 
-    suspend fun hasGenesis(roomId: String): Boolean = metadata.hasGenesis(roomId)
+    override suspend fun hasGenesis(roomId: String): Boolean = metadata.hasGenesis(roomId)
 
-    suspend fun snapshot(roomId: String): IrohNetworkState = inventoryReferences.snapshot(roomId)
+    override suspend fun snapshot(roomId: String): IrohNetworkState = inventoryReferences.snapshot(roomId)
 
     suspend fun discardIncompleteInactiveRoom(roomId: String) =
         metadata.discardIncompleteInactiveRoom(roomId)

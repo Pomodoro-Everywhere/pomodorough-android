@@ -39,6 +39,7 @@ internal class IrohRoomOrchestrationHarness(
     var prepareJoinedRoomFailure: Exception? = null
     var leaveFailure: Exception? = null
     var discardCount = 0
+    var discardInactiveFailure: Exception? = null
     var captureCount = 0
     var captureLocalOperationsFailure: Exception? = null
     var startCount = 0
@@ -107,7 +108,10 @@ internal class IrohRoomOrchestrationHarness(
                 prepareJoinedRoomFailure?.let { throw it }
                 preparedRoom ?: (room(invite.roomId, invite.roomName) to true)
             },
-            discardIncompleteInactiveRoom = { discardedRooms += it },
+            discardIncompleteInactiveRoom = { roomId ->
+                discardedRooms += roomId
+                discardInactiveFailure?.let { throw it }
+            },
             leaveActiveRoom = {
                 leaveFailure?.let { throw it }
                 settings = ReplicationSettingsEntity(mode = ReplicationMode.OFFLINE.name)

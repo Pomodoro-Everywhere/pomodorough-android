@@ -2,9 +2,34 @@ package me.egigoka.pomodorough.data.iroh
 
 import kotlin.math.min
 import kotlin.random.Random
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import me.egigoka.pomodorough.data.local.IrohPeerEntity
+
+interface IrohReplicationStore {
+    suspend fun upsertPeer(peer: IrohPeerEntity)
+    suspend fun inventory(
+        roomId: String,
+        after: String?,
+        limit: Int,
+    ): Pair<List<IrohInventoryEntry>, String?>
+    suspend fun operations(
+        roomId: String,
+        references: List<IrohInventoryReference>,
+    ): List<IrohOperationRecord>
+    suspend fun peers(roomId: String): List<IrohPeerEntity>
+    suspend fun snapshot(roomId: String): IrohNetworkState
+    suspend fun hasGenesis(roomId: String): Boolean
+    suspend fun missingReferences(
+        roomId: String,
+        remote: List<IrohInventoryEntry>,
+    ): List<IrohInventoryReference>
+    suspend fun insertRemoteRecords(roomId: String, records: List<IrohOperationRecord>)
+    suspend fun refreshProjection(roomId: String): IrohRoomProjection
+    suspend fun activateJoinedRoom(roomId: String): IrohRoomProjection
+}
 
 data class IrohServiceContext(
     val roomId: String,
@@ -13,17 +38,29 @@ data class IrohServiceContext(
     val displayName: String?,
 )
 
-class IrohReplicationService(
-    private val store: IrohRoomStore,
-    vault: IrohSecretVault,
+class IrohReplicationService internal constructor(
+    private val store: IrohReplicationStore,
+    binding: IrohEndpointBinding,
     onProjection: suspend () -> Unit,
     random: Random = Random.Default,
 ) {
+    constructor(
+        store: IrohRoomStore,
+        vault: IrohSecretVault,
+        onProjection: suspend () -> Unit,
+        random: Random = Random.Default,
+    ) : this(
+        store,
+        IrohNativeEndpointBinding(vault),
+        onProjection,
+        random,
+    )
+
     private val _state = MutableStateFlow(IrohNetworkState())
     val state: StateFlow<IrohNetworkState> = _state.asStateFlow()
 
     private val transport = IrohEndpointTransport()
-    private val lifecycle = IrohEndpointLifecycle(vault, ::handleEndpointEvent)
+    private val lifecycle = IrohEndpointLifecycle(binding, ::handleEndpointEvent)
     private val authorization = IrohPeerAuthorization(
         IrohEndpointTicketIdentity(transport::endpointIdForTicket),
     )
@@ -156,7 +193,7 @@ class IrohReplicationService(
         }
     }
 
-    private suspend fun updateState(
+    internal suspend fun updateState(
         status: IrohConnectionStatus,
         roomId: String? = lifecycle.session()?.context?.roomId,
         endpointMark: String? = _state.value.endpointMark,
@@ -165,7 +202,13 @@ class IrohReplicationService(
         // expected-silent: snapshot failure keeps the last published state and
         // still publishes the new status event; storage errors surface through
         // the repository sync-failure UI, not a second crash here.
-        val snapshot = roomId?.let { runCatching { store.snapshot(it) }.getOrNull() }
+        // Cancellation still propagates via the getOrElse guard below.
+        val snapshot = roomId?.let {
+            runCatching { store.snapshot(it) }.getOrElse { error ->
+                if (error is CancellationException) throw error
+                null
+            }
+        }
         _state.value = (snapshot ?: _state.value).copy(
             status = if (snapshot?.conflict != null) IrohConnectionStatus.CONFLICT else status,
             roomId = roomId,

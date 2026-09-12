@@ -93,9 +93,10 @@ class TimerTaskRetargetTest {
     fun retargetPersistenceFailureReportsAndNotices() {
         // Structural pin for TimerRepository.retargetRunningTimer: the
         // persistence-failure branch must report and surface a notice, and
-        // cancellation must propagate. Full behavioral coverage needs an
-        // androidTest (TimerRepository requires Context/Dao); this keeps a
-        // JVM revert failing if the guard is dropped.
+        // cancellation must propagate.
+        // Accepted risk: TimerRepository requires Context/Dao so behavioral
+        // report-once + notice UI + no-report-on-cancel lives in androidTest;
+        // this JVM pin only fails fast if the guard/report is dropped.
         val root = sequenceOf(File("src/main/java"), File("app/src/main/java"))
             .firstOrNull(File::isDirectory)
         val source = File(
@@ -109,6 +110,50 @@ class TimerTaskRetargetTest {
         assertTrue(window.contains("CrashReporter.report"))
         assertTrue(window.contains("mutationFailure"))
         assertTrue(window.contains("notice"))
+    }
+
+    @Test
+    fun afterLocalMutationFailureReportsAndConflicts() {
+        // Structural pin for TimerRepository.afterLocalMutation: post-mutation
+        // refresh failure must report plus conflict UI (mirrors retarget),
+        // cancellation propagates without report.
+        // Accepted risk: TimerRepository requires Context/Dao so behavioral
+        // report-once + conflict UI + no-report-on-cancel lives in androidTest;
+        // this JVM pin only fails fast if the guard/report is dropped.
+        val root = sequenceOf(File("src/main/java"), File("app/src/main/java"))
+            .firstOrNull(File::isDirectory)
+        val source = File(
+            checkNotNull(root) { "production source root" },
+            "me/egigoka/pomodorough/data/TimerRepository.kt",
+        ).readText()
+        val start = source.indexOf("fun afterLocalMutation(")
+        assertTrue(start >= 0)
+        val window = source.drop(start).take(1_200)
+        assertTrue(window.contains("CancellationException"))
+        assertTrue(window.contains("CrashReporter.report"))
+        assertTrue(window.contains("conflict"))
+    }
+
+    @Test
+    fun finishExpiredIrohTimerFailureReportsAndConflicts() {
+        // Structural pin for TimerRepository.finishExpiredIrohTimer: expired
+        // projection failure must report plus conflict UI (mirrors deliver
+        // which reports), cancellation propagates without report.
+        // Accepted risk: TimerRepository requires Context/Dao so behavioral
+        // report-once + conflict UI + no-report-on-cancel lives in androidTest;
+        // this JVM pin only fails fast if the guard/report is dropped.
+        val root = sequenceOf(File("src/main/java"), File("app/src/main/java"))
+            .firstOrNull(File::isDirectory)
+        val source = File(
+            checkNotNull(root) { "production source root" },
+            "me/egigoka/pomodorough/data/TimerRepository.kt",
+        ).readText()
+        val start = source.indexOf("fun finishExpiredIrohTimer(")
+        assertTrue(start >= 0)
+        val window = source.drop(start).take(1_600)
+        assertTrue(window.contains("CancellationException"))
+        assertTrue(window.contains("CrashReporter.report"))
+        assertTrue(window.contains("conflict"))
     }
 
     private fun command(id: String, timerId: String, type: String) = TimerCommand(

@@ -222,20 +222,42 @@ class TimerAlarmDeliveryPolicyTest {
     }
 
     @Test
-    fun cancellationStaysSilent() = runTest {
+    fun cancellationPropagatesWithoutReport() = runTest {
         val reported = mutableListOf<Throwable>()
         val previous = CrashReporter.delegate
         CrashReporter.delegate = reported::add
         try {
+            val cancellation = CancellationException("gone")
             val policy = TimerAlarmDeliveryPolicy(
                 completion = ExpiredTimerCompleting { true },
-                notification = TimerCompletionNotifying { throw CancellationException("gone") },
+                notification = TimerCompletionNotifying { throw cancellation },
             )
-            assertEquals(TimerAlarmDeliveryResult.CompletedWithoutNotification, policy.deliver())
+            val failure = runCatching { policy.deliver() }.exceptionOrNull()
+            assertSame(cancellation, failure)
             assertTrue(reported.isEmpty())
         } finally {
             CrashReporter.delegate = previous
         }
+    }
+
+    @Test
+    fun onReceiveLaunchRethrowsCancellationBeforeGenericCatch() {
+        // Structural pin: onReceive runs on a BroadcastReceiver (no JVM
+        // harness here); a dropped guard must still fail fast.
+        // Accepted risk: behavioral onReceive launch lives in androidTest;
+        // this JVM pin only guards catch ordering.
+        val root = sequenceOf(java.io.File("src/main/java"), java.io.File("app/src/main/java"))
+            .firstOrNull(java.io.File::isDirectory)
+        val source = java.io.File(
+            checkNotNull(root) { "production source root" },
+            "me/egigoka/pomodorough/timer/TimerAlarmReceiver.kt",
+        ).readText()
+        val start = source.indexOf("fun onReceive(")
+        assertTrue(start >= 0)
+        val window = source.drop(start).take(1_600)
+        val cancel = window.indexOf("catch (error: CancellationException)")
+        val generic = window.indexOf("catch (error: Exception)")
+        assertTrue(cancel >= 0 && generic >= 0 && cancel < generic)
     }
 
     @Test

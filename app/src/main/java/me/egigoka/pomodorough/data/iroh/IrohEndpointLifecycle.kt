@@ -264,7 +264,7 @@ internal interface IrohEndpointBinding {
     fun pendingIdentityRecovery(): IrohIdentityRecoveryKind? = null
 }
 
-private class IrohNativeEndpointBinding(private val vault: IrohSecretVault) : IrohEndpointBinding {
+internal class IrohNativeEndpointBinding(private val vault: IrohSecretVault) : IrohEndpointBinding {
     override suspend fun bind(): Endpoint {
         val builder = EndpointBuilder()
         return try {

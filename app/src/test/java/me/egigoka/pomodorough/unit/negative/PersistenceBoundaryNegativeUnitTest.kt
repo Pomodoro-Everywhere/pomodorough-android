@@ -1,6 +1,7 @@
 package me.egigoka.pomodorough.unit.negative
 
 import java.lang.reflect.Proxy
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -71,6 +72,19 @@ class PersistenceBoundaryNegativeUnitTest {
 
         assertSame(local, error.local)
         assertSame(rejected, error.cause)
+    }
+
+    @Test
+    fun accountValidationCancellationPropagatesWithoutCorruptionWrapping() {
+        val user = User("account", "owner@example.test", "Owner", "https://example.test/a")
+        val local = localState().copy(userJson = json.encodeToString(user))
+        val cancellation = CancellationException("gone")
+
+        val failure = runCatching {
+            runBlocking { initializer(local) { throw cancellation }.load() }
+        }.exceptionOrNull()
+
+        assertSame(cancellation, failure)
     }
 
     private fun initializer(

@@ -73,6 +73,11 @@ class CrashReportingSilenceTest {
         "me/egigoka/pomodorough/data/TimerRepository.kt" to "fun validateLoadedMutationState(",
         "me/egigoka/pomodorough/data/iroh/IrohRoomOrchestration.kt" to "fun recoverLocalOperations(",
         "me/egigoka/pomodorough/data/TimerRepository.kt" to "fun retargetRunningTimer(",
+        "me/egigoka/pomodorough/timer/TimerAlarmReceiver.kt" to "fun deliver(",
+        "me/egigoka/pomodorough/timer/TimerAlarmReceiver.kt" to "fun onReceive(",
+        "me/egigoka/pomodorough/data/iroh/IrohReplicationService.kt" to "fun updateState(",
+        "me/egigoka/pomodorough/data/iroh/IrohRoomOrchestration.kt" to "fun rollbackJoinedRoom(",
+        "me/egigoka/pomodorough/data/TimerLocalInitialization.kt" to "fun load(",
     )
 
     @Test
@@ -109,6 +114,8 @@ class CrashReportingSilenceTest {
 
     @Test
     fun expectedSilentBranchesNeverReport() {
+        // A57: afterLocalMutation, finishExpiredIrohTimer, setMode, createRoom,
+        // joinRoom, and leaveRoom now report plus UI (was 58 markers, now 52).
         var markers = 0
         auditedFiles.forEach { relativePath ->
             val lines = productionFile(relativePath).readText().lines()
@@ -118,7 +125,7 @@ class CrashReportingSilenceTest {
                 assertSilentCatchBody(relativePath, lines, index)
             }
         }
-        assertTrue("expected-silent markers shrank to $markers, update this audit", markers >= 58)
+        assertTrue("expected-silent markers shrank to $markers, update this audit", markers >= 52)
     }
 
     @Test
@@ -151,13 +158,13 @@ class CrashReportingSilenceTest {
 
     @Test
     fun suspendGenericCatchesRethrowCancellation() {
-        // A48+A49+A51+A53: suspend generic catches must rethrow
-        // CancellationException first. A53 runCatching sites rethrow via
+        // A48+A49+A51+A53+A54+A55+A56: suspend generic catches must rethrow
+        // CancellationException first. A53/A55/A56 runCatching sites rethrow via
         // `if (error is CancellationException) throw` instead of a
         // dedicated catch, pinned by the same list through the fallback
         // below.
-        // TimerAlarmReceiver.deliver stays silent intentionally,
-        // pinned by TimerAlarmDeliveryPolicyTest.cancellationStaysSilent.
+        // A54: TimerAlarmReceiver.deliver cancellation propagates,
+        // pinned by TimerAlarmDeliveryPolicyTest.cancellationPropagatesWithoutReport.
         // IrohPeerSynchronization per-peer TimeoutCancellationException swallow stays,
         // pinned by IrohPeerSynchronizationTimeoutTest + A49 comment in syncPeers.
         cancellationGuardSites.forEach { (relativePath, funSig) ->

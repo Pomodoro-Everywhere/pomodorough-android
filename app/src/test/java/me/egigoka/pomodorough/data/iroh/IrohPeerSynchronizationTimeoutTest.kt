@@ -170,6 +170,35 @@ class IrohPeerSynchronizationTimeoutTest {
     }
 
     @Test
+    fun conflictRereadCancellationPropagatesWithoutTryingNextPeer() = runTest {
+        // A56: the inner snapshot re-read after a peer failure is a fresh
+        // suspension point. Plain cancellation must propagate immediately
+        // instead of delaying one peer iteration.
+        val fixture = PeerFixture(peerIds = listOf("stalled", "healthy")) { peer ->
+            if (peer.endpointId == "stalled") throw IOException("connection failed")
+        }
+        val cancellation = CancellationException("storage cancelled")
+        fixture.snapshotFailure = cancellation
+        val failure = runCatching { fixture.sync.syncNow() }.exceptionOrNull()
+        assertCancellationPropagated(cancellation, failure)
+        assertEquals(listOf("stalled"), fixture.attempts)
+        assertTrue(fixture.statuses.isEmpty())
+    }
+
+    @Test
+    fun conflictRereadTimeoutContinuesToHealthyPeer() = runTest {
+        // A56 distinction: a per-peer TimeoutCancellationException from the
+        // re-read is a deadline, not a scope cancel, so it continues.
+        val fixture = PeerFixture(peerIds = listOf("stalled", "healthy")) { peer ->
+            if (peer.endpointId == "stalled") throw IOException("connection failed")
+        }
+        fixture.snapshotTimeout = true
+        fixture.sync.syncNow()
+        assertEquals(listOf("stalled", "healthy"), fixture.attempts)
+        assertEquals(IrohConnectionStatus.LISTENING, fixture.statuses.last())
+    }
+
+    @Test
     fun cancellationProvenanceAcceptsOriginalAndRecoveredForms() {
         val cancellation = CancellationException("service stopped").apply {
             initCause(IOException("original cause"))
@@ -214,6 +243,9 @@ private class PeerFixture(
 ) : IrohEndpointSessionSource {
     var owner = 1L
     var peersFailure: CancellationException? = null
+    var snapshotFailure: Throwable? = null
+    var snapshotTimeout = false
+    private var snapshotCalls = 0
     val attempts = mutableListOf<String>()
     val statuses = mutableListOf<IrohConnectionStatus>()
     private val endpoint = IrohSyncTestEndpoint()
@@ -245,7 +277,16 @@ private class PeerFixture(
             peersFailure?.let { throw it }
             peerIds.map { IrohPeerEntity("room", it, it, null, null, null) }
         },
-        snapshot = { IrohNetworkState() },
+        snapshot = {
+            snapshotCalls += 1
+            // The quarantine pre/post checks stay clean so these tests
+            // target only the inner re-read after a peer failure.
+            if (snapshotCalls == 2) {
+                snapshotFailure?.let { throw it }
+                if (snapshotTimeout) withTimeout(1) { awaitCancellation() }
+            }
+            IrohNetworkState()
+        },
         hasGenesis = { true },
         missingReferences = { _, _ -> emptyList() },
         insertRemoteRecords = { _, _ -> },

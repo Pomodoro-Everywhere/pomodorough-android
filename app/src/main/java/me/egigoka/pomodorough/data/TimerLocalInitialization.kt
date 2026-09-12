@@ -1,6 +1,7 @@
 package me.egigoka.pomodorough.data
 
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import me.egigoka.pomodorough.data.local.BootstrapDao
@@ -73,6 +74,9 @@ internal class TimerLocalInitializer(
             bootstrapResolution = bootstrap.pendingBootstrapResolution(),
             decoded = try {
                 decode(local)
+            } catch (error: CancellationException) {
+                // Guard-first: decode is pure today; future suspension must propagate.
+                throw error
             } catch (error: Exception) {
                 throw LocalDecodingException(local, error)
             },

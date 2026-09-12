@@ -138,8 +138,16 @@ internal class IrohPeerSynchronization(
                 // expected-silent: per-peer failure continues across peers with status events, not a crash.
                 currentCoroutineContext().ensureActive()
                 if (error is CancellationException && error !is TimeoutCancellationException) throw error
+                // A56: the conflict re-read is a fresh suspension point, so
+                // plain cancellation propagates here too. A per-peer
+                // TimeoutCancellationException stays a continue, same as above.
                 if (runCatching { dependencies.snapshot(context.roomId).conflict }
-                        .getOrNull() != null
+                        .getOrElse { snapshotError ->
+                            if (snapshotError is CancellationException &&
+                                snapshotError !is TimeoutCancellationException
+                            ) throw snapshotError
+                            null
+                        } != null
                 ) break
                 continue
             }

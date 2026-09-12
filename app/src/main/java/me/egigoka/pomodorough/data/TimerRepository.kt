@@ -1520,7 +1520,7 @@ class TimerRepository(
     } catch (error: CancellationException) {
         throw error
     } catch (error: Exception) {
-        // expected-silent: expired-timer projection failure surfaces as room conflict, not a crash.
+        CrashReporter.report(error)
         conflict = error.message ?: appContext.getString(R.string.iroh_room_projection_could_not_be_refreshed)
         publish()
         false
@@ -2673,7 +2673,7 @@ class TimerRepository(
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                // expected-silent: post-mutation refresh failure surfaces as room conflict, not a crash.
+                CrashReporter.report(error)
                 conflict = error.message ?: appContext.getString(R.string.iroh_room_operation_could_not_be_recorded)
                 publish()
             }
