@@ -306,6 +306,7 @@ internal class IrohRoomOrchestration(
         return runCatching { persistence.captureLocalOperations() }.fold(
             onSuccess = { true },
             onFailure = { error ->
+                if (error is CancellationException) throw error
                 publish(service.state.value.copy(
                     status = IrohConnectionStatus.UNAVAILABLE,
                     message = error.message ?: "Saved Iroh operations could not be recovered",

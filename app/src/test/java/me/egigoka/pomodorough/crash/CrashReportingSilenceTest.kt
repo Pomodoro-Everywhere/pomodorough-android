@@ -68,6 +68,10 @@ class CrashReportingSilenceTest {
         "me/egigoka/pomodorough/data/TimerRepository.kt" to "fun performBootstrapResolution(",
         "me/egigoka/pomodorough/data/TimerRepository.kt" to "fun restoreProfile(",
         "me/egigoka/pomodorough/data/iroh/IrohIncomingRpcHandler.kt" to "fun readAuthenticatedRequest(",
+        "me/egigoka/pomodorough/data/iroh/IrohEndpointLifecycle.kt" to "fun bindEndpoint(",
+        "me/egigoka/pomodorough/data/iroh/IrohEndpointLifecycle.kt" to "fun createTicketOrClose(",
+        "me/egigoka/pomodorough/data/TimerRepository.kt" to "fun validateLoadedMutationState(",
+        "me/egigoka/pomodorough/data/iroh/IrohRoomOrchestration.kt" to "fun recoverLocalOperations(",
     )
 
     @Test
@@ -146,7 +150,11 @@ class CrashReportingSilenceTest {
 
     @Test
     fun suspendGenericCatchesRethrowCancellation() {
-        // A48+A49: suspend generic catches must rethrow CancellationException first.
+        // A48+A49+A51+A53: suspend generic catches must rethrow
+        // CancellationException first. A53 runCatching sites rethrow via
+        // `if (error is CancellationException) throw` instead of a
+        // dedicated catch, pinned by the same list through the fallback
+        // below.
         // TimerAlarmReceiver.deliver stays silent intentionally,
         // pinned by TimerAlarmDeliveryPolicyTest.cancellationStaysSilent.
         // IrohPeerSynchronization per-peer TimeoutCancellationException swallow stays,
@@ -164,18 +172,38 @@ class CrashReportingSilenceTest {
         val cancelIndex = window.indexOfFirst {
             it.contains("catch (") && it.contains("CancellationException")
         }
-        assertTrue("$relativePath $funSig must catch CancellationException first", cancelIndex >= 0)
         val genericIndex = window.indexOfFirst {
             it.contains("catch (") && it.contains(": Exception)")
         }
-        assertTrue("$relativePath $funSig must keep generic catch", genericIndex >= 0)
+        if (cancelIndex >= 0 && genericIndex >= 0) {
+            assertTrue(
+                "$relativePath $funSig guard must precede generic catch",
+                cancelIndex < genericIndex,
+            )
+            val rethrows = window.subList(cancelIndex, minOf(window.size, cancelIndex + 3))
+                .any { it.contains("throw ") }
+            assertTrue("$relativePath $funSig guard must rethrow", rethrows)
+            return
+        }
+        assertHasRunCatchingCancellationRethrow(relativePath, funSig, window)
+    }
+
+    private fun assertHasRunCatchingCancellationRethrow(
+        relativePath: String,
+        funSig: String,
+        window: List<String>,
+    ) {
         assertTrue(
-            "$relativePath $funSig guard must precede generic catch",
-            cancelIndex < genericIndex,
+            "$relativePath $funSig must use runCatching when no catch guard exists",
+            window.any { it.contains("runCatching") },
         )
-        val rethrows = window.subList(cancelIndex, minOf(window.size, cancelIndex + 3))
-            .any { it.contains("throw ") }
-        assertTrue("$relativePath $funSig guard must rethrow", rethrows)
+        val rethrowIndex = window.indexOfFirst {
+            it.contains("is CancellationException") && it.contains("throw")
+        }
+        assertTrue(
+            "$relativePath $funSig must rethrow CancellationException",
+            rethrowIndex >= 0,
+        )
     }
 
     private fun isAuditedCatch(lines: List<String>, catchIndex: Int): Boolean {

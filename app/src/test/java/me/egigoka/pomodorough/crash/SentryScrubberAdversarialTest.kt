@@ -553,4 +553,53 @@ class SentryScrubberAdversarialTest {
         assertEquals(SentryScrubber.REDACTED, scrubbedCrumb.getData("nonce"))
         assertEquals(1, scrubbedCrumb.getData("attempt"))
     }
+
+    @Test
+    fun endpointAndPeerIdQueryKeepsKeyButLosesValue() {
+        // A50: bare `endpoint`/`peer` never matched `endpointId`/`peerId`
+        // in free text; snake + camel variants must scrub in all three
+        // query/JSON free-text regexes.
+        val scrubbed = checkNotNull(
+            SentryScrubber.scrubText(
+                "https://host/sync?endpointId=ep-aa&endpoint_id=ep-ab" +
+                    "&peerId=peer-aa&peer_id=peer-ab&other=1",
+            ),
+        )
+        listOf("endpointId=", "endpoint_id=", "peerId=", "peer_id=").forEach {
+            assertTrue(scrubbed.contains(it))
+        }
+        listOf("ep-aa", "ep-ab", "peer-aa", "peer-ab").forEach {
+            assertFalse(scrubbed.contains(it))
+        }
+        assertTrue(scrubbed.contains(SentryScrubber.REDACTED_TOKEN))
+        assertTrue(scrubbed.contains("other=1"))
+    }
+
+    @Test
+    fun endpointAndPeerIdJsonLosesValue() {
+        val doubleScrubbed = checkNotNull(
+            SentryScrubber.scrubText(
+                "{\"endpointId\": \"ep-aa\", \"endpoint_id\": \"ep-ab\", " +
+                    "\"peerId\": \"peer-aa\", \"peer_id\": \"peer-ab\", " +
+                    "\"ok\": true}",
+            ),
+        )
+        listOf("ep-aa", "ep-ab", "peer-aa", "peer-ab").forEach {
+            assertFalse(doubleScrubbed.contains(it))
+        }
+        assertTrue(doubleScrubbed.contains("\"endpointId\""))
+        assertTrue(doubleScrubbed.contains("\"peer_id\""))
+        assertTrue(doubleScrubbed.contains(SentryScrubber.REDACTED_TOKEN))
+        assertTrue(doubleScrubbed.contains("\"ok\""))
+        val singleScrubbed = checkNotNull(
+            SentryScrubber.scrubText(
+                "{'endpointId': 'ep-aa', 'endpoint_id': 'ep-ab', " +
+                    "'peerId': 'peer-aa', 'peer_id': 'peer-ab', 'ok': true}",
+            ),
+        )
+        listOf("ep-aa", "ep-ab", "peer-aa", "peer-ab").forEach {
+            assertFalse(singleScrubbed.contains(it))
+        }
+        assertTrue(singleScrubbed.contains(SentryScrubber.REDACTED_TOKEN))
+    }
 }

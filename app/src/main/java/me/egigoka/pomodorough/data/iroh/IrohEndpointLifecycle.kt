@@ -6,6 +6,7 @@ import computer.iroh.EndpointTicket
 import computer.iroh.SecretKey
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -165,6 +166,8 @@ internal class IrohEndpointLifecycle(
             // expected-silent: vault recovery is reported through the recovery UI, not a crash.
             onEvent(IrohEndpointEvent.RecoveryRequired(error.recoveryKind, nextContext.roomId))
             throw error
+        } catch (error: CancellationException) {
+            throw error
         } catch (error: Exception) {
             CrashReporter.report(error)
             onEvent(IrohEndpointEvent.Status(
@@ -181,6 +184,8 @@ internal class IrohEndpointLifecycle(
         nextContext: IrohServiceContext,
     ): String = try {
         binding.ticket(bound)
+    } catch (error: CancellationException) {
+        throw error
     } catch (error: Exception) {
         CrashReporter.report(error)
         // expected-silent: shutdown is best-effort cleanup of a discarded

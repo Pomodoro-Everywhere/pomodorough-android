@@ -484,16 +484,21 @@ class TimerRepository(
 
     private suspend fun validateLoadedMutationState(): Boolean? {
         val legacyRepair = runCatching { repairLegacyMutationQueues(persist = false) }
+        legacyRepair.exceptionOrNull()?.let { error ->
+            if (error is CancellationException) throw error
+        }
         if (legacyRepair.isFailure) return failCorruptMutationState(LocalClockRangeError)
         val queueError = runCatching {
             TimerSyncValidation.validatePendingQueues(pendingSyncQueues(), local.deviceId)
         }.exceptionOrNull()
+        if (queueError is CancellationException) throw queueError
         if (queueError != null) {
             return failCorruptMutationState(queueError.message ?: LocalStateCorruptedError)
         }
         val rangeError = runCatching {
             TimerSyncValidation.validatePersistedMutationRanges(local, pendingSyncQueues())
         }.exceptionOrNull()
+        if (rangeError is CancellationException) throw rangeError
         if (rangeError != null) return failCorruptMutationState(LocalClockRangeError)
         return legacyRepair.getOrDefault(false)
     }
@@ -1095,10 +1100,13 @@ class TimerRepository(
     }
 
     private suspend fun recoverCommittedAccountDeletion() {
-        runCatching(auth::clear)
+        runCatching(auth::clear).onFailure { error ->
+            if (error is CancellationException) throw error
+        }
         val deletionGeneration = accountWorkspaceController.beginDeletionAdmission().generation
         runCatching { scrubDeletedAccount(deletionGeneration) }
             .onFailure { error ->
+                if (error is CancellationException) throw error
                 actionMutex.withLock {
                     notice = error.message ?: AccountDeletionRecoveryFailedMessage
                     publish()
