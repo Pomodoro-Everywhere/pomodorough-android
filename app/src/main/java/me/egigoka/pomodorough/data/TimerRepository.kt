@@ -225,6 +225,7 @@ class TimerRepository(
     private var knownTasks = emptyMap<String, FocusTask>()
     private var tasks = emptyList<FocusTask>()
     private var selectedTaskId: String? = null
+    private val timerTaskRetarget = mutableMapOf<String, String?>()
     private var projection = TimerProjection(null, emptyList())
     private var settings = TimerSettings()
     private var user: User?
@@ -1390,9 +1391,13 @@ class TimerRepository(
         initialize()
         var saved = false
         actionMutex.withLock {
-            if (mutationsBlocked() || projection.timer?.status in activeStatuses) return@withLock
+            if (mutationsBlocked()) return@withLock
             if (taskId != null && tasks.none { it.id == taskId }) return@withLock
-            if (taskId == selectedTaskId) return@withLock
+            val runningFocusTimer = projection.timer
+                ?.takeIf { it.status in activeStatuses && it.phase == TimerPhase.Focus }
+            val retargetNeeded = runningFocusTimer != null &&
+                timerTaskRetarget.getOrElse(runningFocusTimer.id) { runningFocusTimer.taskId } != taskId
+            if (taskId == selectedTaskId && !retargetNeeded) return@withLock
             val state = timerMutationState()
             val reservation = reserveMutation(count = 1, withDeviceSequences = false)
                 ?: return@withLock
@@ -1400,15 +1405,30 @@ class TimerRepository(
                 mutationCoordinator.selectedTask(
                     SelectedTaskMutationInput(state, taskId, reservation),
                 )
-            } ?: return@withLock
-            val event = transitionCommitter.commit(RepositorySelectedTaskTransition(mutation))
-            local = event.plan.local
-            pendingSelectedTaskOperations = event.plan.operations
-            installCoreProjection(event.plan.projection)
+            }
+            if (mutation != null) {
+                val event = transitionCommitter.commit(RepositorySelectedTaskTransition(mutation))
+                local = event.plan.local
+                pendingSelectedTaskOperations = event.plan.operations
+                installCoreProjection(event.plan.projection)
+            }
+            if (runningFocusTimer != null) {
+                retargetRunningTimer(runningFocusTimer.id, taskId)
+            }
             publish()
             saved = true
         }
         if (saved) afterLocalMutation()
+    }
+
+    private suspend fun retargetRunningTimer(timerId: String, taskId: String?) {
+        timerTaskRetarget[timerId] = taskId
+        val rewritten = retargetStartCommands(pending, timerId, taskId)
+        if (rewritten != pending) {
+            pending = rewritten
+            timerStore.saveMutationState(local, pendingSyncQueues(), commandDependencies)
+            installCoreProjection(projectSynchronizedState())
+        }
     }
 
     override suspend fun addTask(title: String): Boolean {
@@ -2973,6 +2993,12 @@ class TimerRepository(
             localizedProjectedTimer(result.canonicalTimer, commands),
             localizedHistory(result.history, commands, defaultDeltaMs = 0L),
         )
+        val (retargetedTimer, retargetedHistory) =
+            applyTimerTaskRetarget(projection.timer, projection.history, timerTaskRetarget)
+        val pruned = pruneTimerTaskRetarget(timerTaskRetarget, retargetedTimer, retargetedHistory)
+        timerTaskRetarget.clear()
+        timerTaskRetarget.putAll(pruned)
+        projection = TimerProjection(retargetedTimer, retargetedHistory)
         alarmCoordinator.reconcileCompletionAlert(projection.timer)
         tasks = result.tasks
         selectedTaskId = result.selectedTaskId

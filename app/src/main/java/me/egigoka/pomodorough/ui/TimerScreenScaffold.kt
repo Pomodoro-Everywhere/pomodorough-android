@@ -189,7 +189,6 @@ private fun timerContentActions(
         onToggleTimer = actions.onToggleTimer,
         onFinishTimer = actions.onFinishTimer,
         onCancelTimer = actions.onCancelTimer,
-        onClearTimer = actions.onClearTimer,
         onStopSound = actions.onStopSound,
         onSelectTask = actions.onSelectTask,
     ),

@@ -209,7 +209,7 @@ class P24SignedOutNetworkNavigationTest {
                         onLogout = { accountCalls += "logout" },
                         onResetLocalAccount = { accountCalls += "reset" },
                         onRefresh = {}, onToggleTimer = {}, onFinishTimer = {}, onCancelTimer = {},
-                        onClearTimer = {}, onSelectPhase = {}, onChangeDuration = { _, _ -> },
+                        onSelectPhase = {}, onChangeDuration = { _, _ -> },
                         onSetAutoStart = {}, onSelectTask = {},
                         onAddTask = { _, result -> result(true) }, onDeleteTask = {},
                         onResolveHistory = {}, onRecoverHistoryResolution = {},

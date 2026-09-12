@@ -79,6 +79,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalAccessibilityManager
 import androidx.compose.ui.platform.LocalConfiguration
@@ -185,40 +186,34 @@ internal data class TimerHeroState(
     val activeCompletionAlertTimerId: String?,
     val settings: TimerSettings,
     val longBreakProgress: Int,
-    val taskTitle: String?,
     val ready: Boolean,
     val tasks: List<FocusTask>,
     val selectedTaskId: String?,
     val mutationsEnabled: Boolean,
 ) {
-    val taskSelectorState get() = TaskSelectorState(
-        tasks, selectedTaskId, timer, taskTitle, settings.selectedPhase, mutationsEnabled,
-    )
+    val taskSelectorState get() = TaskSelectorState(tasks, selectedTaskId, mutationsEnabled)
 }
 
 internal data class TimerHeroActions(
     val onToggleTimer: () -> Unit,
     val onFinishTimer: () -> Unit,
     val onCancelTimer: () -> Unit,
-    val onClearTimer: () -> Unit,
     val onStopSound: () -> Unit,
     val onSelectTask: (String?) -> Unit,
 )
 
-private data class TimerControlState(
+internal data class TimerControlState(
     val status: String,
     val active: Boolean,
-    val clearable: Boolean,
     val hasActiveCompletionAlert: Boolean,
 )
 
-private fun timerControlState(state: TimerHeroState): TimerControlState {
+internal fun timerControlState(state: TimerHeroState): TimerControlState {
     val status = state.timer?.status ?: "idle"
     val active = status == TimerStatus.Running || status == TimerStatus.Paused
     return TimerControlState(
         status = status,
         active = active,
-        clearable = state.timer != null && !active,
         hasActiveCompletionAlert = state.activeCompletionAlertTimerId != null &&
             state.timer?.id == state.activeCompletionAlertTimerId,
     )
@@ -280,32 +275,29 @@ private fun timerToggleLabel(status: String, selectedPhase: String): String = wh
 @Composable
 private fun PortraitTimerActions(state: TimerHeroState, actions: TimerHeroActions, palette: PhasePalette) {
     val controls = timerControlState(state)
-    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        FilledTonalButton(
-            onClick = actions.onFinishTimer,
-            enabled = state.ready && controls.active,
-            modifier = Modifier.weight(1f).height(48.dp),
-        ) { Text(stringResource(R.string.finish)) }
-        OutlinedButton(
-            onClick = {
-                when {
-                    controls.active -> actions.onCancelTimer()
-                    controls.hasActiveCompletionAlert -> actions.onStopSound()
-                    else -> actions.onClearTimer()
-                }
-            },
-            enabled = state.ready && (controls.active || controls.clearable),
-            modifier = Modifier.weight(1f).height(48.dp),
-            border = BorderStroke(1.5.dp, palette.onContainer.copy(alpha = 0.55f)),
-        ) {
-            Text(
-                when {
-                    controls.active -> stringResource(R.string.cancel)
-                    controls.hasActiveCompletionAlert -> stringResource(R.string.stop_sound)
-                    else -> stringResource(R.string.dismiss)
-                },
-            )
+    // Finished terminal timers show the primary action only: the next
+    // Start replaces them, so no Dismiss control is needed.
+    if (controls.active) {
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            FilledTonalButton(
+                onClick = actions.onFinishTimer,
+                enabled = state.ready && controls.active,
+                modifier = Modifier.weight(1f).height(48.dp),
+            ) { Text(stringResource(R.string.finish)) }
+            OutlinedButton(
+                onClick = actions.onCancelTimer,
+                enabled = state.ready,
+                modifier = Modifier.weight(1f).height(48.dp),
+                border = BorderStroke(1.5.dp, palette.onContainer.copy(alpha = 0.55f)),
+            ) { Text(stringResource(R.string.cancel)) }
         }
+    } else if (controls.hasActiveCompletionAlert) {
+        OutlinedButton(
+            onClick = actions.onStopSound,
+            enabled = state.ready,
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+            border = BorderStroke(1.5.dp, palette.onContainer.copy(alpha = 0.55f)),
+        ) { Text(stringResource(R.string.stop_sound)) }
     }
 }
 
@@ -358,28 +350,19 @@ private fun LandscapeTimerActions(state: TimerHeroState, actions: TimerHeroActio
                 modifier = Modifier.weight(1f).height(54.dp),
                 border = BorderStroke(1.5.dp, Cloud.copy(alpha = 0.65f)),
             ) { Text(stringResource(R.string.cancel), color = darkModeTextColor(Cloud)) }
-        } else if (controls.clearable) {
-            LandscapeClearButton(state.ready, controls.hasActiveCompletionAlert, actions)
+        } else if (controls.hasActiveCompletionAlert) {
+            OutlinedButton(
+                onClick = actions.onStopSound,
+                enabled = state.ready,
+                modifier = Modifier.weight(1f).height(54.dp),
+                border = BorderStroke(1.5.dp, Cloud.copy(alpha = 0.65f)),
+            ) {
+                Text(
+                    stringResource(R.string.stop_sound),
+                    color = darkModeTextColor(Cloud),
+                )
+            }
         }
-    }
-}
-
-@Composable
-private fun androidx.compose.foundation.layout.RowScope.LandscapeClearButton(
-    ready: Boolean,
-    hasAlert: Boolean,
-    actions: TimerHeroActions,
-) {
-    OutlinedButton(
-        onClick = if (hasAlert) actions.onStopSound else actions.onClearTimer,
-        enabled = ready,
-        modifier = Modifier.weight(1f).height(54.dp),
-        border = BorderStroke(1.5.dp, Cloud.copy(alpha = 0.65f)),
-    ) {
-        Text(
-            stringResource(if (hasAlert) R.string.stop_sound else R.string.dismiss),
-            color = darkModeTextColor(Cloud),
-        )
     }
 }
 
@@ -557,40 +540,36 @@ internal fun TimerOrbit(
                 },
             contentAlignment = Alignment.Center,
         ) {
-            TimerOrbitCanvas(readout.animatedProgress, palette)
+            TimerOrbitCanvas(readout.animatedProgress, displayedTickCount(readout.duration), palette)
             TimerOrbitLabels(readout, orbitSize, palette, textColor)
         }
     }
 }
 
 @Composable
-private fun TimerOrbitCanvas(progress: Float, palette: PhasePalette) {
+private fun TimerOrbitCanvas(progress: Float, tickCount: Int, palette: PhasePalette) {
     Canvas(Modifier.fillMaxSize()) {
         val strokeWidth = 18.dp.toPx()
         val inset = strokeWidth / 2
         val arcSize = Size(size.width - strokeWidth, size.height - strokeWidth)
-        drawArc(
-            color = palette.onContainer.copy(alpha = 0.12f),
-            startAngle = -90f,
+        drawOrbitArc(
+            palette.onContainer.copy(alpha = 0.12f),
             sweepAngle = 360f,
-            useCenter = false,
-            topLeft = Offset(inset, inset),
-            size = arcSize,
-            style = Stroke(strokeWidth, cap = StrokeCap.Round),
+            inset = inset,
+            arcSize = arcSize,
+            strokeWidth = strokeWidth,
         )
-        val sweep = 360f * progress
-        drawArc(
-            color = palette.accent,
-            startAngle = -90f,
-            sweepAngle = sweep,
-            useCenter = false,
-            topLeft = Offset(inset, inset),
-            size = arcSize,
-            style = Stroke(strokeWidth, cap = StrokeCap.Round),
+        drawOrbitArc(
+            palette.accent,
+            sweepAngle = 360f * progress,
+            inset = inset,
+            arcSize = arcSize,
+            strokeWidth = strokeWidth,
         )
+        drawOrbitTicks(tickCount, palette, strokeWidth)
         if (progress > 0f) {
             val radius = (size.minDimension - strokeWidth) / 2
-            val angle = (sweep - 90f) * (PI.toFloat() / 180f)
+            val angle = (360f * progress - 90f) * (PI.toFloat() / 180f)
             val center = Offset(size.width / 2, size.height / 2)
             drawCircle(
                 color = palette.onContainer,
@@ -598,6 +577,42 @@ private fun TimerOrbitCanvas(progress: Float, palette: PhasePalette) {
                 center = Offset(center.x + cos(angle) * radius, center.y + sin(angle) * radius),
             )
         }
+    }
+}
+
+private fun DrawScope.drawOrbitArc(
+    color: Color,
+    sweepAngle: Float,
+    inset: Float,
+    arcSize: Size,
+    strokeWidth: Float,
+) {
+    drawArc(
+        color = color,
+        startAngle = -90f,
+        sweepAngle = sweepAngle,
+        useCenter = false,
+        topLeft = Offset(inset, inset),
+        size = arcSize,
+        style = Stroke(strokeWidth, cap = StrokeCap.Round),
+    )
+}
+
+private fun DrawScope.drawOrbitTicks(tickCount: Int, palette: PhasePalette, strokeWidth: Float) {
+    val total = maxOf(1, tickCount)
+    val outer = size.minDimension / 2 - strokeWidth
+    val center = Offset(size.width / 2, size.height / 2)
+    for (index in 0 until total) {
+        val angle = index * 2 * PI / total - PI / 2
+        val inner = outer - (if (index % 5 == 0) 10.dp else 5.dp).toPx()
+        val direction = Offset(cos(angle).toFloat(), sin(angle).toFloat())
+        drawLine(
+            color = palette.onContainer.copy(alpha = 0.45f),
+            start = center + direction * inner,
+            end = center + direction * outer,
+            strokeWidth = 1.dp.toPx(),
+            cap = StrokeCap.Round,
+        )
     }
 }
 

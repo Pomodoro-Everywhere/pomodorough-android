@@ -149,25 +149,24 @@ internal fun TaskSelector(
 internal data class TaskSelectorState(
     val tasks: List<FocusTask>,
     val selectedTaskId: String?,
-    val timer: CanonicalTimer?,
-    val taskTitle: String?,
-    val selectedPhase: String,
     val mutationsEnabled: Boolean,
 )
 
 internal data class TaskSelectorPresentation(val title: String, val enabled: Boolean)
 
+/** Single title source: the selected task. Applies to the running focus timer and the next timer. */
+internal fun taskSelectorTitle(
+    tasks: List<FocusTask>,
+    selectedTaskId: String?,
+    noTaskLabel: String,
+): String = tasks.firstOrNull { it.id == selectedTaskId }?.title ?: noTaskLabel
+
 @Composable
-internal fun taskSelectorPresentation(state: TaskSelectorState): TaskSelectorPresentation {
-    val active = state.timer?.status == TimerStatus.Running || state.timer?.status == TimerStatus.Paused
-    val title = if (active) state.taskTitle else state.tasks.firstOrNull {
-        it.id == state.selectedTaskId
-    }?.title
-    return TaskSelectorPresentation(
-        title = title ?: stringResource(R.string.no_task),
-        enabled = state.mutationsEnabled && !active && state.selectedPhase == TimerPhase.Focus,
+internal fun taskSelectorPresentation(state: TaskSelectorState): TaskSelectorPresentation =
+    TaskSelectorPresentation(
+        title = taskSelectorTitle(state.tasks, state.selectedTaskId, stringResource(R.string.no_task)),
+        enabled = state.mutationsEnabled,
     )
-}
 
 @Composable
 private fun TaskSelectorButton(state: TaskSelectorPresentation, onClick: () -> Unit) {

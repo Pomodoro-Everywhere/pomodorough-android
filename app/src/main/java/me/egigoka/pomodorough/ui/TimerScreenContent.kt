@@ -206,9 +206,6 @@ private fun timerHeroState(state: AppState, mutationsEnabled: Boolean) = TimerHe
     longBreakProgress = TimerPresentation.longBreakProgress(
         TimerPresentation.completedFocusCountForDay(state.history),
     ),
-    taskTitle = state.timer?.taskId?.let { taskId ->
-        state.knownTasks.firstOrNull { it.id == taskId }?.title
-    },
     ready = state.ready && mutationsEnabled,
     tasks = state.tasks,
     selectedTaskId = state.selectedTaskId,

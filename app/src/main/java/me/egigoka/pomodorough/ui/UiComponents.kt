@@ -295,6 +295,10 @@ internal fun displayPlannedDurationMs(timer: CanonicalTimer?, settings: TimerSet
     }
 }
 
+/** One tick per ceiling minute of the displayed timer, matching history display. */
+internal fun displayedTickCount(durationMs: Long): Int =
+    maxOf(1, ceil(durationMs / 60_000.0).toInt())
+
 @Composable
 internal fun resolutionLabel(strategy: BootstrapStrategy): String = when (strategy) {
     BootstrapStrategy.ReplaceRemote -> stringResource(R.string.keep_local)

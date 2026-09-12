@@ -79,7 +79,6 @@ class MainActivity : ComponentActivity() {
                 onToggleTimer = ::startOrToggleTimer,
                 onFinishTimer = viewModel::finishTimer,
                 onCancelTimer = viewModel::cancelTimer,
-                onClearTimer = viewModel::clearTimer,
                 onSelectPhase = viewModel::selectPhase,
                 onChangeDuration = viewModel::changeDuration,
                 onSetAutoStart = viewModel::setAutoStart,

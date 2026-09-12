@@ -440,7 +440,7 @@ class PomodoroughRtlAccessibilityTest {
                 state = state,
                 onSignIn = {}, onLogout = onLogout, onResetLocalAccount = onResetLocalAccount,
                 onRefresh = {}, onToggleTimer = {}, onFinishTimer = {}, onCancelTimer = {},
-                onClearTimer = {}, onStopSound = {}, onSelectPhase = {},
+                onStopSound = {}, onSelectPhase = {},
                 onChangeDuration = { _, _ -> }, onSetAutoStart = {}, onSelectTask = {},
                 onAddTask = { _, result -> result(true) }, onDeleteTask = {},
                 onResolveHistory = onResolveHistory, onRecoverHistoryResolution = {},

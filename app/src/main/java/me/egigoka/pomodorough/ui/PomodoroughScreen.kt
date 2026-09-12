@@ -138,7 +138,7 @@ fun PomodoroughScreen(
     state: AppState, onSignIn: () -> Unit, onLogout: () -> Unit,
     onResetLocalAccount: () -> Unit, onRefresh: () -> Unit,
     onToggleTimer: () -> Unit, onFinishTimer: () -> Unit,
-    onCancelTimer: () -> Unit, onClearTimer: () -> Unit,
+    onCancelTimer: () -> Unit,
     onSelectPhase: (String) -> Unit, onChangeDuration: (String, Int) -> Unit,
     onSetAutoStart: (Boolean) -> Unit, onSelectTask: (String?) -> Unit,
     onAddTask: (String, (Boolean) -> Unit) -> Unit, onDeleteTask: (String) -> Unit,
@@ -160,7 +160,7 @@ fun PomodoroughScreen(
         } else {
             TimerScreen(state, TimerScreenActions(
                 onSignIn, onLogout, onResetLocalAccount, onRefresh, onToggleTimer,
-                onFinishTimer, onCancelTimer, onClearTimer, onStopSound, onSelectPhase,
+                onFinishTimer, onCancelTimer, onStopSound, onSelectPhase,
                 onChangeDuration, onSetAutoStart, onSelectTask, onAddTask, onDeleteTask,
                 onResolveHistory, onRecoverHistoryResolution, onConfirmAccountSwitch,
                 onCancelAccountSwitch, onDismissConflict, onDismissNotice,
@@ -292,7 +292,7 @@ private fun SignInButton(signingIn: Boolean, onSignIn: () -> Unit) {
 internal data class TimerScreenActions(
     val onSignIn: () -> Unit, val onLogout: () -> Unit, val onResetLocalAccount: () -> Unit,
     val onRefresh: () -> Unit, val onToggleTimer: () -> Unit, val onFinishTimer: () -> Unit,
-    val onCancelTimer: () -> Unit, val onClearTimer: () -> Unit, val onStopSound: () -> Unit,
+    val onCancelTimer: () -> Unit, val onStopSound: () -> Unit,
     val onSelectPhase: (String) -> Unit, val onChangeDuration: (String, Int) -> Unit,
     val onSetAutoStart: (Boolean) -> Unit, val onSelectTask: (String?) -> Unit,
     val onAddTask: (String, (Boolean) -> Unit) -> Unit, val onDeleteTask: (String) -> Unit,

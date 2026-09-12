@@ -228,6 +228,24 @@ class TimerMutationCoordinatorTest {
         assertEquals(plan.operation.id, plan.projection.winningOperationIds.autoStart)
     }
 
+    @Test
+    fun startIsAcceptedOverFinishedTerminalTimer() {
+        val finished = CanonicalTimer(
+            id = "focus-timer",
+            phase = TimerPhase.Focus,
+            status = TimerStatus.Completed,
+            plannedDurationMs = 1_500_000,
+            elapsedAtAnchorMs = 1_500_000,
+            anchorAt = "2026-01-01T00:25:00Z",
+        )
+        val state = state(
+            projection = TimerProjection(finished, emptyList()),
+            projectionBase = CoreProjectionBase(canonicalTimer = finished),
+        )
+
+        assertTrue(coordinator.acceptsCommand(state, CommandType.Start))
+    }
+
     private fun state(
         settings: TimerSettings = TimerSettings(),
         projection: TimerProjection = TimerProjection(null, emptyList()),

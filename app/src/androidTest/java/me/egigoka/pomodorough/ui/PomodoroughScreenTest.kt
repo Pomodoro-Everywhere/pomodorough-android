@@ -198,8 +198,8 @@ class PomodoroughScreenTest {
     }
 
     @Test
-    fun completedTimerWithoutActiveAlertUsesDismissAndClearAction() {
-        var clearCalls = 0
+    fun completedTimerShowsPrimaryActionOnly() {
+        var toggleCalls = 0
         setScreen(
             AppState(
                 ready = true,
@@ -213,19 +213,20 @@ class PomodoroughScreenTest {
                     anchorAt = "2026-08-04T09:00:00Z",
                 ),
             ),
-            onClearTimer = { clearCalls += 1 },
+            onToggleTimer = { toggleCalls += 1 },
         )
 
-        composeRule.onNodeWithText("Dismiss").performClick()
+        composeRule.onNodeWithText("Start focus").performClick()
 
-        assertEquals(1, clearCalls)
+        assertEquals(1, toggleCalls)
+        composeRule.onNodeWithText("Dismiss").assertDoesNotExist()
         composeRule.onNodeWithText("Stop sound").assertDoesNotExist()
         composeRule.onNodeWithText("Cancel").assertDoesNotExist()
+        composeRule.onNodeWithText("Finish").assertDoesNotExist()
     }
 
     @Test
-    fun completedTimerWithActiveAlertStopsSoundWithoutClearing() {
-        var clearCalls = 0
+    fun completedTimerWithActiveAlertStopsSound() {
         var stopSoundCalls = 0
         setScreen(
             AppState(
@@ -241,14 +242,12 @@ class PomodoroughScreenTest {
                 ),
                 completionAlertTimerId = "timer-alert",
             ),
-            onClearTimer = { clearCalls += 1 },
             onStopSound = { stopSoundCalls += 1 },
         )
 
         composeRule.onNodeWithText("Stop sound").performClick()
 
         assertEquals(1, stopSoundCalls)
-        assertEquals(0, clearCalls)
         composeRule.onNodeWithText("Dismiss").assertDoesNotExist()
     }
 
@@ -389,7 +388,6 @@ class PomodoroughScreenTest {
                     onToggleTimer = {},
                     onFinishTimer = {},
                     onCancelTimer = {},
-                    onClearTimer = {},
                     onSelectPhase = {},
                     onChangeDuration = { _, _ -> },
                     onSetAutoStart = {},
@@ -548,7 +546,7 @@ class PomodoroughScreenTest {
         state: AppState,
         onSignIn: () -> Unit = {},
         onRefresh: () -> Unit = {},
-        onClearTimer: () -> Unit = {},
+        onToggleTimer: () -> Unit = {},
         onStopSound: () -> Unit = {},
         onResolve: (BootstrapStrategy) -> Unit = {},
         onRecover: () -> Unit = {},
@@ -565,10 +563,9 @@ class PomodoroughScreenTest {
                     onLogout = {},
                     onResetLocalAccount = onResetLocalAccount,
                     onRefresh = onRefresh,
-                    onToggleTimer = {},
+                    onToggleTimer = onToggleTimer,
                     onFinishTimer = {},
                     onCancelTimer = {},
-                    onClearTimer = onClearTimer,
                     onStopSound = onStopSound,
                     onSelectPhase = {},
                     onChangeDuration = { _, _ -> },
