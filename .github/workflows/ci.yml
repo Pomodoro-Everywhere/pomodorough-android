@@ -49,8 +49,8 @@ env:
   # component of SDK/emulator cache keys; bump it when GitHub refreshes the
   # ubuntu-24.04 image so stale SDK/system-image bytes cannot be reused.
   ANDROID_CACHE_REVISION: "1"
-  CORE_COMMIT: "2af512330656b956839198f0c019b0031b2c1a8f"
-  CORE_SHA256: "7b1436dc24e7fedb52f52bd193be78a775f062bdfc4fcef25bb41caf5325e379"
+  CORE_COMMIT: "1d30e00ba7235e2214c274ea5499987b2b996d18"
+  CORE_SHA256: "ac96b0581acb7b877e6ffc356b307b75779a00ff538fe6d59b39ca0d5e146466"
   TZ: Etc/UTC
 
 jobs:

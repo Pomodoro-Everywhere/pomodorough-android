@@ -35,11 +35,11 @@ class CIWorkflowTests(unittest.TestCase):
         workflow = CI_WORKFLOW.read_text(encoding="utf-8")
 
         self.assertIn(
-            'CORE_COMMIT: "2af512330656b956839198f0c019b0031b2c1a8f"',
+            'CORE_COMMIT: "1d30e00ba7235e2214c274ea5499987b2b996d18"',
             workflow,
         )
         self.assertIn(
-            'CORE_SHA256: "7b1436dc24e7fedb52f52bd193be78a775f062bdfc4fcef25bb41caf5325e379"',
+            'CORE_SHA256: "ac96b0581acb7b877e6ffc356b307b75779a00ff538fe6d59b39ca0d5e146466"',
             workflow,
         )
         self.assertIn("repository: Pomodoro-Everywhere/pomodorough-core", workflow)
