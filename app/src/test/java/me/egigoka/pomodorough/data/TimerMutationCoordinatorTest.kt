@@ -246,6 +246,42 @@ class TimerMutationCoordinatorTest {
         assertTrue(coordinator.acceptsCommand(state, CommandType.Start))
     }
 
+    @Test
+    fun startIsAcceptedOverCancelledTerminalTimer() {
+        val cancelled = CanonicalTimer(
+            id = "focus-timer",
+            phase = TimerPhase.Focus,
+            status = TimerStatus.Cancelled,
+            plannedDurationMs = 1_500_000,
+            elapsedAtAnchorMs = 60_000,
+            anchorAt = "2026-01-01T00:25:00Z",
+        )
+        val state = state(
+            projection = TimerProjection(cancelled, emptyList()),
+            projectionBase = CoreProjectionBase(canonicalTimer = cancelled),
+        )
+
+        assertTrue(coordinator.acceptsCommand(state, CommandType.Start))
+    }
+
+    @Test
+    fun startIsAcceptedOverSupersededTerminalTimer() {
+        val superseded = CanonicalTimer(
+            id = "focus-timer",
+            phase = TimerPhase.Focus,
+            status = TimerStatus.Superseded,
+            plannedDurationMs = 1_500_000,
+            elapsedAtAnchorMs = 60_000,
+            anchorAt = "2026-01-01T00:25:00Z",
+        )
+        val state = state(
+            projection = TimerProjection(superseded, emptyList()),
+            projectionBase = CoreProjectionBase(canonicalTimer = superseded),
+        )
+
+        assertTrue(coordinator.acceptsCommand(state, CommandType.Start))
+    }
+
     private fun state(
         settings: TimerSettings = TimerSettings(),
         projection: TimerProjection = TimerProjection(null, emptyList()),

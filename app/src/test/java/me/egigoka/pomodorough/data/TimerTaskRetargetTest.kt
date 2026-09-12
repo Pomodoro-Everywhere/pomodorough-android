@@ -1,5 +1,6 @@
 package me.egigoka.pomodorough.data
 
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -46,6 +47,18 @@ class TimerTaskRetargetTest {
     }
 
     @Test
+    fun viewOverrideToUnassignedClearsTask() {
+        val timer = timer(id = "timer-1", taskId = "task-a")
+        val history = listOf(historyItem(id = "history-1", timerId = "timer-1", taskId = "task-a"))
+
+        val (retargetedTimer, retargetedHistory) =
+            applyTimerTaskRetarget(timer, history, mapOf("timer-1" to null))
+
+        assertNull(retargetedTimer?.taskId)
+        assertNull(retargetedHistory.single().taskId)
+    }
+
+    @Test
     fun emptyRetargetLeavesViewUntouched() {
         val timer = timer(id = "timer-1", taskId = "task-a")
         val history = listOf(historyItem(id = "history-1", timerId = "timer-1", taskId = "task-a"))
@@ -74,6 +87,28 @@ class TimerTaskRetargetTest {
         val pruned = pruneTimerTaskRetarget(mapOf("timer-1" to "task-b"), null, history)
 
         assertTrue(pruned.containsKey("timer-1"))
+    }
+
+    @Test
+    fun retargetPersistenceFailureReportsAndNotices() {
+        // Structural pin for TimerRepository.retargetRunningTimer: the
+        // persistence-failure branch must report and surface a notice, and
+        // cancellation must propagate. Full behavioral coverage needs an
+        // androidTest (TimerRepository requires Context/Dao); this keeps a
+        // JVM revert failing if the guard is dropped.
+        val root = sequenceOf(File("src/main/java"), File("app/src/main/java"))
+            .firstOrNull(File::isDirectory)
+        val source = File(
+            checkNotNull(root) { "production source root" },
+            "me/egigoka/pomodorough/data/TimerRepository.kt",
+        ).readText()
+        val start = source.indexOf("fun retargetRunningTimer(")
+        assertTrue(start >= 0)
+        val window = source.drop(start).take(1_200)
+        assertTrue(window.contains("CancellationException"))
+        assertTrue(window.contains("CrashReporter.report"))
+        assertTrue(window.contains("mutationFailure"))
+        assertTrue(window.contains("notice"))
     }
 
     private fun command(id: String, timerId: String, type: String) = TimerCommand(

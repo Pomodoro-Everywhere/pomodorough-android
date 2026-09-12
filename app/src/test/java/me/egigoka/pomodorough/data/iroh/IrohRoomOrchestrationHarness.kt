@@ -40,6 +40,7 @@ internal class IrohRoomOrchestrationHarness(
     var leaveFailure: Exception? = null
     var discardCount = 0
     var captureCount = 0
+    var captureLocalOperationsFailure: Exception? = null
     var startCount = 0
     var stopCount = 0
     var closeCount = 0
@@ -85,6 +86,7 @@ internal class IrohRoomOrchestrationHarness(
             snapshot = { snapshot },
             captureLocalOperations = {
                 captureCount += 1
+                captureLocalOperationsFailure?.let { throw it }
                 capturedProjection
             },
             createRoom = { name ->

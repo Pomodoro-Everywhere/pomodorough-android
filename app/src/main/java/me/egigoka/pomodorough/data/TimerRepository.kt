@@ -1424,10 +1424,20 @@ class TimerRepository(
     private suspend fun retargetRunningTimer(timerId: String, taskId: String?) {
         timerTaskRetarget[timerId] = taskId
         val rewritten = retargetStartCommands(pending, timerId, taskId)
-        if (rewritten != pending) {
+        if (rewritten == pending) return
+        try {
+            val queues = pendingSyncQueues().copy(commands = rewritten)
+            timerStore.saveMutationState(local, queues, commandDependencies)
             pending = rewritten
-            timerStore.saveMutationState(local, pendingSyncQueues(), commandDependencies)
             installCoreProjection(projectSynchronizedState())
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            CrashReporter.report(error)
+            val message = projectionFailureMessage(error)
+            mutationFailure = message
+            notice = message
+            publish()
         }
     }
 

@@ -2,6 +2,7 @@ package me.egigoka.pomodorough.data.iroh
 
 import computer.iroh.Endpoint
 import computer.iroh.NoHandle
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -128,6 +129,76 @@ class IrohEndpointCrashReportingTest {
 
     private class IrohShutdownFailingEndpoint : Endpoint(NoHandle) {
         override suspend fun shutdown(): Unit = throw RuntimeException("shutdown failed")
+        override fun isClosed() = false
+    }
+
+    @Test
+    fun bindCancellationPropagatesWithoutReport() = runTest {
+        val reported = mutableListOf<Throwable>()
+        val previous = CrashReporter.delegate
+        CrashReporter.delegate = reported::add
+        val events = mutableListOf<IrohEndpointEvent>()
+        val cancellation = CancellationException("gone")
+        val lifecycle = IrohEndpointLifecycle(
+            FailingBinding(cancellation),
+            { events += it },
+            StandardTestDispatcher(testScheduler),
+        )
+        try {
+            val failure = runCatching {
+                lifecycle.start(
+                    IrohServiceContext("room", ByteArray(32) { 7 }, "device", null),
+                    true,
+                    { _, _ -> awaitCancellation() },
+                    { awaitCancellation() },
+                )
+            }.exceptionOrNull()
+            runCurrent()
+            assertSame(cancellation, failure)
+            assertTrue(reported.isEmpty())
+            assertTrue(events.none {
+                it is IrohEndpointEvent.Status && it.status == IrohConnectionStatus.UNAVAILABLE
+            })
+        } finally {
+            CrashReporter.delegate = previous
+            lifecycle.close()
+        }
+    }
+
+    @Test
+    fun ticketCancellationPropagatesWithoutReport() = runTest {
+        val reported = mutableListOf<Throwable>()
+        val previous = CrashReporter.delegate
+        CrashReporter.delegate = reported::add
+        val events = mutableListOf<IrohEndpointEvent>()
+        val cancellation = CancellationException("gone")
+        val lifecycle = IrohEndpointLifecycle(
+            TicketFailingBinding(FakeEndpoint(), cancellation),
+            { events += it },
+            StandardTestDispatcher(testScheduler),
+        )
+        try {
+            val failure = runCatching {
+                lifecycle.start(
+                    IrohServiceContext("room", ByteArray(32) { 7 }, "device", null),
+                    false,
+                    { _, _ -> awaitCancellation() },
+                    { awaitCancellation() },
+                )
+            }.exceptionOrNull()
+            runCurrent()
+            assertSame(cancellation, failure)
+            assertTrue(reported.isEmpty())
+            assertTrue(events.none {
+                it is IrohEndpointEvent.Status && it.status == IrohConnectionStatus.UNAVAILABLE
+            })
+        } finally {
+            CrashReporter.delegate = previous
+            lifecycle.close()
+        }
+    }
+
+    private class FakeEndpoint : Endpoint(NoHandle) {
         override fun isClosed() = false
     }
 }

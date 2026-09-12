@@ -148,4 +148,38 @@ class IrohOrchestrationCrashReportingTest {
             harness.orchestration.close()
         }
     }
+
+    @Test
+    fun recoverLocalOperationsCancellationPropagatesWithoutUnavailable() = runTest {
+        val harness = IrohRoomOrchestrationHarness(
+            initialMode = ReplicationMode.IROH,
+            activeRoomId = "room-test0001",
+        )
+        try {
+            val cancellation = CancellationException("gone")
+            harness.captureLocalOperationsFailure = cancellation
+            val failure = runCatching {
+                harness.orchestration.initialize()
+            }.exceptionOrNull()
+            assertSame(cancellation, failure)
+            assertTrue(harness.state.value.status != IrohConnectionStatus.UNAVAILABLE)
+        } finally {
+            harness.orchestration.close()
+        }
+    }
+
+    @Test
+    fun recoverLocalOperationsFailureSetsUnavailable() = runTest {
+        val harness = IrohRoomOrchestrationHarness(
+            initialMode = ReplicationMode.IROH,
+            activeRoomId = "room-test0001",
+        )
+        try {
+            harness.captureLocalOperationsFailure = RuntimeException("ops exploded")
+            harness.orchestration.initialize()
+            assertEquals(IrohConnectionStatus.UNAVAILABLE, harness.state.value.status)
+        } finally {
+            harness.orchestration.close()
+        }
+    }
 }

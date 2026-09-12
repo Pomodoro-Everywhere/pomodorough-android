@@ -72,6 +72,7 @@ class CrashReportingSilenceTest {
         "me/egigoka/pomodorough/data/iroh/IrohEndpointLifecycle.kt" to "fun createTicketOrClose(",
         "me/egigoka/pomodorough/data/TimerRepository.kt" to "fun validateLoadedMutationState(",
         "me/egigoka/pomodorough/data/iroh/IrohRoomOrchestration.kt" to "fun recoverLocalOperations(",
+        "me/egigoka/pomodorough/data/TimerRepository.kt" to "fun retargetRunningTimer(",
     )
 
     @Test
