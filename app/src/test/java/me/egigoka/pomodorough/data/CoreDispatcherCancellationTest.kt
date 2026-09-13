@@ -5,7 +5,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * A67/A68/A69 structural pins (A60 pattern).
+ * A67/A68/A69/A70/A71/A72/A73 structural pins (A60 pattern).
  *
  * Pure serialize/decode sites are non-suspend today, so cancellation cannot
  * arise; each pin fails if a guard-first rethrow is dropped, keeping the
@@ -59,6 +59,50 @@ class CoreDispatcherCancellationTest {
             "me/egigoka/pomodorough/data/TimerRepository.kt",
             "private fun taskFromSharedCore(",
             60,
+        )
+        val catching = window.indexOfFirst { it.contains("runCatching {") }
+        assertTrue(catching >= 0)
+        val guard = window.indexOfFirst { it.contains("is CancellationException") }
+        assertTrue(guard > catching)
+        assertTrue(window[guard].contains("throw"))
+    }
+
+    @Test
+    fun hlcTickRethrowsCancellationFirst() {
+        // A70: pure dispatch+decode guard-first in tick().
+        val window = functionWindow(
+            "me/egigoka/pomodorough/data/CoreTimerPolicyDispatchers.kt",
+            "fun tick(",
+        )
+        assertGuardFirst(window)
+    }
+
+    @Test
+    fun completionDecodeRethrowsCancellationFirst() {
+        // A71: pure decode guard-first in completion decode().
+        val window = functionWindow(
+            "me/egigoka/pomodorough/data/CoreTimerPolicyDispatchers.kt",
+            "private fun decode(",
+        )
+        assertGuardFirst(window)
+    }
+
+    @Test
+    fun translatePhysicalInstantRethrowsCancellationFirst() {
+        // A72: pure time math guard-first (siblings :1725/:2304).
+        val window = functionWindow(
+            "me/egigoka/pomodorough/data/TimerRepository.kt",
+            "private fun translatePhysicalInstant(",
+        )
+        assertGuardFirst(window)
+    }
+
+    @Test
+    fun prepareProjectionRuntimeRethrowsCancellation() {
+        // A73: runCatching swallows cancel; guard rethrows before mapping.
+        val window = functionWindow(
+            "me/egigoka/pomodorough/data/TimerRepository.kt",
+            "private fun prepareProjectionRuntime(",
         )
         val catching = window.indexOfFirst { it.contains("runCatching {") }
         assertTrue(catching >= 0)

@@ -787,4 +787,86 @@ class SentryScrubberAdversarialTest {
         assertTrue(lookalike.contains("keepme"))
         assertTrue(lookalike.contains("\"ok\""))
     }
+
+    @Test
+    fun kebabCompoundQueryKeepsKeyButLosesValue() {
+        // A74 (A66 mirror): `_?` missed kebab-case compounds; `[-_]?`
+        // closes the gap. Hyphen-adjacent lookalikes must survive.
+        val scrubbed = checkNotNull(
+            SentryScrubber.scrubText(
+                "https://host/sync?client-secret=cs-aa&code-verifier=cv-bb&auth-token=at-cc&device-id=di-dd&room-id=ri-ee&other=1",
+            ),
+        )
+        assertTrue(scrubbed.contains("client-secret="))
+        assertTrue(scrubbed.contains("code-verifier="))
+        assertTrue(scrubbed.contains("auth-token="))
+        assertTrue(scrubbed.contains("device-id="))
+        assertTrue(scrubbed.contains("room-id="))
+        assertFalse(scrubbed.contains("cs-aa"))
+        assertFalse(scrubbed.contains("cv-bb"))
+        assertFalse(scrubbed.contains("at-cc"))
+        assertFalse(scrubbed.contains("di-dd"))
+        assertFalse(scrubbed.contains("ri-ee"))
+        assertTrue(scrubbed.contains(SentryScrubber.REDACTED_TOKEN))
+        assertTrue(scrubbed.contains("other=1"))
+        val lookalike = checkNotNull(
+            SentryScrubber.scrubText(
+                "https://host/sync?client-side=keepme&re-side=keepme&other=1",
+            ),
+        )
+        assertTrue(lookalike.contains("client-side=keepme"))
+        assertTrue(lookalike.contains("re-side=keepme"))
+        assertTrue(lookalike.contains("other=1"))
+    }
+
+    @Test
+    fun kebabCompoundJsonLosesValue() {
+        // A74 (A66 mirror): same kebab coverage for double- and
+        // single-quoted JSON-string forms; lookalike keys stay readable.
+        // Snake/camel forms keep working through the same `[-_]?` class.
+        val doubleScrubbed = checkNotNull(
+            SentryScrubber.scrubText(
+                "{\"client-secret\": \"cs-aa\", \"code-verifier\": \"cv-bb\", \"auth-token\": \"at-cc\", \"device-id\": \"di-dd\", \"room-id\": \"ri-ee\", \"ok\": true}",
+            ),
+        )
+        assertFalse(doubleScrubbed.contains("cs-aa"))
+        assertFalse(doubleScrubbed.contains("cv-bb"))
+        assertFalse(doubleScrubbed.contains("at-cc"))
+        assertFalse(doubleScrubbed.contains("di-dd"))
+        assertFalse(doubleScrubbed.contains("ri-ee"))
+        assertTrue(doubleScrubbed.contains("\"client-secret\""))
+        assertTrue(doubleScrubbed.contains("\"code-verifier\""))
+        assertTrue(doubleScrubbed.contains(SentryScrubber.REDACTED_TOKEN))
+        assertTrue(doubleScrubbed.contains("\"ok\""))
+        val singleScrubbed = checkNotNull(
+            SentryScrubber.scrubText(
+                "{'client-secret': 'cs-ab', 'code-verifier': 'cv-bc', 'auth-token': 'at-cd', 'device-id': 'di-de', 'room-id': 'ri-ef', 'ok': true}",
+            ),
+        )
+        assertFalse(singleScrubbed.contains("cs-ab"))
+        assertFalse(singleScrubbed.contains("cv-bc"))
+        assertFalse(singleScrubbed.contains("at-cd"))
+        assertFalse(singleScrubbed.contains("di-de"))
+        assertFalse(singleScrubbed.contains("ri-ef"))
+        assertTrue(singleScrubbed.contains(SentryScrubber.REDACTED_TOKEN))
+        val snakeSurvives = checkNotNull(
+            SentryScrubber.scrubText(
+                "{\"client_secret\": \"cs-ac\", \"code_verifier\": \"cv-bd\", \"ok\": true}",
+            ),
+        )
+        assertFalse(snakeSurvives.contains("cs-ac"))
+        assertFalse(snakeSurvives.contains("cv-bd"))
+        val camelSurvives = checkNotNull(
+            SentryScrubber.scrubText(
+                "{\"clientSecret\": \"cs-ad\", \"codeVerifier\": \"cv-be\", \"ok\": true}",
+            ),
+        )
+        assertFalse(camelSurvives.contains("cs-ad"))
+        assertFalse(camelSurvives.contains("cv-be"))
+        val lookalike = checkNotNull(
+            SentryScrubber.scrubText("{\"client-side\": \"keepme\", \"ok\": true}"),
+        )
+        assertTrue(lookalike.contains("keepme"))
+        assertTrue(lookalike.contains("\"ok\""))
+    }
 }

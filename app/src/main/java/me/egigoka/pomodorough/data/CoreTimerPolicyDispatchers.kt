@@ -2,6 +2,7 @@ package me.egigoka.pomodorough.data
 
 import java.time.Instant
 import java.time.ZoneId
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -62,6 +63,10 @@ internal class CoreHlcDispatcher(
                 dispatch(Operation, wireJson.encodeToString(input)),
             )
         } catch (error: CoreProjectionException) {
+            throw error
+        } catch (error: CancellationException) {
+            // A70 guard-first (A60 pattern): pure dispatch+decode, non-suspend
+            // caller, so cancel cannot arise today; rethrow keeps convention.
             throw error
         } catch (error: Exception) {
             throw invalidOutput(error)
@@ -357,6 +362,10 @@ internal class CoreCompletionDispatcher(
             dispatch(Operation, input),
         )
     } catch (error: CoreProjectionException) {
+        throw error
+    } catch (error: CancellationException) {
+        // A71 guard-first (A60 pattern): pure decode, non-suspend caller, so
+        // cancel cannot arise today; rethrow keeps the convention.
         throw error
     } catch (error: Exception) {
         throw CoreProjectionException.InvalidOutput(

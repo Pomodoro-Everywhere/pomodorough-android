@@ -436,6 +436,9 @@ class TimerRepository(
         val error = runCatching {
             coreProjection.apply(CoreProjectionBase(), CoreProjectionPending(), Instant.EPOCH)
         }.exceptionOrNull() ?: return true
+        // A73 guard-first (A60 pattern): runCatching swallows cancel; rethrow
+        // before mapping to a projection failure so coroutine cancel propagates.
+        if (error is CancellationException) throw error
         mutationFailure = projectionFailureMessage(error)
         notice = mutationFailure
         finishFailedInitialization()
@@ -3536,6 +3539,10 @@ class TimerRepository(
 
     private fun translatePhysicalInstant(value: String, deltaMs: Long): String = try {
         Instant.ofEpochMilli(Math.addExact(Instant.parse(value).toEpochMilli(), deltaMs)).toString()
+    } catch (error: CancellationException) {
+        // A72 guard-first (A60 pattern, siblings :1725/:2304): pure time math,
+        // non-suspend caller, so cancel cannot arise today; rethrow keeps convention.
+        throw error
     } catch (_: Exception) {
         throw SyncProtocolException("Canonical physical timestamp is outside supported range")
     }

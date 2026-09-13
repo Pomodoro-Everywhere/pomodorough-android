@@ -73,14 +73,20 @@ object SentryScrubber {
     // same free-text paths because the prefix class excluded `-`.
     // `[a-z0-9_-]*` closes the gap; anchors still keep `reside`-class
     // lookalikes safe, pinned by SentryScrubberAdversarialTest.
-    private val tokenQuery = Regex("(?i)([?&#;](token|id_?token|access_?token|refresh_?token|csrf_?token|csrf|nonce|challenge|code_?challenge|verifier|code_?verifier|client_?secret|session_?id|[a-z0-9_-]*ssid|[a-z0-9_-]*sid|auth_?token|room_?id|room_?secret|endpoint_?ticket|endpoint_?id|peer_?id|state|device_?id|invite|code|secret|cookie|session|api_key|apikey|auth|authorization|password|passwd|credential|private_key|privatekey|bearer|ticket|dsn|device|peer|endpoint|room)=)[^&\\s\"';]+")
+    // A74: kebab-case compounds (`client-secret`, `code-verifier`,
+    // `auth-token`, `device-id`, `room-id`) missed the same free-text
+    // paths because compound keys used `_?` (underscore-only).
+    // `[-_]?` closes the gap across tokenQuery/tokenJson/tokenJsonSingle;
+    // `=`/`":` anchors still keep `client-side`-class lookalikes safe,
+    // pinned by SentryScrubberAdversarialTest.
+    private val tokenQuery = Regex("(?i)([?&#;](token|id[-_]?token|access[-_]?token|refresh[-_]?token|csrf[-_]?token|csrf|nonce|challenge|code[-_]?challenge|verifier|code[-_]?verifier|client[-_]?secret|session[-_]?id|[a-z0-9_-]*ssid|[a-z0-9_-]*sid|auth[-_]?token|room[-_]?id|room[-_]?secret|endpoint[-_]?ticket|endpoint[-_]?id|peer[-_]?id|state|device[-_]?id|invite|code|secret|cookie|session|api_key|apikey|auth|authorization|password|passwd|credential|private_key|privatekey|bearer|ticket|dsn|device|peer|endpoint|room)=)[^&\\s\"';]+")
     private val tokenJson = Regex(
-        "(?i)(\"(token|id_?token|access_?token|refresh_?token|csrf_?token|csrf|nonce|challenge|code_?challenge|verifier|code_?verifier|client_?secret|session_?id|[a-z0-9_-]*ssid|[a-z0-9_-]*sid|auth_?token|room_?id|room_?secret|endpoint_?ticket|endpoint_?id|peer_?id|state|device_?id|authorization|password|passwd|credential|secret|cookie|invite|session|api_key|apikey|auth|private_key|privatekey|bearer|ticket|dsn|device|peer|endpoint|room|code)\"\\s*:\\s*\")[^\"]+\"",
+        "(?i)(\"(token|id[-_]?token|access[-_]?token|refresh[-_]?token|csrf[-_]?token|csrf|nonce|challenge|code[-_]?challenge|verifier|code[-_]?verifier|client[-_]?secret|session[-_]?id|[a-z0-9_-]*ssid|[a-z0-9_-]*sid|auth[-_]?token|room[-_]?id|room[-_]?secret|endpoint[-_]?ticket|endpoint[-_]?id|peer[-_]?id|state|device[-_]?id|authorization|password|passwd|credential|secret|cookie|invite|session|api_key|apikey|auth|private_key|privatekey|bearer|ticket|dsn|device|peer|endpoint|room|code)\"\\s*:\\s*\")[^\"]+\"",
     )
     // A31: single-quoted JSON (`{'token': 'abc'}`) from loose loggers;
     // same key list as tokenJson, quote-agnostic on both key and value.
     private val tokenJsonSingle = Regex(
-        "(?i)('(token|id_?token|access_?token|refresh_?token|csrf_?token|csrf|nonce|challenge|code_?challenge|verifier|code_?verifier|client_?secret|session_?id|[a-z0-9_-]*ssid|[a-z0-9_-]*sid|auth_?token|room_?id|room_?secret|endpoint_?ticket|endpoint_?id|peer_?id|state|device_?id|authorization|password|passwd|credential|secret|cookie|invite|session|api_key|apikey|auth|private_key|privatekey|bearer|ticket|dsn|device|peer|endpoint|room|code)'\\s*:\\s*')[^']+'",
+        "(?i)('(token|id[-_]?token|access[-_]?token|refresh[-_]?token|csrf[-_]?token|csrf|nonce|challenge|code[-_]?challenge|verifier|code[-_]?verifier|client[-_]?secret|session[-_]?id|[a-z0-9_-]*ssid|[a-z0-9_-]*sid|auth[-_]?token|room[-_]?id|room[-_]?secret|endpoint[-_]?ticket|endpoint[-_]?id|peer[-_]?id|state|device[-_]?id|authorization|password|passwd|credential|secret|cookie|invite|session|api_key|apikey|auth|private_key|privatekey|bearer|ticket|dsn|device|peer|endpoint|room|code)'\\s*:\\s*')[^']+'",
     )
     // A31: invites are `pomodorough1.` + base64url (`A-Za-z0-9_-`); the dot
     // is optional so pre-dot payloads still match. Strictly broader than
