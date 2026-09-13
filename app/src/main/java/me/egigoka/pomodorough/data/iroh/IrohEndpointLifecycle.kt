@@ -231,15 +231,17 @@ internal class IrohEndpointLifecycle(
         syncJob = null
         accepting?.cancel()
         syncing?.cancel()
-        // A58: caller cancellation must propagate out of teardown instead of
-        // reading as a clean stop. Ordinary join failures stay best-effort.
+        // A58: child join cancellation is ordinary teardown (we just cancelled
+        // the child), so swallow it best-effort. Only caller cancellation
+        // propagates, via ensureActive() below. Ordinary join failures stay
+        // best-effort.
         if (accepting != null) {
             runCatching { accepting.cancelAndJoin() }
-                .onFailure { error -> if (error is CancellationException) throw error }
+            currentCoroutineContext().ensureActive()
         }
         if (syncing != null) {
             runCatching { syncing.cancelAndJoin() }
-                .onFailure { error -> if (error is CancellationException) throw error }
+            currentCoroutineContext().ensureActive()
         }
         val closing = endpoint
         context?.roomSecret?.fill(0)

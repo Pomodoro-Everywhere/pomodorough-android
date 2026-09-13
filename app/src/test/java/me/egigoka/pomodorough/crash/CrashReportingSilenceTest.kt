@@ -161,10 +161,12 @@ class CrashReportingSilenceTest {
     @Test
     fun suspendGenericCatchesRethrowCancellation() {
         // A48+A49+A51+A53+A54+A55+A56+A58+A60: suspend generic catches must rethrow
-        // CancellationException first. A53/A55/A56/A58 runCatching sites rethrow via
+        // CancellationException first. A53/A55/A56/A60 runCatching sites rethrow via
         // `if (error is CancellationException) throw` instead of a
         // dedicated catch, pinned by the same list through the fallback
-        // below.
+        // below. A58 stopLocked swallows the just-cancelled child join
+        // (ordinary teardown) and propagates only caller cancellation via
+        // `ensureActive()`, pinned the same way.
         // A54: TimerAlarmReceiver.deliver cancellation propagates,
         // pinned by TimerAlarmDeliveryPolicyTest.cancellationPropagatesWithoutReport.
         // IrohPeerSynchronization per-peer TimeoutCancellationException swallow stays,
@@ -210,9 +212,12 @@ class CrashReportingSilenceTest {
         val rethrowIndex = window.indexOfFirst {
             it.contains("is CancellationException") && it.contains("throw")
         }
+        // A58: stopLocked swallows the child join (runCatching) and propagates
+        // only caller cancellation via ensureActive().
+        val ensureActiveIndex = window.indexOfFirst { it.contains("ensureActive()") }
         assertTrue(
-            "$relativePath $funSig must rethrow CancellationException",
-            rethrowIndex >= 0,
+            "$relativePath $funSig must rethrow CancellationException or propagate via ensureActive()",
+            rethrowIndex >= 0 || ensureActiveIndex >= 0,
         )
     }
 
