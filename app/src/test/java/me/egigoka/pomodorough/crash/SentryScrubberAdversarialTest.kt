@@ -791,22 +791,25 @@ class SentryScrubberAdversarialTest {
     @Test
     fun kebabCompoundQueryKeepsKeyButLosesValue() {
         // A74 (A66 mirror): `_?` missed kebab-case compounds; `[-_]?`
-        // closes the gap. Hyphen-adjacent lookalikes must survive.
+        // closes the gap. All 15 compounds pinned in query form; the
+        // JSON tests pin 5 representatives cheaply. Hyphen-adjacent
+        // lookalikes must survive.
         val scrubbed = checkNotNull(
             SentryScrubber.scrubText(
-                "https://host/sync?client-secret=cs-aa&code-verifier=cv-bb&auth-token=at-cc&device-id=di-dd&room-id=ri-ee&other=1",
+                "https://host/sync?id-token=it-ff&access-token=ac-gg&refresh-token=rf-hh&csrf-token=cf-ii&code-challenge=cch-jj&code-verifier=cv-bb&client-secret=cs-aa&session-id=si-kk&auth-token=at-cc&device-id=di-dd&room-id=ri-ee&room-secret=rs-ll&endpoint-ticket=et-mm&endpoint-id=ei-nn&peer-id=pi-oo&other=1",
             ),
         )
-        assertTrue(scrubbed.contains("client-secret="))
-        assertTrue(scrubbed.contains("code-verifier="))
-        assertTrue(scrubbed.contains("auth-token="))
-        assertTrue(scrubbed.contains("device-id="))
-        assertTrue(scrubbed.contains("room-id="))
-        assertFalse(scrubbed.contains("cs-aa"))
-        assertFalse(scrubbed.contains("cv-bb"))
-        assertFalse(scrubbed.contains("at-cc"))
-        assertFalse(scrubbed.contains("di-dd"))
-        assertFalse(scrubbed.contains("ri-ee"))
+        listOf(
+            "id-token=", "access-token=", "refresh-token=", "csrf-token=",
+            "code-challenge=", "code-verifier=", "client-secret=",
+            "session-id=", "auth-token=", "device-id=", "room-id=",
+            "room-secret=", "endpoint-ticket=", "endpoint-id=", "peer-id=",
+        ).forEach { assertTrue(scrubbed.contains(it)) }
+        listOf(
+            "it-ff", "ac-gg", "rf-hh", "cf-ii", "cch-jj", "cv-bb",
+            "cs-aa", "si-kk", "at-cc", "di-dd", "ri-ee", "rs-ll",
+            "et-mm", "ei-nn", "pi-oo",
+        ).forEach { assertFalse(scrubbed.contains(it)) }
         assertTrue(scrubbed.contains(SentryScrubber.REDACTED_TOKEN))
         assertTrue(scrubbed.contains("other=1"))
         val lookalike = checkNotNull(
