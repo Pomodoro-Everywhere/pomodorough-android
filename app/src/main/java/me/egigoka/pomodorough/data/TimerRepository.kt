@@ -436,7 +436,7 @@ class TimerRepository(
         val error = runCatching {
             coreProjection.apply(CoreProjectionBase(), CoreProjectionPending(), Instant.EPOCH)
         }.exceptionOrNull() ?: return true
-        // A73 guard-first (A60 pattern): runCatching swallows cancel; rethrow
+        // A73 guard-first (A60 pattern): the guarded block swallows cancel; rethrow
         // before mapping to a projection failure so coroutine cancel propagates.
         if (error is CancellationException) throw error
         mutationFailure = projectionFailureMessage(error)
