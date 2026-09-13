@@ -1710,6 +1710,9 @@ class TimerRepository(
         if (stored.ownerUserId != profile.id) return corruptPendingResolution()
         val request = try {
             stored.toRequestStrict()
+        } catch (error: CancellationException) {
+            // A60 guard-first: toRequestStrict is pure today, so cancel must propagate.
+            throw error
         } catch (_: Exception) {
             // expected-silent: corrupted saved resolution surfaces as corrupted UI, not a crash.
             return corruptPendingResolution()

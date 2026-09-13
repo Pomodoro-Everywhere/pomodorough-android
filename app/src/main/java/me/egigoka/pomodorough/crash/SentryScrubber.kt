@@ -62,14 +62,17 @@ object SentryScrubber {
     // A50: `endpointId`/`peerId` (snake + camel via `x_?y`) are Iroh peer
     // identities; bare `endpoint`/`peer` never match them in free text
     // because the value class requires `=` right after the key.
-    private val tokenQuery = Regex("(?i)([?&#;](token|id_?token|access_?token|refresh_?token|csrf_?token|csrf|nonce|challenge|code_?challenge|verifier|code_?verifier|client_?secret|session_?id|auth_?token|room_?id|room_?secret|endpoint_?ticket|endpoint_?id|peer_?id|state|device_?id|invite|code|secret|cookie|session|api_key|apikey|auth|authorization|password|passwd|credential|private_key|privatekey|bearer|ticket|dsn|device|peer|endpoint|room)=)[^&\\s\"';]+")
+    // A59: bare `sid`/`ssid` are session identifiers (mirror desktop D51);
+    // `session`/`session_?id` never match them in free text for the same
+    // reason. Exact-key in query/JSON regexes, so no lookalike risk there.
+    private val tokenQuery = Regex("(?i)([?&#;](token|id_?token|access_?token|refresh_?token|csrf_?token|csrf|nonce|challenge|code_?challenge|verifier|code_?verifier|client_?secret|session_?id|ssid|sid|auth_?token|room_?id|room_?secret|endpoint_?ticket|endpoint_?id|peer_?id|state|device_?id|invite|code|secret|cookie|session|api_key|apikey|auth|authorization|password|passwd|credential|private_key|privatekey|bearer|ticket|dsn|device|peer|endpoint|room)=)[^&\\s\"';]+")
     private val tokenJson = Regex(
-        "(?i)(\"(token|id_?token|access_?token|refresh_?token|csrf_?token|csrf|nonce|challenge|code_?challenge|verifier|code_?verifier|client_?secret|session_?id|auth_?token|room_?id|room_?secret|endpoint_?ticket|endpoint_?id|peer_?id|state|device_?id|authorization|password|passwd|credential|secret|cookie|invite|session|api_key|apikey|auth|private_key|privatekey|bearer|ticket|dsn|device|peer|endpoint|room|code)\"\\s*:\\s*\")[^\"]+\"",
+        "(?i)(\"(token|id_?token|access_?token|refresh_?token|csrf_?token|csrf|nonce|challenge|code_?challenge|verifier|code_?verifier|client_?secret|session_?id|ssid|sid|auth_?token|room_?id|room_?secret|endpoint_?ticket|endpoint_?id|peer_?id|state|device_?id|authorization|password|passwd|credential|secret|cookie|invite|session|api_key|apikey|auth|private_key|privatekey|bearer|ticket|dsn|device|peer|endpoint|room|code)\"\\s*:\\s*\")[^\"]+\"",
     )
     // A31: single-quoted JSON (`{'token': 'abc'}`) from loose loggers;
     // same key list as tokenJson, quote-agnostic on both key and value.
     private val tokenJsonSingle = Regex(
-        "(?i)('(token|id_?token|access_?token|refresh_?token|csrf_?token|csrf|nonce|challenge|code_?challenge|verifier|code_?verifier|client_?secret|session_?id|auth_?token|room_?id|room_?secret|endpoint_?ticket|endpoint_?id|peer_?id|state|device_?id|authorization|password|passwd|credential|secret|cookie|invite|session|api_key|apikey|auth|private_key|privatekey|bearer|ticket|dsn|device|peer|endpoint|room|code)'\\s*:\\s*')[^']+'",
+        "(?i)('(token|id_?token|access_?token|refresh_?token|csrf_?token|csrf|nonce|challenge|code_?challenge|verifier|code_?verifier|client_?secret|session_?id|ssid|sid|auth_?token|room_?id|room_?secret|endpoint_?ticket|endpoint_?id|peer_?id|state|device_?id|authorization|password|passwd|credential|secret|cookie|invite|session|api_key|apikey|auth|private_key|privatekey|bearer|ticket|dsn|device|peer|endpoint|room|code)'\\s*:\\s*')[^']+'",
     )
     // A31: invites are `pomodorough1.` + base64url (`A-Za-z0-9_-`); the dot
     // is optional so pre-dot payloads still match. Strictly broader than
@@ -210,7 +213,7 @@ object SentryScrubber {
             normalized.contains("secret") ||
             normalized.contains("private_key") ||
             normalized.contains("privatekey") ||
-            normalized.contains("session") ||
+            isSessionIdentifierKey(normalized) ||
             normalized.contains("api_key") ||
             normalized.contains("apikey") ||
             normalized.contains("password") ||
@@ -223,6 +226,15 @@ object SentryScrubber {
             normalized == "state" ||
             normalized == "email"
     }
+
+    // A59: `session`/`ssid`/`sid` are session identifiers (mirror desktop
+    // D51). Substring on purpose (`ssid` contains `sid`); over-filtering a
+    // display string (`reside`, `consider`) beats leaking a session, the
+    // same tradeoff desktop accepts. Query/JSON regexes stay exact-key.
+    private fun isSessionIdentifierKey(normalized: String): Boolean =
+        normalized.contains("session") ||
+            normalized.contains("ssid") ||
+            normalized.contains("sid")
 
     private fun scrubEventMessage(event: SentryEvent) {
         val message: Message? = event.message

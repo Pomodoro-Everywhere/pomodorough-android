@@ -69,8 +69,10 @@ class CrashReportingSilenceTest {
         "me/egigoka/pomodorough/data/TimerRepository.kt" to "fun restoreProfile(",
         "me/egigoka/pomodorough/data/iroh/IrohIncomingRpcHandler.kt" to "fun readAuthenticatedRequest(",
         "me/egigoka/pomodorough/data/iroh/IrohEndpointLifecycle.kt" to "fun bindEndpoint(",
+        "me/egigoka/pomodorough/data/iroh/IrohEndpointLifecycle.kt" to "fun stopLocked(",
         "me/egigoka/pomodorough/data/iroh/IrohEndpointLifecycle.kt" to "fun createTicketOrClose(",
         "me/egigoka/pomodorough/data/TimerRepository.kt" to "fun validateLoadedMutationState(",
+        "me/egigoka/pomodorough/data/TimerRepository.kt" to "fun resolutionAttempt(",
         "me/egigoka/pomodorough/data/iroh/IrohRoomOrchestration.kt" to "fun recoverLocalOperations(",
         "me/egigoka/pomodorough/data/TimerRepository.kt" to "fun retargetRunningTimer(",
         "me/egigoka/pomodorough/timer/TimerAlarmReceiver.kt" to "fun deliver(",
@@ -158,8 +160,8 @@ class CrashReportingSilenceTest {
 
     @Test
     fun suspendGenericCatchesRethrowCancellation() {
-        // A48+A49+A51+A53+A54+A55+A56: suspend generic catches must rethrow
-        // CancellationException first. A53/A55/A56 runCatching sites rethrow via
+        // A48+A49+A51+A53+A54+A55+A56+A58+A60: suspend generic catches must rethrow
+        // CancellationException first. A53/A55/A56/A58 runCatching sites rethrow via
         // `if (error is CancellationException) throw` instead of a
         // dedicated catch, pinned by the same list through the fallback
         // below.

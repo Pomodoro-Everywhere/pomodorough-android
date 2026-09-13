@@ -602,4 +602,70 @@ class SentryScrubberAdversarialTest {
         }
         assertTrue(singleScrubbed.contains(SentryScrubber.REDACTED_TOKEN))
     }
+
+    @Test
+    fun sidSsidQueryKeepsKeyButLosesValue() {
+        // A59: bare `sid`/`ssid` never matched `session`/`session_?id` in
+        // free text; mirror desktop D51 query/fragment coverage.
+        val scrubbed = checkNotNull(
+            SentryScrubber.scrubText(
+                "https://host/sync?sid=sid-aa&ssid=ssid-aa&other=1",
+            ),
+        )
+        assertTrue(scrubbed.contains("sid="))
+        assertTrue(scrubbed.contains("ssid="))
+        assertFalse(scrubbed.contains("sid-aa"))
+        assertFalse(scrubbed.contains("ssid-aa"))
+        assertTrue(scrubbed.contains(SentryScrubber.REDACTED_TOKEN))
+        assertTrue(scrubbed.contains("other=1"))
+        val fragment = checkNotNull(
+            SentryScrubber.scrubText("https://host/cb#ssid=frag-secret&other=1"),
+        )
+        assertTrue(fragment.contains("ssid="))
+        assertFalse(fragment.contains("frag-secret"))
+        assertTrue(fragment.contains("other=1"))
+    }
+
+    @Test
+    fun sidSsidJsonLosesValue() {
+        val doubleScrubbed = checkNotNull(
+            SentryScrubber.scrubText(
+                "{\"sid\": \"sid-aa\", \"ssid\": \"ssid-aa\", \"ok\": true}",
+            ),
+        )
+        assertFalse(doubleScrubbed.contains("sid-aa"))
+        assertFalse(doubleScrubbed.contains("ssid-aa"))
+        assertTrue(doubleScrubbed.contains("\"sid\""))
+        assertTrue(doubleScrubbed.contains("\"ssid\""))
+        assertTrue(doubleScrubbed.contains(SentryScrubber.REDACTED_TOKEN))
+        assertTrue(doubleScrubbed.contains("\"ok\""))
+        val singleScrubbed = checkNotNull(
+            SentryScrubber.scrubText("{'sid': 'sid-ab', 'ssid': 'ssid-ab', 'ok': true}"),
+        )
+        assertFalse(singleScrubbed.contains("sid-ab"))
+        assertFalse(singleScrubbed.contains("ssid-ab"))
+        assertTrue(singleScrubbed.contains(SentryScrubber.REDACTED_TOKEN))
+    }
+
+    @Test
+    fun sidSsidExtrasStayOpaque() {
+        val event = SentryEvent()
+        event.setExtra("sid", "sid-secret")
+        event.setExtra("ssid", "ssid-secret")
+        event.setExtra("clientSid", "client-sid-secret")
+        event.setExtra("retryCount", 3)
+        val crumb = Breadcrumb()
+        crumb.message = "sync"
+        crumb.setData("ssid", "ssid-secret")
+        crumb.setData("attempt", 1)
+        event.breadcrumbs = listOf(crumb)
+        SentryScrubber.scrubEvent(event)
+        assertEquals(SentryScrubber.REDACTED, event.getExtra("sid"))
+        assertEquals(SentryScrubber.REDACTED, event.getExtra("ssid"))
+        assertEquals(SentryScrubber.REDACTED, event.getExtra("clientSid"))
+        assertEquals(3, event.getExtra("retryCount"))
+        val scrubbedCrumb = event.breadcrumbs!!.single()
+        assertEquals(SentryScrubber.REDACTED, scrubbedCrumb.getData("ssid"))
+        assertEquals(1, scrubbedCrumb.getData("attempt"))
+    }
 }

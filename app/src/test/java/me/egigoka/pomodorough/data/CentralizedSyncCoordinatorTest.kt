@@ -303,6 +303,41 @@ class CentralizedSyncCoordinatorTest {
     }
 
     @Test
+    fun bootstrapPreparationMapsOversizedQueuesToInvalid() {
+        // A60: ordinary validation failures map to Invalid instead of
+        // throwing; the validators are pure, so cancellation cannot arise.
+        val commands = List(4_097) { index ->
+            finishCommand().copy(
+                id = "command-$index",
+                deviceSequence = (index + 1).toLong(),
+                timerId = "timer-$index",
+            )
+        }
+        val snapshot = generatedBreakSnapshot().copy(
+            queues = PendingSyncQueues(
+                commands = commands,
+                taskOperations = emptyList(),
+                durationOperations = emptyList(),
+                autoStartOperations = emptyList(),
+                selectedTaskOperations = emptyList(),
+            ),
+            dependencies = emptyMap(),
+        )
+
+        val transition = coordinator.prepareBootstrapResolution(
+            CentralizedBootstrapPreparationInput(
+                snapshot = snapshot,
+                bootstrap = response(acknowledgement = null),
+                strategy = BootstrapStrategy.Merge,
+                sampledLocal = snapshot.local,
+                projectionNow = Instant.parse("2026-07-20T00:06:00Z"),
+            ),
+        )
+
+        assertTrue(transition is CentralizedBootstrapPreparationTransition.Invalid)
+    }
+
+    @Test
     fun bootstrapPlanKeepsRemoteStateForDifferentOwner() {
         val plan = coordinator.bootstrapPlan(
             CentralizedBootstrapPlanningInput(

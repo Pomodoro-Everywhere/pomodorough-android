@@ -255,6 +255,8 @@ internal class CentralizedSyncCoordinator(
             eligibleCommands = eligibleCommands(reconciled.queues, reconciled.dependencies),
             queues = reconciled.queues,
         )
+        // A60: pure require()-only validators cannot throw CancellationException;
+        // ordinary failures map to Invalid, pinned by CentralizedSyncCoordinatorTest.
         val error = runCatching {
             TimerSyncValidation.validateResolutionEnvelope(request, snapshot.local.deviceId)
         }.exceptionOrNull()
@@ -277,6 +279,8 @@ internal class CentralizedSyncCoordinator(
             eligibleCommands = eligibleCommands(queues, dependencies),
             queues = queues,
         )
+        // A60: same purity note as prepareBootstrapResolution above;
+        // oversized queues map to Invalid, pinned by the same test.
         return runCatching {
             TimerSyncValidation.validateResolutionCollectionSizes(request)
         }.exceptionOrNull()
