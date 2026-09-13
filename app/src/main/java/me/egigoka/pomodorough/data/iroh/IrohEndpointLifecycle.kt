@@ -224,6 +224,12 @@ internal class IrohEndpointLifecycle(
     }
 
     private suspend fun stopLocked() {
+        // A65: propagate caller cancellation deterministically on every stop
+        // path, including the trivial stop (both jobs null) which otherwise
+        // has no suspension point after the mutex. Pre-lock cancel already
+        // propagates via mutex.withLock; the trailing check covers in-lock
+        // cancel that arrives mid-teardown.
+        currentCoroutineContext().ensureActive()
         owner.incrementAndGet()
         val accepting = acceptJob
         val syncing = syncJob
@@ -255,7 +261,13 @@ internal class IrohEndpointLifecycle(
             runCatching { closing.shutdown() }
             closing.close()
         }
+        // A65: unconditional propagation (see entry check above). The check
+        // after onEvent covers cancel that lands during the Stopped dispatch
+        // itself; teardown (close + Stopped) always runs first, then cancel
+        // propagates to the caller.
+        currentCoroutineContext().ensureActive()
         onEvent(IrohEndpointEvent.Stopped)
+        currentCoroutineContext().ensureActive()
     }
 }
 

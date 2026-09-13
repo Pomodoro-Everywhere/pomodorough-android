@@ -67,6 +67,48 @@ class IrohEndpointLifecycleStopTest {
             fixture.lifecycle.close()
         }
     }
+
+    @Test
+    fun trivialStopPropagatesCallerCancellation() = runTest {
+        // A65: trivial stop (never started, both jobs null) has no join to
+        // suspend on; the unconditional trailing ensureActive must still
+        // propagate in-lock caller cancellation instead of returning cleanly.
+        // The Stopped dispatch is gated in NonCancellable so cancel lands
+        // mid-teardown; teardown still runs, then cancel propagates.
+        val gate = CompletableDeferred<Unit>()
+        val events = mutableListOf<IrohEndpointEvent>()
+        val binding = StopFixture(StandardTestDispatcher(testScheduler))
+        val lifecycle = IrohEndpointLifecycle(
+            binding,
+            { event ->
+                events += event
+                if (event is IrohEndpointEvent.Stopped) {
+                    withContext(NonCancellable) { gate.await() }
+                }
+            },
+            StandardTestDispatcher(testScheduler),
+        )
+        try {
+            assertNull(lifecycle.session())
+            var failure: Throwable? = null
+            val stopping = launch {
+                failure = runCatching { lifecycle.stop() }.exceptionOrNull()
+            }
+            runCurrent()
+            assertFalse(stopping.isCompleted)
+            stopping.cancel()
+            runCurrent()
+            assertFalse(stopping.isCompleted)
+            gate.complete(Unit)
+            runCurrent()
+            assertTrue(stopping.isCompleted)
+            assertTrue(failure is CancellationException)
+            assertTrue(events.any { it is IrohEndpointEvent.Stopped })
+        } finally {
+            gate.complete(Unit)
+            lifecycle.close()
+        }
+    }
 }
 
 private class StopFixture(dispatcher: CoroutineDispatcher) : IrohEndpointBinding {

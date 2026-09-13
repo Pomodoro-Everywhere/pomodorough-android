@@ -759,7 +759,10 @@ class TimerRepository(
         )
         closeRevisionStream()
         if (!quarantineReplicationForReset()) return
+        // A61: auth.logout() is suspend (network); cancel must propagate
+        // instead of reading as a logout failure with a spurious notice.
         val remoteLogoutFailure = runCatching { auth.logout() }.exceptionOrNull()
+        if (remoteLogoutFailure is CancellationException) throw remoteLogoutFailure
         if (!clearCredentialsForReset()) return
         if (!clearReplicationForReset()) return
         commitLocalAccountReset(resetGeneration, remoteLogoutFailure)
@@ -774,22 +777,30 @@ class TimerRepository(
             )
 
     private suspend fun quarantineReplicationForReset(): Boolean {
+        // A62: quarantineAccount() suspends via mutex.withLock; cancel must
+        // propagate instead of reading as a reset failure with a notice.
         val failure = runCatching { replication?.quarantineAccount() }.exceptionOrNull()
+        if (failure is CancellationException) throw failure
         if (failure == null) return true
         publishNotice(R.string.local_account_reset_failed_corrupt_data_was_kept)
         return false
     }
 
     private suspend fun clearCredentialsForReset(): Boolean {
+        // A62-excluded: auth.clear() is non-suspend, so no cancel can arise here.
         if (runCatching(auth::clear).exceptionOrNull() == null) return true
         publishNotice(R.string.local_account_reset_failed_credentials_were_not_cleared)
         return false
     }
 
     private suspend fun clearReplicationForReset(): Boolean {
-        val failure = runCatching { replication?.clearAccountData() }.exceptionOrNull() ?: return true
+        // A62: clearAccountData() suspends via mutex.withLock; cancel must
+        // propagate instead of publishing a spurious failure notice.
+        val failure = runCatching { replication?.clearAccountData() }.exceptionOrNull()
+        if (failure is CancellationException) throw failure
+        val nonCancel = failure ?: return true
         actionMutex.withLock {
-            notice = failure.message
+            notice = nonCancel.message
                 ?: appContext.getString(R.string.local_account_reset_failed_corrupt_data_was_kept)
             publish()
         }
@@ -1217,6 +1228,9 @@ class TimerRepository(
         } ?: return
 
         val logoutError = runCatching { auth.logout() }.exceptionOrNull()
+        // A61: same suspend-logout guard as resetLocalAccountInternal above;
+        // cancel must propagate instead of surfacing a spurious notice.
+        if (logoutError is CancellationException) throw logoutError
         auth.clear()
         actionMutex.withLock {
             if (pendingAccountSwitch !== candidate) return@withLock
@@ -2287,6 +2301,9 @@ class TimerRepository(
                     R.string.previous_history_choice_still_needs_server_response,
                 ),
             )
+        } catch (error: CancellationException) {
+            // A63 guard-first (A60 pattern): pure callee, non-suspend caller.
+            throw error
         } catch (_: Exception) {
             // expected-silent: corrupted saved resolution surfaces as corrupted UI, not a crash.
             corruptedResolutionState()
@@ -3710,6 +3727,9 @@ class TimerRepository(
     )
 
     private fun restorePendingResolutionForSignedOut(message: String) {
+        // A63 (A60 pattern): toRequestStrict is pure and this caller is
+        // non-suspend, so cancel cannot arise today; the onFailure rethrow
+        // keeps the site consistent if either fact changes.
         historyResolution = pendingBootstrapResolution?.let { stored ->
             runCatching { stored.toRequestStrict() }.fold(
                 onSuccess = { request ->
@@ -3721,7 +3741,10 @@ class TimerRepository(
                         error = message,
                     )
                 },
-                onFailure = { corruptedResolutionState() },
+                onFailure = { error ->
+                    if (error is CancellationException) throw error
+                    corruptedResolutionState()
+                },
             )
         }
     }

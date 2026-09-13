@@ -668,4 +668,59 @@ class SentryScrubberAdversarialTest {
         assertEquals(SentryScrubber.REDACTED, scrubbedCrumb.getData("ssid"))
         assertEquals(1, scrubbedCrumb.getData("attempt"))
     }
+
+    @Test
+    fun compoundSidSsidQueryKeepsKeyButLosesValue() {
+        // A64: suffix-wildcard covers compound keys (clientSid, deviceSsid)
+        // in free text; mid-word lookalikes (reside, consider) must survive.
+        val scrubbed = checkNotNull(
+            SentryScrubber.scrubText(
+                "https://host/sync?clientSid=cs-aa&deviceSsid=ds-aa&other=1",
+            ),
+        )
+        assertTrue(scrubbed.contains("clientSid="))
+        assertTrue(scrubbed.contains("deviceSsid="))
+        assertFalse(scrubbed.contains("cs-aa"))
+        assertFalse(scrubbed.contains("ds-aa"))
+        assertTrue(scrubbed.contains(SentryScrubber.REDACTED_TOKEN))
+        assertTrue(scrubbed.contains("other=1"))
+        val lookalike = checkNotNull(
+            SentryScrubber.scrubText(
+                "https://host/sync?reside=keepme&consider=keepme&other=1",
+            ),
+        )
+        assertTrue(lookalike.contains("reside=keepme"))
+        assertTrue(lookalike.contains("consider=keepme"))
+        assertTrue(lookalike.contains("other=1"))
+    }
+
+    @Test
+    fun compoundSidSsidJsonLosesValue() {
+        // A64: same suffix-wildcard coverage for double- and single-quoted
+        // JSON-string forms; lookalike keys stay readable.
+        val doubleScrubbed = checkNotNull(
+            SentryScrubber.scrubText(
+                "{\"clientSsid\": \"cs-aa\", \"clientSid\": \"cs-ab\", \"ok\": true}",
+            ),
+        )
+        assertFalse(doubleScrubbed.contains("cs-aa"))
+        assertFalse(doubleScrubbed.contains("cs-ab"))
+        assertTrue(doubleScrubbed.contains("\"clientSsid\""))
+        assertTrue(doubleScrubbed.contains("\"clientSid\""))
+        assertTrue(doubleScrubbed.contains(SentryScrubber.REDACTED_TOKEN))
+        assertTrue(doubleScrubbed.contains("\"ok\""))
+        val singleScrubbed = checkNotNull(
+            SentryScrubber.scrubText(
+                "{'deviceSsid': 'ds-aa', 'deviceSid': 'ds-ab', 'ok': true}",
+            ),
+        )
+        assertFalse(singleScrubbed.contains("ds-aa"))
+        assertFalse(singleScrubbed.contains("ds-ab"))
+        assertTrue(singleScrubbed.contains(SentryScrubber.REDACTED_TOKEN))
+        val lookalike = checkNotNull(
+            SentryScrubber.scrubText("{\"reside\": \"keepme\", \"ok\": true}"),
+        )
+        assertTrue(lookalike.contains("keepme"))
+        assertTrue(lookalike.contains("\"ok\""))
+    }
 }
