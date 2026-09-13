@@ -1,6 +1,7 @@
 package me.egigoka.pomodorough.data
 
 import java.time.Instant
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
@@ -58,6 +59,10 @@ internal class CoreBootstrapDispatcher(
 
     private fun decodePlan(output: JsonElement): CoreBootstrapPlanOutput = try {
         strictJson.decodeFromJsonElement(CoreBootstrapPlanOutput.serializer(), output)
+    } catch (error: CancellationException) {
+        // A67 guard-first (A60 pattern): pure decode, non-suspend caller, so
+        // cancel cannot arise today; rethrow keeps the convention if either changes.
+        throw error
     } catch (error: Exception) {
         throw CoreProjectionException.InvalidOutput("Could not decode Shared Core bootstrap plan", error)
     }
@@ -162,6 +167,10 @@ internal class CoreReconciliationDispatcher(
         val output = dispatch(ReconciliationOperation, wireJson.encodeToString(input))
         val decoded = try {
             strictJson.decodeFromJsonElement(CoreReconciliationOutput.serializer(), output)
+        } catch (error: CancellationException) {
+            // A67 guard-first (A60 pattern): pure decode, non-suspend caller,
+            // so cancel cannot arise today; rethrow keeps the convention.
+            throw error
         } catch (error: Exception) {
             throw CoreProjectionException.InvalidOutput("Could not decode Shared Core reconciliation", error)
         }

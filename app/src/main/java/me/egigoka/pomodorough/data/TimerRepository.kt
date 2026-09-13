@@ -2533,6 +2533,8 @@ class TimerRepository(
             publish()
             return null
         }
+        // A68 (A60 pattern): pure JSON field extract, so cancel cannot arise
+        // today; the onFailure rethrow keeps the site consistent if either fact changes.
         val identity = runCatching {
             val output = value.jsonObject
             Triple(
@@ -2540,7 +2542,7 @@ class TimerRepository(
                 output["title"]?.jsonPrimitive?.contentOrNull,
                 output["utf8Bytes"]?.jsonPrimitive?.intOrNull,
             )
-        }.getOrNull()
+        }.onFailure { if (it is CancellationException) throw it }.getOrNull()
         val id = identity?.first
         val normalizedTitle = identity?.second
         val utf8Bytes = identity?.third

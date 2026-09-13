@@ -2,6 +2,7 @@ package me.egigoka.pomodorough.data
 
 import java.nio.charset.StandardCharsets
 import java.time.Instant
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -129,12 +130,20 @@ internal class CoreProjectionDispatcher(
     ): CoreProjectionResult {
         val input = try {
             projectionInput(base, pending, now)
+        } catch (error: CancellationException) {
+            // A69 guard-first (A60 pattern): pure serialize, non-suspend
+            // caller, so cancel cannot arise today; rethrow keeps convention.
+            throw error
         } catch (error: Exception) {
             throw CoreProjectionException.InvalidInput("Could not serialize Shared Core projection", error)
         }
         val output = dispatch(ProjectionOperation, wireJson.encodeToString(input))
         val result = try {
             strictJson.decodeFromJsonElement(CoreProjectionResult.serializer(), output)
+        } catch (error: CancellationException) {
+            // A69 guard-first (A60 pattern): pure decode, non-suspend caller,
+            // so cancel cannot arise today; rethrow keeps the convention.
+            throw error
         } catch (error: Exception) {
             throw CoreProjectionException.InvalidOutput("Could not decode Shared Core projection", error)
         }
