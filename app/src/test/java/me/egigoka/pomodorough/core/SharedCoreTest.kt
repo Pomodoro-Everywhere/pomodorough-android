@@ -28,7 +28,7 @@ class SharedCoreTest {
         assertEquals(
             buildJsonObject {
                 put("schemaVersion", JsonPrimitive(1))
-                put("coreVersion", JsonPrimitive("0.33.0"))
+                put("coreVersion", JsonPrimitive("0.34.0"))
             },
             core.dispatch("core.version", "{}"),
         )
