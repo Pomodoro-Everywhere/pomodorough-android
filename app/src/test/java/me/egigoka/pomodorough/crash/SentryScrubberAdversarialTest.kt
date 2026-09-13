@@ -672,7 +672,8 @@ class SentryScrubberAdversarialTest {
     @Test
     fun compoundSidSsidQueryKeepsKeyButLosesValue() {
         // A64: suffix-wildcard covers compound keys (clientSid, deviceSsid)
-        // in free text; mid-word lookalikes (reside, consider) must survive.
+        // in free text; mid-word lookalikes (reside, consider, aside,
+        // inside) must survive.
         val scrubbed = checkNotNull(
             SentryScrubber.scrubText(
                 "https://host/sync?clientSid=cs-aa&deviceSsid=ds-aa&other=1",
@@ -686,11 +687,13 @@ class SentryScrubberAdversarialTest {
         assertTrue(scrubbed.contains("other=1"))
         val lookalike = checkNotNull(
             SentryScrubber.scrubText(
-                "https://host/sync?reside=keepme&consider=keepme&other=1",
+                "https://host/sync?reside=keepme&consider=keepme&aside=keepme&inside=keepme&other=1",
             ),
         )
         assertTrue(lookalike.contains("reside=keepme"))
         assertTrue(lookalike.contains("consider=keepme"))
+        assertTrue(lookalike.contains("aside=keepme"))
+        assertTrue(lookalike.contains("inside=keepme"))
         assertTrue(lookalike.contains("other=1"))
     }
 
@@ -718,9 +721,14 @@ class SentryScrubberAdversarialTest {
         assertFalse(singleScrubbed.contains("ds-ab"))
         assertTrue(singleScrubbed.contains(SentryScrubber.REDACTED_TOKEN))
         val lookalike = checkNotNull(
-            SentryScrubber.scrubText("{\"reside\": \"keepme\", \"ok\": true}"),
+            SentryScrubber.scrubText("{\"reside\": \"keepme\", \"aside\": \"keepme\", \"ok\": true}"),
         )
         assertTrue(lookalike.contains("keepme"))
         assertTrue(lookalike.contains("\"ok\""))
+        val insideLookalike = checkNotNull(
+            SentryScrubber.scrubText("{\"inside\": \"keepme\", \"consider\": \"keepme\", \"ok\": true}"),
+        )
+        assertTrue(insideLookalike.contains("keepme"))
+        assertTrue(insideLookalike.contains("\"ok\""))
     }
 }
