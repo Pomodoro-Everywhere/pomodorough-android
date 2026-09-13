@@ -52,10 +52,13 @@ class CoreDispatcherCancellationTest {
 
     @Test
     fun taskIdentityExtractRethrowsCancellation() {
-        // A68: pure JSON field extract onFailure rethrow.
+        // A68: pure JSON field extract onFailure rethrow. Window 60 covers
+        // the whole 46-line function so growth above the guard cannot push
+        // it out of view; the function holds no other runCatching/guard.
         val window = functionWindow(
             "me/egigoka/pomodorough/data/TimerRepository.kt",
             "private fun taskFromSharedCore(",
+            60,
         )
         val catching = window.indexOfFirst { it.contains("runCatching {") }
         assertTrue(catching >= 0)
