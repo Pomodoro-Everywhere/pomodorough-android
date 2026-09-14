@@ -88,6 +88,25 @@ interface CentralizedSyncDao : TimerWorkspaceDao, BootstrapDao {
         updateState(state)
     }
 
+    // Atomic never-sent retirement. The five clear* UPDATEs commit or roll
+    // back together, so a crash cannot leave half-retired proof. Retry is
+    // idempotent: clearing an already-cleared id is a no-op, and
+    // CoreNeverSentProof.retiredFor uses filterNot with the same ids.
+    @Transaction
+    suspend fun retireNeverSent(
+        commandIds: List<String>,
+        taskIds: List<String>,
+        durationIds: List<String>,
+        autoStartIds: List<String>,
+        selectedIds: List<String>,
+    ) {
+        if (commandIds.isNotEmpty()) clearCommandNeverSent(commandIds)
+        if (taskIds.isNotEmpty()) clearTaskNeverSent(taskIds)
+        if (durationIds.isNotEmpty()) clearDurationNeverSent(durationIds)
+        if (autoStartIds.isNotEmpty()) clearAutoStartNeverSent(autoStartIds)
+        if (selectedIds.isNotEmpty()) clearSelectedTaskNeverSent(selectedIds)
+    }
+
     @Transaction
     suspend fun clearAccount(state: LocalStateEntity) {
         deleteAllCommands()

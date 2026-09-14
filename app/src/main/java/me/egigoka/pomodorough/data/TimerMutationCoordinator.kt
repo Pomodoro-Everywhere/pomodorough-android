@@ -3,6 +3,7 @@ package me.egigoka.pomodorough.data
 import java.time.Instant
 import java.time.ZoneId
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import me.egigoka.pomodorough.data.local.LocalStateEntity
@@ -35,6 +36,14 @@ internal data class TimerCommandMutationInput(
     val state: TimerMutationState,
     val type: String,
     val startingPhase: String?,
+    val reservation: TimerMutationReservation,
+    val physicalNowMs: Long,
+)
+
+internal data class TimerRetargetMutationInput(
+    val state: TimerMutationState,
+    val timerId: String,
+    val taskId: String?,
     val reservation: TimerMutationReservation,
     val physicalNowMs: Long,
 )
@@ -186,6 +195,56 @@ internal class TimerMutationCoordinator(
                 projected,
             ),
         )
+    }
+
+    fun retarget(
+        input: TimerRetargetMutationInput,
+    ): TimerMutationTransition<TimerCommandMutationPlan> {
+        val state = input.state
+        val current = state.projection.timer ?: return TimerMutationTransition.Ignored
+        if (current.id != input.timerId) return TimerMutationTransition.Ignored
+        if (current.status !in ActiveStatuses) return TimerMutationTransition.Ignored
+        if (current.phase != TimerPhase.Focus) return TimerMutationTransition.Ignored
+        if (input.taskId == current.taskId) return TimerMutationTransition.Ignored
+        val command = buildRetargetCommand(input, current) ?: return TimerMutationTransition.Ignored
+        val dependency = dependencyForTimer(state, command.timerId)
+        val dependencies = dependency?.let { mapOf(command.id to it) }.orEmpty()
+        val queues = state.queues.copy(commands = state.queues.commands + command)
+        val projected = project(state, queues, Instant.parse(command.occurredAt)).requireApplied(command)
+        val stamp = input.reservation.stamps.single()
+        val nextLocal = state.local.copy(
+            deviceSequence = command.deviceSequence,
+            hlcWallMs = stamp.wallMs,
+            hlcCounter = stamp.counter,
+            lastUuidV7 = input.reservation.lastUuidV7,
+        )
+        return TimerMutationTransition.Planned(
+            TimerCommandMutationPlan(listOf(command), dependencies, nextLocal, state.settings, projected),
+        )
+    }
+
+    // Single planner: TimerRetargetPolicy owns retarget construction and
+    // validation. This adapter only supplies coordinator-derived elapsed time
+    // and maps invalid input to Ignored.
+    private fun buildRetargetCommand(
+        input: TimerRetargetMutationInput,
+        current: CanonicalTimer,
+    ): TimerCommand? = try {
+        TimerRetargetPolicy.plan(
+            timerId = input.timerId,
+            taskId = input.taskId,
+            current = current,
+            reservation = input.reservation,
+            plannedDurationMs = current.plannedDurationMs,
+            physicalNowMs = input.physicalNowMs,
+            elapsedMs = TimerPresentation.elapsedAt(input.state.projection.timer, input.physicalNowMs),
+        )
+    } catch (error: CancellationException) {
+        throw error
+    } catch (_: Exception) {
+        // expected-silent: invalid retarget input maps to Ignored (no mutation),
+        // not a crash; the caller treats null as no-op.
+        null
     }
 
     fun cancel(

@@ -71,6 +71,7 @@ data class PendingCommandEntity(
     val taskId: String? = null,
     val generatedByFinishCommandId: String? = null,
     val physicalOccurredAt: String? = null,
+    val neverSent: Boolean = false,
 ) {
     fun toModel() = TimerCommand(
         id = id,
@@ -91,6 +92,7 @@ data class PendingCommandEntity(
         fun from(
             command: TimerCommand,
             generatedByFinishCommandId: String? = null,
+            neverSent: Boolean = true,
         ) = PendingCommandEntity(
             id = command.id,
             deviceSequence = command.deviceSequence,
@@ -105,6 +107,7 @@ data class PendingCommandEntity(
             taskId = command.taskId,
             generatedByFinishCommandId = generatedByFinishCommandId,
             physicalOccurredAt = command.physicalOccurredAt,
+            neverSent = neverSent,
         )
     }
 }
@@ -118,6 +121,7 @@ data class PendingTaskOperationEntity(
     val occurredAt: String,
     val hlcWallMs: Long,
     val hlcCounter: Long,
+    val neverSent: Boolean = false,
 ) {
     fun toModel() = TaskOperation(
         id = id,
@@ -130,7 +134,7 @@ data class PendingTaskOperationEntity(
     )
 
     companion object {
-        fun from(operation: TaskOperation) = PendingTaskOperationEntity(
+        fun from(operation: TaskOperation, neverSent: Boolean = true) = PendingTaskOperationEntity(
             id = operation.id,
             taskId = operation.taskId,
             type = operation.type,
@@ -138,6 +142,7 @@ data class PendingTaskOperationEntity(
             occurredAt = operation.occurredAt,
             hlcWallMs = operation.hlcWallMs,
             hlcCounter = operation.hlcCounter,
+            neverSent = neverSent,
         )
     }
 }
@@ -153,6 +158,7 @@ data class PendingDurationOperationEntity(
     val occurredAt: String,
     val hlcWallMs: Long,
     val hlcCounter: Long,
+    val neverSent: Boolean = false,
 ) {
     fun toModel() = DurationOperation(
         id = id,
@@ -164,13 +170,14 @@ data class PendingDurationOperationEntity(
     )
 
     companion object {
-        fun from(operation: DurationOperation) = PendingDurationOperationEntity(
+        fun from(operation: DurationOperation, neverSent: Boolean = true) = PendingDurationOperationEntity(
             phase = operation.phase,
             id = operation.id,
             durationMs = operation.durationMs,
             occurredAt = operation.occurredAt,
             hlcWallMs = operation.hlcWallMs,
             hlcCounter = operation.hlcCounter,
+            neverSent = neverSent,
         )
     }
 }
@@ -183,6 +190,7 @@ data class PendingAutoStartOperationEntity(
     val occurredAt: String,
     val hlcWallMs: Long,
     val hlcCounter: Long,
+    val neverSent: Boolean = false,
 ) {
     fun toModel() = AutoStartOperation(
         id = id,
@@ -194,13 +202,14 @@ data class PendingAutoStartOperationEntity(
     )
 
     companion object {
-        fun from(operation: AutoStartOperation) = PendingAutoStartOperationEntity(
+        fun from(operation: AutoStartOperation, neverSent: Boolean = true) = PendingAutoStartOperationEntity(
             id = operation.id,
             deviceId = operation.deviceId,
             enabled = operation.enabled,
             occurredAt = operation.occurredAt,
             hlcWallMs = operation.hlcWallMs,
             hlcCounter = operation.hlcCounter,
+            neverSent = neverSent,
         )
     }
 }
@@ -212,16 +221,18 @@ data class PendingSelectedTaskOperationEntity(
     val occurredAt: String,
     val hlcWallMs: Long,
     val hlcCounter: Long,
+    val neverSent: Boolean = false,
 ) {
     fun toModel() = SelectedTaskOperation(id, taskId, occurredAt, hlcWallMs, hlcCounter)
 
     companion object {
-        fun from(operation: SelectedTaskOperation) = PendingSelectedTaskOperationEntity(
+        fun from(operation: SelectedTaskOperation, neverSent: Boolean = true) = PendingSelectedTaskOperationEntity(
             operation.id,
             operation.taskId,
             operation.occurredAt,
             operation.hlcWallMs,
             operation.hlcCounter,
+            neverSent,
         )
     }
 }

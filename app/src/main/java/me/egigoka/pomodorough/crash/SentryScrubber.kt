@@ -11,6 +11,10 @@ import io.sentry.protocol.OperatingSystem
 import io.sentry.protocol.SentryStackFrame
 import io.sentry.protocol.SentryStackTrace
 import io.sentry.protocol.User
+import java.io.ByteArrayOutputStream
+import java.nio.ByteBuffer
+import java.nio.charset.CharacterCodingException
+import java.nio.charset.CodingErrorAction
 
 object SentryScrubber {
     // Residual coverage (A23): stacktrace frames/registers, User name/data/geo,
@@ -102,6 +106,7 @@ object SentryScrubber {
     private val phoneCandidate = Regex("\\+?[0-9][0-9\\s\\-.()]{7,}[0-9]")
     private val dateLike = Regex("^\\d{4}-\\d{2}-\\d{2}$")
     private val longId = Regex("(?<!\\[)\\b[A-Za-z0-9_-]{20,}\\b(?!\\])")
+    private val requestParameter = Regex("(^[?#]?|[&#;])([^&#;]*)")
 
     fun scrubText(value: String?): String? {
         if (value == null) return null
@@ -398,16 +403,14 @@ object SentryScrubber {
 
     private fun scrubEventRequest(event: SentryEvent) {
         val request = event.request ?: return
-        request.url = scrubText(request.url)
-        request.queryString = scrubText(request.queryString)
-        request.cookies = scrubText(request.cookies)
-        request.fragment = request.fragment?.let { scrubText("?$it")?.removePrefix("?") }
+        request.url = scrubRequestUrl(request.url)
+        request.queryString = scrubRequestParameters(request.queryString)
+        request.cookies = null
+        request.fragment = scrubRequestParameters(request.fragment)
         request.data = scrubAny("data", request.data)
-        request.headers?.toMap()?.forEach { (key, value) ->
-            request.headers = request.headers?.toMutableMap()?.also {
-                it[key] = scrubDataValue(key, value) ?: REDACTED
-            }
-        }
+        request.headers = request.headers?.filterKeys {
+            !it.equals("Cookie", ignoreCase = true) && !it.equals("Set-Cookie", ignoreCase = true)
+        }?.mapValues { (key, value) -> scrubDataValue(key, value) ?: REDACTED }
         request.envs?.toMap()?.forEach { (key, value) ->
             request.envs = request.envs?.toMutableMap()?.also {
                 it[key] = scrubDataValue(key, value) ?: REDACTED
@@ -417,6 +420,108 @@ object SentryScrubber {
             request.others = request.others?.toMutableMap()?.also {
                 it[key] = scrubDataValue(key, value) ?: REDACTED
             }
+        }
+    }
+
+    private fun scrubRequestUrl(value: String?): String? {
+        if (value == null) return null
+        val queryStart = value.indexOfAny(charArrayOf('?', '#'))
+        if (queryStart < 0) return scrubText(value)
+        return scrubText(value.substring(0, queryStart)) +
+            scrubRequestParameters(value.substring(queryStart))
+    }
+
+    private fun scrubRequestParameters(value: String?): String? = value?.let {
+        requestParameter.replace(it) { parameter ->
+            parameter.groupValues[1] + scrubRequestParameter(parameter.groupValues[2])
+        }
+    }
+
+    private fun scrubRequestParameter(parameter: String): String {
+        return try {
+            val rawKey = parameter.substringBefore('=')
+            val decodedKey = fullyDecodeRequestComponent(rawKey)
+            if (isAmbiguousRequestKey(decodedKey)) return REDACTED
+            if (isSensitiveKey(decodedKey) || decodedKey.equals("code", ignoreCase = true)) {
+                if (rawKey.contains("%25", ignoreCase = true)) return REDACTED
+                return "$rawKey=$REDACTED_TOKEN"
+            }
+            val decoded = fullyDecodeRequestComponent(parameter)
+            val scrubbed = scrubText(decoded) ?: REDACTED
+            if (scrubbed == decoded) parameter else scrubbed
+        } catch (_: IllegalArgumentException) {
+            // expected-silent: malformed query input is redacted, never reported
+            // from inside the crash scrubber, which could leak or recurse.
+            REDACTED
+        }
+    }
+
+    // F6: a decoded key holding `=&#;?`, space, or `%` hides structure
+    // (`token%3Dsecret` decodes to `token=secret`). Returning the raw key
+    // beside redaction would preserve the smuggled assignment, so the whole
+    // parameter is redacted instead. Single-encoding keeps F4/F6 key
+    // preservation (`%74oken`); `%25` proves repeated encoding, also redacted.
+    private fun isAmbiguousRequestKey(decodedKey: String): Boolean {
+        return decodedKey.any { it == '=' || it == '&' || it == '#' || it == ';' || it == '?' } ||
+            decodedKey.contains(' ') ||
+            decodedKey.contains('%')
+    }
+
+    private fun fullyDecodeRequestComponent(value: String): String {
+        var current = value
+        repeat(5) {
+            val next = strictDecodeRequestComponent(current)
+            if (next == current) return current
+            current = next
+        }
+        throw IllegalArgumentException("repeated percent encoding")
+    }
+
+    // F6: URLDecoder replaces malformed UTF-8 with U+FFFD instead of throwing,
+    // so `%FF` survived when decoded text matched scrubbed text. Strict bytes
+    // plus REPORT fail-closed: malformed sequences throw and the caller
+    // redacts the complete affected parameter.
+    private fun strictDecodeRequestComponent(value: String): String {
+        val out = StringBuilder(value.length)
+        val pending = ByteArrayOutputStream()
+        var i = 0
+        while (i < value.length) {
+            when (val c = value[i]) {
+                '+' -> {
+                    appendPendingRequestBytes(pending, out)
+                    out.append(' ')
+                    i++
+                }
+                '%' -> {
+                    if (i + 2 >= value.length) throw IllegalArgumentException("incomplete percent")
+                    val hi = Character.digit(value[i + 1], 16)
+                    val lo = Character.digit(value[i + 2], 16)
+                    if (hi < 0 || lo < 0) throw IllegalArgumentException("non-hex percent")
+                    pending.write((hi shl 4) + lo)
+                    i += 3
+                }
+                else -> {
+                    appendPendingRequestBytes(pending, out)
+                    out.append(c)
+                    i++
+                }
+            }
+        }
+        appendPendingRequestBytes(pending, out)
+        return out.toString()
+    }
+
+    private fun appendPendingRequestBytes(pending: ByteArrayOutputStream, out: StringBuilder) {
+        if (pending.size() == 0) return
+        val bytes = pending.toByteArray()
+        pending.reset()
+        try {
+            val decoder = Charsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+            out.append(decoder.decode(ByteBuffer.wrap(bytes)).toString())
+        } catch (error: CharacterCodingException) {
+            throw IllegalArgumentException("malformed UTF-8", error)
         }
     }
 

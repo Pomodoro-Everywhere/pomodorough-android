@@ -101,6 +101,11 @@ internal class RecordingCentralizedSyncDao : CentralizedSyncDao {
     override suspend fun upsertBootstrapResolution(resolution: PendingBootstrapResolutionEntity) =
         record("upsertBootstrapResolution", resolution)
     override suspend fun deleteBootstrapResolution() = record("deleteBootstrapResolution")
+    override suspend fun clearCommandNeverSent(ids: List<String>) = record("clearCommandNeverSent", ids)
+    override suspend fun clearTaskNeverSent(ids: List<String>) = record("clearTaskNeverSent", ids)
+    override suspend fun clearDurationNeverSent(ids: List<String>) = record("clearDurationNeverSent", ids)
+    override suspend fun clearAutoStartNeverSent(ids: List<String>) = record("clearAutoStartNeverSent", ids)
+    override suspend fun clearSelectedTaskNeverSent(ids: List<String>) = record("clearSelectedTaskNeverSent", ids)
 }
 
 internal object DaoBoundaryFixtures {

@@ -73,14 +73,17 @@ object IrohMessageCodec {
                 "protocolVersion", "roomId", "requestId", "kind", "deviceId",
                 "endpointTicket", "platform",
             ),
-            setOf("displayName"),
+            setOf("displayName", "capabilities"),
         )
         requireOmittedNulls(value, setOf("displayName"))
         val hello = IrohJson.strict.decodeFromJsonElement<IrohHello>(value)
         require(hello.kind == "hello" && IrohProtocolV1.isIdentifier(hello.deviceId) &&
             hello.endpointTicket.encodeToByteArray().size <= IrohProtocolV1.MaxEndpointTicketBytes &&
             hello.platform in setOf("ios", "macos", "android", "linux", "windows") &&
-            IrohProtocolV1.isDisplayName(hello.displayName)
+            IrohProtocolV1.isDisplayName(hello.displayName) &&
+            hello.capabilities.size <= MaxHelloCapabilities &&
+            hello.capabilities.toSet().size == hello.capabilities.size &&
+            hello.capabilities.all { it in SupportedHelloCapabilities }
         ) { "Iroh hello is invalid" }
         return IrohRpcMessage.Hello(hello)
     }
@@ -185,4 +188,6 @@ object IrohMessageCodec {
         "bad_frame", "unauthorized", "wrong_room", "unsupported_version", "invalid_request",
         "not_found", "immutable_conflict", "limit", "internal",
     )
+    private const val MaxHelloCapabilities = 8
+    private val SupportedHelloCapabilities = setOf(IrohRetargetCapability.RetargetV1)
 }

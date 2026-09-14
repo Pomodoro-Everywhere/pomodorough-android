@@ -20,7 +20,7 @@ import androidx.room.RoomDatabase
         IrohOperationEntity::class,
         IrohConflictEntity::class,
     ],
-    version = 13,
+    version = 14,
     exportSchema = true,
 )
 abstract class PomodoroughDatabase : RoomDatabase() {
@@ -46,6 +46,7 @@ abstract class PomodoroughDatabase : RoomDatabase() {
                 Migration10To11,
                 Migration11To12,
                 Migration12To13,
+                Migration13To14,
             ).build()
 
         val Migration1To2 = TimerMigrations.Migration1To2
@@ -60,5 +61,6 @@ abstract class PomodoroughDatabase : RoomDatabase() {
         val Migration10To11 = IrohMigration.Migration10To11
         val Migration11To12 = TimerMigrations.Migration11To12
         val Migration12To13 = TimerMigrations.Migration12To13
+        val Migration13To14 = TimerMigrations.Migration13To14
     }
 }

@@ -3,6 +3,7 @@ package me.egigoka.pomodorough.data.storage
 import kotlinx.serialization.json.Json
 import me.egigoka.pomodorough.data.AutoStartOperation
 import me.egigoka.pomodorough.data.CanonicalTimer
+import me.egigoka.pomodorough.data.CoreNeverSentProof
 import me.egigoka.pomodorough.data.DurationOperation
 import me.egigoka.pomodorough.data.FocusTask
 import me.egigoka.pomodorough.data.HistoryItem
@@ -32,6 +33,7 @@ import me.egigoka.pomodorough.data.local.loadTaskOperationsBounded
 internal data class StoredTimerWorkspace(
     val local: LocalStateEntity,
     val pending: PendingSyncQueues,
+    val neverSent: CoreNeverSentProof,
     val commandDependencies: Map<String, String>,
     val bootstrapResolution: PendingBootstrapResolutionEntity?,
     val settings: TimerSettings,
@@ -58,6 +60,7 @@ internal data class FullSyncStorageUpdate(
     val retainedCommandDependencies: Map<String, String>,
     val discardedCommands: List<TimerCommand>,
     val discardedCommandDependencies: Map<String, String>,
+    val retainedNeverSent: CoreNeverSentProof = CoreNeverSentProof(),
 )
 
 internal data class BootstrapResolutionStorageUpdate(
@@ -68,6 +71,7 @@ internal data class BootstrapResolutionStorageUpdate(
     val retainedAutoStartOperations: List<AutoStartOperation>,
     val clearSelectedTaskOperations: Boolean,
     val retainedSelectedTaskOperations: List<SelectedTaskOperation>,
+    val retainedNeverSent: CoreNeverSentProof = CoreNeverSentProof(),
 )
 
 internal class TimerStore(
@@ -83,15 +87,23 @@ internal class TimerStore(
     suspend fun loadWorkspace(): StoredTimerWorkspace {
         val local = checkNotNull(dao.localState()) { "Local workspace is missing" }
         val commandEntities = dao.loadCommandsBounded()
+        val taskEntities = dao.loadTaskOperationsBounded()
+        val durationEntities = dao.loadDurationOperationsBounded()
+        val autoStartEntities = dao.loadAutoStartOperationsBounded()
+        val selectedEntities = dao.loadSelectedTaskOperationsBounded()
         val pending = PendingSyncQueues(
             commands = commandEntities.map(PendingCommandEntity::toModel),
-            taskOperations = dao.loadTaskOperationsBounded().map(PendingTaskOperationEntity::toModel),
-            durationOperations = dao.loadDurationOperationsBounded()
-                .map(PendingDurationOperationEntity::toModel),
-            autoStartOperations = dao.loadAutoStartOperationsBounded()
-                .map(PendingAutoStartOperationEntity::toModel),
-            selectedTaskOperations = dao.loadSelectedTaskOperationsBounded()
-                .map(PendingSelectedTaskOperationEntity::toModel),
+            taskOperations = taskEntities.map(PendingTaskOperationEntity::toModel),
+            durationOperations = durationEntities.map(PendingDurationOperationEntity::toModel),
+            autoStartOperations = autoStartEntities.map(PendingAutoStartOperationEntity::toModel),
+            selectedTaskOperations = selectedEntities.map(PendingSelectedTaskOperationEntity::toModel),
+        )
+        val neverSent = CoreNeverSentProof(
+            commands = commandEntities.filter { it.neverSent }.map { it.id },
+            taskOperations = taskEntities.filter { it.neverSent }.map { it.id },
+            durationOperations = durationEntities.filter { it.neverSent }.map { it.id },
+            autoStartOperations = autoStartEntities.filter { it.neverSent }.map { it.id },
+            selectedTaskOperations = selectedEntities.filter { it.neverSent }.map { it.id },
         )
         val bootstrapResolution = dao.pendingBootstrapResolution()
         val settings: TimerSettings = strictJson.decodeFromString(local.settingsJson)
@@ -105,6 +117,7 @@ internal class TimerStore(
         return StoredTimerWorkspace(
             local = local,
             pending = pending,
+            neverSent = neverSent,
             commandDependencies = commandDependencies(commandEntities),
             bootstrapResolution = bootstrapResolution,
             settings = settings,
@@ -204,39 +217,61 @@ internal class TimerStore(
     }
 
     suspend fun applyFullSync(update: FullSyncStorageUpdate) {
+        val proof = update.retainedNeverSent
         dao.applyFullSync(
-            acknowledgedCommands = update.acknowledged.commands.map(PendingCommandEntity::from),
+            acknowledgedCommands = update.acknowledged.commands.map { PendingCommandEntity.from(it, neverSent = false) },
             acknowledgedTaskOperations = update.acknowledged.taskOperations
-                .map(PendingTaskOperationEntity::from),
+                .map { PendingTaskOperationEntity.from(it, neverSent = false) },
             acknowledgedDurationOperationIds = update.acknowledgedDurationOperationIds,
             state = update.local,
             acknowledgedAutoStartOperations = update.acknowledged.autoStartOperations
-                .map(PendingAutoStartOperationEntity::from),
-            updatedCommands = update.retained.commandEntities(update.retainedCommandDependencies),
-            updatedTaskOperations = update.retained.taskEntities(),
-            updatedDurationOperations = update.retained.durationEntities(),
-            updatedAutoStartOperations = update.retained.autoStartEntities(),
+                .map { PendingAutoStartOperationEntity.from(it, neverSent = false) },
+            updatedCommands = update.retained.commands.map { command ->
+                PendingCommandEntity.from(command, update.retainedCommandDependencies[command.id], command.id in proof.commands)
+            },
+            updatedTaskOperations = update.retained.taskOperations.map {
+                PendingTaskOperationEntity.from(it, it.id in proof.taskOperations)
+            },
+            updatedDurationOperations = update.retained.durationOperations.map {
+                PendingDurationOperationEntity.from(it, it.id in proof.durationOperations)
+            },
+            updatedAutoStartOperations = update.retained.autoStartOperations.map {
+                PendingAutoStartOperationEntity.from(it, it.id in proof.autoStartOperations)
+            },
             discardedCommands = update.discardedCommands.map { command ->
-                PendingCommandEntity.from(command, update.discardedCommandDependencies[command.id])
+                PendingCommandEntity.from(command, update.discardedCommandDependencies[command.id], neverSent = false)
             },
             acknowledgedSelectedTaskOperations = update.acknowledged.selectedTaskOperations
-                .map(PendingSelectedTaskOperationEntity::from),
-            updatedSelectedTaskOperations = update.retained.selectedTaskEntities(),
+                .map { PendingSelectedTaskOperationEntity.from(it, neverSent = false) },
+            updatedSelectedTaskOperations = update.retained.selectedTaskOperations.map {
+                PendingSelectedTaskOperationEntity.from(it, it.id in proof.selectedTaskOperations)
+            },
+        )
+    }
+
+    suspend fun retireNeverSent(request: SyncRequest) {
+        dao.retireNeverSent(
+            request.commands.map { it.id },
+            request.taskOperations.map { it.id },
+            request.durationOperations.map { it.id },
+            request.autoStartOperations.map { it.id },
+            request.selectedTaskOperations.map { it.id },
         )
     }
 
     suspend fun applyBootstrapResolution(update: BootstrapResolutionStorageUpdate) {
+        val proof = update.retainedNeverSent
         dao.applyBootstrapResolution(
             update.local,
             clearAutoStartOperations = update.clearAutoStartOperations,
             retainedCommands = update.retainedCommands.map { command ->
-                PendingCommandEntity.from(command, update.retainedCommandDependencies[command.id])
+                PendingCommandEntity.from(command, update.retainedCommandDependencies[command.id], command.id in proof.commands)
             },
             retainedAutoStartOperations = update.retainedAutoStartOperations
-                .map(PendingAutoStartOperationEntity::from),
+                .map { PendingAutoStartOperationEntity.from(it, it.id in proof.autoStartOperations) },
             clearSelectedTaskOperations = update.clearSelectedTaskOperations,
             retainedSelectedTaskOperations = update.retainedSelectedTaskOperations
-                .map(PendingSelectedTaskOperationEntity::from),
+                .map { PendingSelectedTaskOperationEntity.from(it, it.id in proof.selectedTaskOperations) },
         )
     }
 
@@ -249,18 +284,18 @@ internal class TimerStore(
     private fun PendingSyncQueues.commandEntities(
         dependencies: Map<String, String>,
     ): List<PendingCommandEntity> = commands.map { command ->
-        PendingCommandEntity.from(command, dependencies[command.id])
+        PendingCommandEntity.from(command, dependencies[command.id], neverSent = false)
     }
 
     private fun PendingSyncQueues.taskEntities() =
-        taskOperations.map(PendingTaskOperationEntity::from)
+        taskOperations.map { PendingTaskOperationEntity.from(it, neverSent = false) }
 
     private fun PendingSyncQueues.durationEntities() =
-        durationOperations.map(PendingDurationOperationEntity::from)
+        durationOperations.map { PendingDurationOperationEntity.from(it, neverSent = false) }
 
     private fun PendingSyncQueues.autoStartEntities() =
-        autoStartOperations.map(PendingAutoStartOperationEntity::from)
+        autoStartOperations.map { PendingAutoStartOperationEntity.from(it, neverSent = false) }
 
     private fun PendingSyncQueues.selectedTaskEntities() =
-        selectedTaskOperations.map(PendingSelectedTaskOperationEntity::from)
+        selectedTaskOperations.map { PendingSelectedTaskOperationEntity.from(it, neverSent = false) }
 }

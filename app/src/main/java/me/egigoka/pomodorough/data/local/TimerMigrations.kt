@@ -244,4 +244,14 @@ internal object TimerMigrations {
             db.execSQL("ALTER TABLE local_state ADD COLUMN accountDeletionState TEXT")
         }
     }
+
+    val Migration13To14 = object : Migration(13, 14) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE pending_commands ADD COLUMN neverSent INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE pending_task_operations ADD COLUMN neverSent INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE pending_duration_operations ADD COLUMN neverSent INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE pending_auto_start_operations ADD COLUMN neverSent INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE pending_selected_task_operations ADD COLUMN neverSent INTEGER NOT NULL DEFAULT 0")
+        }
+    }
 }

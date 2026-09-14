@@ -142,6 +142,21 @@ interface TimerWorkspaceDao {
     @Delete
     suspend fun deleteSelectedTaskOperations(operations: List<PendingSelectedTaskOperationEntity>)
 
+    @Query("UPDATE pending_commands SET neverSent = 0 WHERE id IN (:ids)")
+    suspend fun clearCommandNeverSent(ids: List<String>)
+
+    @Query("UPDATE pending_task_operations SET neverSent = 0 WHERE id IN (:ids)")
+    suspend fun clearTaskNeverSent(ids: List<String>)
+
+    @Query("UPDATE pending_duration_operations SET neverSent = 0 WHERE id IN (:ids)")
+    suspend fun clearDurationNeverSent(ids: List<String>)
+
+    @Query("UPDATE pending_auto_start_operations SET neverSent = 0 WHERE id IN (:ids)")
+    suspend fun clearAutoStartNeverSent(ids: List<String>)
+
+    @Query("UPDATE pending_selected_task_operations SET neverSent = 0 WHERE id IN (:ids)")
+    suspend fun clearSelectedTaskNeverSent(ids: List<String>)
+
     @Transaction
     suspend fun persistCommand(command: PendingCommandEntity, state: LocalStateEntity) {
         insertCommand(command)

@@ -63,8 +63,10 @@ class CentralizedSyncCoordinatorTest {
         assertEquals(listOf(promoted), result.generatedCommands.released)
         assertTrue(result.generatedCommands.discarded.isEmpty())
         assertEquals(TimerPhase.LongBreak, result.projected.settings.selectedPhase)
-        assertEquals(GeneratedTimerId, result.projected.projection.canonicalTimer?.id)
-        assertEquals(GeneratedTimerId, result.local.ownedTimerId)
+        // V2 immutable: the retained break (00:05) predates the canonical head
+        // (00:06) so it stays pending for exact retry without optimistic projection.
+        assertTrue(result.projected.projection.canonicalTimer == null)
+        assertEquals(null, result.local.ownedTimerId)
         assertEquals(ServerWallMs, result.local.hlcWallMs)
         assertEquals(7L, result.local.revision)
         assertEquals(CentralizedConflictTransition.Keep, result.conflict)
@@ -381,6 +383,7 @@ class CentralizedSyncCoordinatorTest {
                 autoStartOperations = emptyList(),
                 selectedTaskOperations = emptyList(),
             ),
+            neverSent = CoreNeverSentProof(commands = listOf(GeneratedStartId)),
             dependencies = mapOf(GeneratedStartId to FinishId),
             canonicalTimer = source,
             canonicalHistory = emptyList(),

@@ -143,6 +143,10 @@ internal object TimerSyncValidation {
         }
         require(command.type in commandTypes) { "Saved timer command type is invalid" }
         require(command.phase in TimerPhase.all) { "Saved timer command phase is invalid" }
+        if (command.type == CommandType.Retarget) {
+            validateRetargetCommand(command)
+            return
+        }
         require(command.plannedDurationMs in DurationLimits.MinMs..MaxTimerDurationMs) {
             "Saved timer command duration is invalid"
         }
@@ -159,6 +163,23 @@ internal object TimerSyncValidation {
         require(command.taskId == null || isUuid(command.taskId) &&
             command.type == CommandType.Start && command.phase == TimerPhase.Focus
         ) { "Saved timer command task is invalid" }
+    }
+
+    internal fun validateRetargetCommand(command: TimerCommand) {
+        require(command.phase == TimerPhase.Focus) { "Saved retarget phase is invalid" }
+        require(command.plannedDurationMs in DurationLimits.MinMs..MaxTimerDurationMs) {
+            "Saved retarget duration is invalid"
+        }
+        requireOperationClock(command.occurredAt, command.hlcWallMs, command.hlcCounter, false)
+        require(command.taskId == null || command.taskId.isNotBlank()) {
+            "Saved retarget task is invalid"
+        }
+        require(command.taskId == null || isUuid(command.taskId)) {
+            "Saved retarget task is invalid"
+        }
+        require(command.observedElapsedMs in 0..command.plannedDurationMs) {
+            "Saved retarget elapsed time is invalid"
+        }
     }
 
     private fun validateTaskOperation(operation: TaskOperation) {
@@ -435,6 +456,7 @@ internal object TimerSyncValidation {
         CommandType.Finish,
         CommandType.Cancel,
         CommandType.Clear,
+        CommandType.Retarget,
     )
     private val activeStatuses = setOf(TimerStatus.Running, TimerStatus.Paused)
     private val timerStatuses = activeStatuses + setOf(

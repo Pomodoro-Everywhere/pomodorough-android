@@ -106,7 +106,14 @@ data class IrohHello(
     val endpointTicket: String,
     val platform: String,
     val displayName: String? = null,
+    val capabilities: List<String> = emptyList(),
 )
+
+object IrohRetargetCapability {
+    const val RetargetV1 = "timer-retarget-v1"
+    fun advertised(): List<String> = listOf(RetargetV1)
+    fun supportsRetarget(hello: IrohHello): Boolean = RetargetV1 in hello.capabilities
+}
 
 @Serializable
 data class IrohInventoryRequest(

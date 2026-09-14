@@ -150,10 +150,14 @@ data class IrohOperationRecord(
             )
             val keys = operationKeys(domain)
             requireExactKeys(record.operation, keys.first, keys.second)
-            requireOmittedNulls(
-                record.operation,
-                keys.second - if (domain == IrohDomain.genesis) setOf("selectedTaskId") else emptySet(),
-            )
+            if (domain == IrohDomain.timer && record.operation["type"]?.jsonString() == CommandType.Retarget) {
+                require("taskId" in record.operation) { "Retarget task assignment is missing" }
+            } else {
+                requireOmittedNulls(
+                    record.operation,
+                    keys.second - if (domain == IrohDomain.genesis) setOf("selectedTaskId") else emptySet(),
+                )
+            }
             if (domain == IrohDomain.genesis) validateGenesisShape(record.operation)
             record.validate()
             return record
@@ -268,8 +272,7 @@ data class IrohOperationRecord(
                 value.plannedDurationMs in DurationLimits.MinMs..MaxTimerDurationMs &&
                 value.observedElapsedMs in 0..value.plannedDurationMs &&
                 (value.type != CommandType.Start || value.observedElapsedMs == 0L) &&
-                (value.taskId?.let(IrohProtocolV1::isIdentifier) ?: true) &&
-                (value.taskId == null || value.type == CommandType.Start && value.phase == TimerPhase.Focus)
+                retargetTaskValid(value)
             ) { "Timer operation is invalid" }
             SyncWireBounds.requireOperationClock(
                 value.occurredAt,
@@ -277,6 +280,17 @@ data class IrohOperationRecord(
                 value.hlcCounter,
                 allowLegacySentinel = false,
             )
+        }
+
+        private fun retargetTaskValid(value: TimerCommand): Boolean {
+            if (value.type == CommandType.Retarget) {
+                if (value.phase != TimerPhase.Focus) return false
+                if (value.taskId == null) return true
+                return runCatching { java.util.UUID.fromString(value.taskId) }.isSuccess
+            }
+            if (value.taskId != null && !IrohProtocolV1.isIdentifier(value.taskId)) return false
+            return value.taskId == null ||
+                (value.type == CommandType.Start && value.phase == TimerPhase.Focus)
         }
 
         private fun validateTask(value: TaskOperation) {
@@ -341,6 +355,7 @@ data class IrohOperationRecord(
             CommandType.Finish,
             CommandType.Cancel,
             CommandType.Clear,
+            CommandType.Retarget,
         )
         private val timerStatuses = setOf(
             TimerStatus.Running,

@@ -132,9 +132,18 @@ internal data class CoreReconciliationSent(
     val selectedTaskOperations: List<String> = emptyList(),
 )
 
+internal data class CoreNeverSentProof(
+    val commands: List<String> = emptyList(),
+    val taskOperations: List<String> = emptyList(),
+    val durationOperations: List<String> = emptyList(),
+    val autoStartOperations: List<String> = emptyList(),
+    val selectedTaskOperations: List<String> = emptyList(),
+)
+
 internal data class CoreReconciliationResult(
     val revision: Long,
     val pending: CoreProjectionPending,
+    val projectionPending: CoreProjectionPending,
     val dependencies: List<CoreTimerDependency>,
     val promotedTimerOperationIds: Set<String>,
     val droppedTimerOperationIds: Set<String>,
@@ -175,6 +184,36 @@ internal class CoreReconciliationDispatcher(
             throw CoreProjectionException.InvalidOutput("Could not decode Shared Core reconciliation", error)
         }
         return validateOutput(decoded, local, sent, normalizedResponse, dependencies)
+    }
+
+    fun rebaseV2(
+        local: CoreProjectionPending,
+        sent: CoreReconciliationSent,
+        neverSent: CoreNeverSentProof,
+        response: SyncResponse,
+        dependencies: List<CoreTimerDependency>,
+    ): CoreReconciliationResult {
+        validateInput(local, sent, dependencies)
+        validateNeverSent(local, sent, neverSent)
+        val normalized = CoreCanonicalResponse.from(response)
+        val input = CoreReconciliationV2Input(
+            local = CoreLocalQueues.from(local),
+            sent = CoreSentQueues.from(sent),
+            neverSent = CoreNeverSentQueues.from(neverSent),
+            response = normalized,
+            timerDependencies = dependencies,
+        )
+        val output = dispatch(V2Operation, wireJson.encodeToString(input))
+        val decoded = decodeV2(output)
+        return validateV2(decoded, local, sent, normalized, dependencies, neverSent)
+    }
+
+    private fun decodeV2(output: JsonElement): CoreReconciliationV2Output = try {
+        strictJson.decodeFromJsonElement(CoreReconciliationV2Output.serializer(), output)
+    } catch (error: CancellationException) {
+        throw error
+    } catch (error: Exception) {
+        throw CoreProjectionException.InvalidOutput("Could not decode Shared Core reconciliation", error)
     }
 
     private fun validateInput(
@@ -239,6 +278,7 @@ internal class CoreReconciliationDispatcher(
         return CoreReconciliationResult(
             revision = output.revision,
             pending = pending,
+            projectionPending = pending,
             dependencies = dependencies,
             promotedTimerOperationIds = decisions.promoted,
             droppedTimerOperationIds = decisions.dropped,
@@ -537,9 +577,200 @@ internal class CoreReconciliationDispatcher(
         }
     }
 
+    private fun validateNeverSent(
+        local: CoreProjectionPending,
+        sent: CoreReconciliationSent,
+        neverSent: CoreNeverSentProof,
+    ) {
+        checkNeverSent(neverSent.commands, local.commands.map { it.value.id }.toSet(), sent.commands)
+        checkNeverSent(neverSent.taskOperations, local.taskOperations.map { it.value.id }.toSet(), sent.taskOperations)
+        checkNeverSent(neverSent.durationOperations, local.durationOperations.map { it.value.id }.toSet(), sent.durationOperations)
+        checkNeverSent(neverSent.autoStartOperations, local.autoStartOperations.map { it.value.id }.toSet(), sent.autoStartOperations)
+        checkNeverSent(neverSent.selectedTaskOperations, local.selectedTaskOperations.map { it.value.id }.toSet(), sent.selectedTaskOperations)
+    }
+
+    private fun checkNeverSent(ids: List<String>, localIds: Set<String>, sentIds: List<String>) {
+        if (ids.any(String::isBlank) || ids.toSet().size != ids.size) invalidInput()
+        if (!localIds.containsAll(ids) || ids.any { it in sentIds.toSet() }) invalidInput()
+    }
+
+    private fun validateV2(
+        output: CoreReconciliationV2Output,
+        local: CoreProjectionPending,
+        sent: CoreReconciliationSent,
+        response: CoreCanonicalResponse,
+        inputDependencies: List<CoreTimerDependency>,
+        neverSent: CoreNeverSentProof,
+    ): CoreReconciliationResult {
+        if (output.revision != response.revision) invalidOutput()
+        validateResponseAcknowledgements(sent, response)
+        val pending = validateV2Pending(output, local, sent, neverSent.commands.toSet())
+        val v1view = output.toV1()
+        val decisions = validateTimerDecisions(v1view, local, response, inputDependencies)
+        val dependencies = validateOutputDependencies(v1view, pending.commands, inputDependencies, decisions.promoted)
+        val base = validateOutputBase(v1view, response)
+        val projectionPending = validateV2ProjectionPending(output, pending)
+        val projection = validateV2Projection(output, response, base, projectionPending)
+        return CoreReconciliationResult(
+            revision = output.revision,
+            pending = pending,
+            projectionPending = projectionPending,
+            dependencies = dependencies,
+            promotedTimerOperationIds = decisions.promoted,
+            droppedTimerOperationIds = decisions.dropped,
+            droppedTimerIds = decisions.droppedTimerIds,
+            base = base,
+            projection = projection,
+        )
+    }
+
+    private fun validateV2Base(
+        output: CoreReconciliationV2Output,
+        response: CoreCanonicalResponse,
+    ): CoreProjectionBase {
+        val expected = response.projectionBase()
+        val actual = CoreProjectionBase(
+            output.baseTimer, output.baseHistory, output.baseTasks, output.baseDurationsMs.toModel(),
+            output.baseAutoStartBreaks, output.baseSelectedTaskId,
+        )
+        if (actual != expected) invalidOutput()
+        return actual
+    }
+
+    private fun validateV2ProjectionPending(
+        output: CoreReconciliationV2Output,
+        pending: CoreProjectionPending,
+    ): CoreProjectionPending {
+        val projected = output.projectionPending.toPending()
+        assertProjectionSubset(projected.commands, pending.commands, { it.id }, { it.id })
+        assertProjectionSubset(projected.taskOperations, pending.taskOperations, { it.id }, { it.id })
+        assertProjectionSubset(projected.durationOperations, pending.durationOperations, { it.id }, { it.id })
+        assertProjectionSubset(projected.autoStartOperations, pending.autoStartOperations, { it.id }, { it.id })
+        assertProjectionSubset(projected.selectedTaskOperations, pending.selectedTaskOperations, { it.id }, { it.id })
+        assertProjectionPayloads(projected.commands, pending.commands)
+        assertExactSubset(projected.taskOperations, pending.taskOperations)
+        assertExactSubset(projected.durationOperations, pending.durationOperations)
+        assertExactSubset(projected.autoStartOperations, pending.autoStartOperations)
+        assertExactSubset(projected.selectedTaskOperations, pending.selectedTaskOperations)
+        return projected
+    }
+
+    private fun <Wire, Model> assertProjectionSubset(
+        projected: List<DeviceOperation<Wire>>,
+        pending: List<DeviceOperation<Model>>,
+        projectedId: (Wire) -> String,
+        pendingId: (Model) -> String,
+    ) {
+        val pendingIds = pending.map { pendingId(it.value) }.toSet()
+        val projectedIds = projected.map { projectedId(it.value) }
+        if (projectedIds.toSet().size != projectedIds.size) invalidOutput()
+        if (!pendingIds.containsAll(projectedIds)) invalidOutput()
+    }
+
+    private fun assertProjectionPayloads(
+        projected: List<DeviceOperation<TimerCommand>>,
+        pending: List<DeviceOperation<TimerCommand>>,
+    ) {
+        val pendingById = pending.associateBy { it.value.id }
+        projected.forEach { operation ->
+            val original = pendingById[operation.value.id] ?: invalidOutput()
+            if (operation.deviceId != original.deviceId) invalidOutput()
+            val projectedWire = operation.value.copy(physicalOccurredAt = null)
+            val pendingWire = original.value.copy(physicalOccurredAt = null)
+            if (projectedWire != pendingWire) invalidOutput()
+        }
+    }
+
+    private fun <T> assertExactSubset(
+        projected: List<DeviceOperation<T>>,
+        pending: List<DeviceOperation<T>>,
+    ) {
+        val pendingSet = pending.toSet()
+        if (!pendingSet.containsAll(projected)) invalidOutput()
+    }
+
+    private fun validateV2Projection(
+        output: CoreReconciliationV2Output,
+        response: CoreCanonicalResponse,
+        base: CoreProjectionBase,
+        pending: CoreProjectionPending,
+    ): CoreProjectionResult {
+        val projection = projectionDispatcher.apply(
+            base, pending, runCatching { Instant.parse(response.serverTime) }.getOrElse { invalidOutput() },
+        )
+        if (projection.canonicalTimer != output.timer || projection.history != output.history ||
+            projection.tasks != output.tasks || projection.durationsMs != output.durationsMs.toModel() ||
+            projection.autoStartBreaks != output.autoStartBreaks ||
+            projection.selectedTaskId != output.selectedTaskId
+        ) invalidOutput()
+        return projection
+    }
+
     private fun List<String>.requireUniqueNonBlank(): Set<String> {
         if (any(String::isBlank) || toSet().size != size) invalidOutput()
         return toSet()
+    }
+
+    private fun validateV2Pending(
+        output: CoreReconciliationV2Output,
+        local: CoreProjectionPending,
+        sent: CoreReconciliationSent,
+        mutableIds: Set<String>,
+    ): CoreProjectionPending {
+        val commands = validateV2Commands(output.pending, local.commands, sent.commands, output.droppedTimerOperationIds, mutableIds)
+        return CoreProjectionPending(
+            commands = commands,
+            taskOperations = validateV2Exact(output.pendingTaskOperations, local.taskOperations, sent.taskOperations, CoreWireTaskOperation::id, CoreWireTaskOperation::deviceId, TaskOperation::id, CoreWireTaskOperation::toModel),
+            durationOperations = validateV2Exact(output.pendingDurationOperations, local.durationOperations, sent.durationOperations, CoreWireDurationOperation::id, CoreWireDurationOperation::deviceId, DurationOperation::id, CoreWireDurationOperation::toModel),
+            autoStartOperations = validateV2Exact(output.pendingAutoStartOperations, local.autoStartOperations, sent.autoStartOperations, CoreWireAutoStartOperation::id, CoreWireAutoStartOperation::deviceId, AutoStartOperation::id, CoreWireAutoStartOperation::toModel),
+            selectedTaskOperations = validateV2Exact(output.pendingSelectedTaskOperations, local.selectedTaskOperations, sent.selectedTaskOperations, CoreWireSelectedTaskOperation::id, CoreWireSelectedTaskOperation::deviceId, SelectedTaskOperation::id, CoreWireSelectedTaskOperation::toModel),
+        )
+    }
+
+    private fun validateV2Commands(
+        output: List<CoreWireTimerCommand>,
+        local: List<DeviceOperation<TimerCommand>>,
+        sent: List<String>,
+        dropped: List<String>,
+        mutableIds: Set<String>,
+    ): List<DeviceOperation<TimerCommand>> {
+        val originals = local.associateBy { it.value.id }
+        val expected = originals.keys - sent.toSet() - dropped.toSet()
+        if (output.map { it.id }.toSet() != expected || output.size != expected.size) invalidOutput()
+        return output.map { wire ->
+            val original = originals[wire.id] ?: invalidOutput()
+            val value = wire.toModel(original.value.physicalOccurredAt)
+            val normalized = wire.id in mutableIds && v2NeverSentCommandNormalized(value, original.value)
+            if (wire.deviceId != original.deviceId ||
+                !v2CommandUnchanged(value, original.value) && !normalized
+            ) invalidOutput()
+            DeviceOperation(wire.deviceId, value)
+        }
+    }
+
+    internal fun v2CommandUnchanged(next: TimerCommand, original: TimerCommand): Boolean =
+        v2TimerCommandUnchanged(next, original)
+
+    private fun <Wire, Model> validateV2Exact(
+        output: List<Wire>,
+        local: List<DeviceOperation<Model>>,
+        sent: List<String>,
+        id: (Wire) -> String,
+        deviceId: (Wire) -> String,
+        modelId: (Model) -> String,
+        toModel: (Wire) -> Model,
+    ): List<DeviceOperation<Model>> {
+        val originals = local.associateBy { modelId(it.value) }
+        val outputIds = output.map(id)
+        if (outputIds.toSet().size != outputIds.size) invalidOutput()
+        val expected = originals.keys - sent.toSet()
+        if (outputIds.toSet() != expected) invalidOutput()
+        return output.map { wire ->
+            val original = originals[id(wire)] ?: invalidOutput()
+            val value = toModel(wire)
+            if (deviceId(wire) != original.deviceId || value != original.value) invalidOutput()
+            DeviceOperation(deviceId(wire), value)
+        }
     }
 
     private fun invalidInput(): Nothing =
@@ -550,7 +781,35 @@ internal class CoreReconciliationDispatcher(
 
     private companion object {
         const val ReconciliationOperation = "reconcile.rebase.v1"
+        const val V2Operation = "reconcile.rebase.v2"
     }
+}
+
+// V2 never rebases clocks. Identity and clocks must match exactly; only Core
+// delivery.rs freezes possibly-delivered ops byte-for-byte, with no Start
+// exemption. Generated-break normalization (phase, duration, elapsed clamp)
+// is the single allowed payload change, and only for never-sent operations:
+// Core errors instead of normalizing a frozen id.
+internal fun v2TimerCommandUnchanged(next: TimerCommand, original: TimerCommand): Boolean {
+    if (next.id != original.id || next.deviceSequence != original.deviceSequence ||
+        next.timerId != original.timerId || next.taskId != original.taskId ||
+        next.type != original.type || next.hlcWallMs != original.hlcWallMs ||
+        next.hlcCounter != original.hlcCounter || next.occurredAt != original.occurredAt ||
+        next.observedElapsedMs != original.observedElapsedMs
+    ) return false
+    return next.phase == original.phase && next.plannedDurationMs == original.plannedDurationMs
+}
+
+// Mirrors Core normalize(): accepted generated-break batches keep identity
+// and clocks, but take the canonical phase/duration with elapsed clamped to
+// the new duration. Never-sent proof is the exact permission boundary.
+internal fun v2NeverSentCommandNormalized(next: TimerCommand, original: TimerCommand): Boolean {
+    if (next.id != original.id || next.deviceSequence != original.deviceSequence ||
+        next.timerId != original.timerId || next.taskId != original.taskId ||
+        next.type != original.type || next.hlcWallMs != original.hlcWallMs ||
+        next.hlcCounter != original.hlcCounter || next.occurredAt != original.occurredAt
+    ) return false
+    return next.observedElapsedMs in 0..next.plannedDurationMs
 }
 
 @Serializable
@@ -866,4 +1125,101 @@ private data class CoreWireSelectedTaskOperation(
             )
         }
     }
+}
+
+@Serializable
+private data class CoreNeverSentQueues(
+    val commands: List<String> = emptyList(),
+    val taskOperations: List<String> = emptyList(),
+    val durationOperations: List<String> = emptyList(),
+    val autoStartOperations: List<String> = emptyList(),
+    val selectedTaskOperations: List<String> = emptyList(),
+) {
+    companion object {
+        fun from(value: CoreNeverSentProof) = CoreNeverSentQueues(
+            value.commands.toList(),
+            value.taskOperations.toList(),
+            value.durationOperations.toList(),
+            value.autoStartOperations.toList(),
+            value.selectedTaskOperations.toList(),
+        )
+    }
+}
+
+@Serializable
+private data class CoreReconciliationV2Input(
+    val local: CoreLocalQueues,
+    val sent: CoreSentQueues,
+    val neverSent: CoreNeverSentQueues,
+    val response: CoreCanonicalResponse,
+    val timerDependencies: List<CoreTimerDependency>,
+)
+
+@Serializable
+private data class CoreProjectionPendingQueues(
+    val commands: List<CoreWireTimerCommand> = emptyList(),
+    val taskOperations: List<CoreWireTaskOperation> = emptyList(),
+    val durationOperations: List<CoreWireDurationOperation> = emptyList(),
+    val autoStartOperations: List<CoreWireAutoStartOperation> = emptyList(),
+    val selectedTaskOperations: List<CoreWireSelectedTaskOperation> = emptyList(),
+) {
+    fun toPending(): CoreProjectionPending = CoreProjectionPending(
+        commands = commands.map { DeviceOperation(it.deviceId, it.toModel(null)) },
+        taskOperations = taskOperations.map { DeviceOperation(it.deviceId, it.toModel()) },
+        durationOperations = durationOperations.map { DeviceOperation(it.deviceId, it.toModel()) },
+        autoStartOperations = autoStartOperations.map { DeviceOperation(it.deviceId, it.toModel()) },
+        selectedTaskOperations = selectedTaskOperations.map { DeviceOperation(it.deviceId, it.toModel()) },
+    )
+}
+
+@Serializable
+private data class CoreReconciliationV2Output(
+    val revision: Long,
+    val pending: List<CoreWireTimerCommand> = emptyList(),
+    val pendingTaskOperations: List<CoreWireTaskOperation> = emptyList(),
+    val pendingDurationOperations: List<CoreWireDurationOperation> = emptyList(),
+    val pendingAutoStartOperations: List<CoreWireAutoStartOperation> = emptyList(),
+    val pendingSelectedTaskOperations: List<CoreWireSelectedTaskOperation> = emptyList(),
+    val pendingTimerDependencies: List<CoreTimerDependency> = emptyList(),
+    val promotedTimerOperationIds: List<String> = emptyList(),
+    val droppedTimerOperationIds: List<String> = emptyList(),
+    val droppedTimerIds: List<String> = emptyList(),
+    val baseTimer: CanonicalTimer? = null,
+    val baseHistory: List<HistoryItem> = emptyList(),
+    val baseTasks: List<FocusTask> = emptyList(),
+    val baseDurationsMs: CoreWireDurationsMs = CoreWireDurationsMs(1_500_000, 300_000, 900_000),
+    val baseAutoStartBreaks: Boolean = false,
+    val baseSelectedTaskId: String? = null,
+    val timer: CanonicalTimer? = null,
+    val history: List<HistoryItem> = emptyList(),
+    val tasks: List<FocusTask> = emptyList(),
+    val durationsMs: CoreWireDurationsMs = CoreWireDurationsMs(1_500_000, 300_000, 900_000),
+    val autoStartBreaks: Boolean = false,
+    val selectedTaskId: String? = null,
+    val projectionPending: CoreProjectionPendingQueues = CoreProjectionPendingQueues(),
+) {
+    fun toV1(): CoreReconciliationOutput = CoreReconciliationOutput(
+        revision = revision,
+        pending = pending,
+        pendingTaskOperations = pendingTaskOperations,
+        pendingDurationOperations = pendingDurationOperations,
+        pendingAutoStartOperations = pendingAutoStartOperations,
+        pendingSelectedTaskOperations = pendingSelectedTaskOperations,
+        pendingTimerDependencies = pendingTimerDependencies,
+        promotedTimerOperationIds = promotedTimerOperationIds,
+        droppedTimerOperationIds = droppedTimerOperationIds,
+        droppedTimerIds = droppedTimerIds,
+        baseTimer = baseTimer,
+        baseHistory = baseHistory,
+        baseTasks = baseTasks,
+        baseDurationsMs = baseDurationsMs,
+        baseAutoStartBreaks = baseAutoStartBreaks,
+        baseSelectedTaskId = baseSelectedTaskId,
+        timer = timer,
+        history = history,
+        tasks = tasks,
+        durationsMs = durationsMs,
+        autoStartBreaks = autoStartBreaks,
+        selectedTaskId = selectedTaskId,
+    )
 }

@@ -42,6 +42,7 @@ object CommandType {
     const val Finish = "finish"
     const val Cancel = "cancel"
     const val Clear = "clear"
+    const val Retarget = "retarget"
 }
 
 @Serializable
@@ -108,7 +109,7 @@ data class CanonicalTimer(
     val lastIntent: TimerIntent? = null,
 )
 
-@Serializable
+@Serializable(with = TimerCommandSerializer::class)
 data class TimerCommand(
     val id: String,
     val deviceSequence: Long,
@@ -123,6 +124,73 @@ data class TimerCommand(
     val taskId: String? = null,
     @Transient val physicalOccurredAt: String? = null,
 )
+
+object TimerCommandSerializer : KSerializer<TimerCommand> {
+    override val descriptor: SerialDescriptor = buildClassSerialDescriptor("TimerCommand") {
+        element<String>("id")
+        element<Long>("deviceSequence")
+        element<String>("timerId")
+        element<String>("type")
+        element<String>("phase")
+        element<Long>("plannedDurationMs")
+        element<String>("occurredAt")
+        element<Long>("hlcWallMs")
+        element<Long>("hlcCounter")
+        element<Long>("observedElapsedMs")
+        element<String?>("taskId")
+    }
+
+    override fun serialize(encoder: Encoder, value: TimerCommand) {
+        require(encoder is JsonEncoder)
+        // Retarget requires explicit taskId (string or null); other types omit null.
+        val includeTaskId = value.type == CommandType.Retarget || value.taskId != null
+        encoder.encodeJsonElement(JsonObject(linkedMapOf(
+            "id" to JsonPrimitive(value.id),
+            "deviceSequence" to JsonPrimitive(value.deviceSequence),
+            "timerId" to JsonPrimitive(value.timerId),
+            "type" to JsonPrimitive(value.type),
+            "phase" to JsonPrimitive(value.phase),
+            "plannedDurationMs" to JsonPrimitive(value.plannedDurationMs),
+            "occurredAt" to JsonPrimitive(value.occurredAt),
+            "hlcWallMs" to JsonPrimitive(value.hlcWallMs),
+            "hlcCounter" to JsonPrimitive(value.hlcCounter),
+            "observedElapsedMs" to JsonPrimitive(value.observedElapsedMs),
+        ) + if (includeTaskId) {
+            mapOf("taskId" to (value.taskId?.let(::JsonPrimitive) ?: JsonNull))
+        } else {
+            emptyMap()
+        }))
+    }
+
+    override fun deserialize(decoder: Decoder): TimerCommand {
+        require(decoder is JsonDecoder)
+        val value = decoder.decodeJsonElement().jsonObject
+        fun string(name: String): String = value.getValue(name).jsonPrimitive.let { primitive ->
+            require(primitive.isString)
+            primitive.content
+        }
+        fun long(name: String): Long = value.getValue(name).jsonPrimitive.let { primitive ->
+            require(!primitive.isString)
+            primitive.long
+        }
+        return TimerCommand(
+            id = string("id"),
+            deviceSequence = long("deviceSequence"),
+            timerId = string("timerId"),
+            type = string("type"),
+            phase = string("phase"),
+            plannedDurationMs = long("plannedDurationMs"),
+            occurredAt = string("occurredAt"),
+            hlcWallMs = long("hlcWallMs"),
+            hlcCounter = long("hlcCounter"),
+            observedElapsedMs = long("observedElapsedMs"),
+            taskId = value["taskId"]?.takeUnless { it is JsonNull }?.let {
+                require(it.jsonPrimitive.isString)
+                it.jsonPrimitive.content
+            },
+        )
+    }
+}
 
 @Serializable
 data class HistoryItem(

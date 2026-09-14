@@ -1,111 +1,274 @@
 package me.egigoka.pomodorough.data
 
 import java.io.File
+import me.egigoka.pomodorough.core.SharedCore
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TimerTaskRetargetTest {
-    @Test
-    fun startCommandRewriteRetargetsOnlyMatchingTimer() {
-        val start = command(id = "start-1", timerId = "timer-1", type = CommandType.Start)
-        val pause = command(id = "pause-1", timerId = "timer-1", type = CommandType.Pause)
-        val other = command(id = "start-2", timerId = "timer-2", type = CommandType.Start)
-
-        val rewritten = retargetStartCommands(listOf(start, pause, other), "timer-1", "task-b")
-
-        assertEquals("task-b", rewritten[0].taskId)
-        assertEquals(start.taskId, rewritten[1].taskId)
-        assertEquals(other.taskId, rewritten[2].taskId)
-        assertEquals("task-a", start.taskId)
-    }
-
-    @Test
-    fun startCommandRewriteToUnassignedClearsTask() {
-        val start = command(id = "start-1", timerId = "timer-1", type = CommandType.Start)
-
-        val rewritten = retargetStartCommands(listOf(start), "timer-1", null)
-
-        assertNull(rewritten.single().taskId)
-    }
-
-    @Test
-    fun viewOverrideFollowsRetargetForTimerAndHistory() {
-        val timer = timer(id = "timer-1", taskId = "task-a")
-        val history = listOf(
-            historyItem(id = "history-1", timerId = "timer-1", taskId = "task-a"),
-            historyItem(id = "history-2", timerId = "timer-0", taskId = "task-a"),
+    private val core by lazy {
+        SharedCore.load(
+            requireNotNull(javaClass.classLoader?.getResourceAsStream("pomodorough_core.wasm")),
         )
-
-        val (retargetedTimer, retargetedHistory) =
-            applyTimerTaskRetarget(timer, history, mapOf("timer-1" to "task-b"))
-
-        assertEquals("task-b", retargetedTimer?.taskId)
-        assertEquals("task-b", retargetedHistory[0].taskId)
-        assertEquals("task-a", retargetedHistory[1].taskId)
     }
+    private val dispatch = { operation: String, input: String -> core.dispatch(operation, input) }
 
     @Test
-    fun viewOverrideToUnassignedClearsTask() {
+    fun retargetAssignsNewTaskWithFreshId() {
         val timer = timer(id = "timer-1", taskId = "task-a")
-        val history = listOf(historyItem(id = "history-1", timerId = "timer-1", taskId = "task-a"))
-
-        val (retargetedTimer, retargetedHistory) =
-            applyTimerTaskRetarget(timer, history, mapOf("timer-1" to null))
-
-        assertNull(retargetedTimer?.taskId)
-        assertNull(retargetedHistory.single().taskId)
+        val reservation = reservation(sequence = 2, wallMs = WallMs + 1_000)
+        val command = TimerRetargetPolicy.plan(
+            timerId = "timer-1",
+            taskId = TaskB,
+            current = timer,
+            reservation = reservation,
+            plannedDurationMs = 1_500_000,
+            physicalNowMs = WallMs + 1_000,
+            elapsedMs = 100_000,
+        )
+        assertTrue(command != null)
+        assertEquals(CommandType.Retarget, command!!.type)
+        assertEquals("timer-1", command.timerId)
+        assertEquals(TaskB, command.taskId)
+        assertEquals(TimerPhase.Focus, command.phase)
+        assertEquals(2, command.deviceSequence)
+        assertNotEquals("start-1", command.id)
     }
 
     @Test
-    fun emptyRetargetLeavesViewUntouched() {
+    fun retargetExplicitNullUnassigns() {
         val timer = timer(id = "timer-1", taskId = "task-a")
-        val history = listOf(historyItem(id = "history-1", timerId = "timer-1", taskId = "task-a"))
-
-        val (sameTimer, sameHistory) = applyTimerTaskRetarget(timer, history, emptyMap())
-
-        assertEquals(timer, sameTimer)
-        assertEquals(history, sameHistory)
+        val reservation = reservation(sequence = 2, wallMs = WallMs + 1_000)
+        val command = TimerRetargetPolicy.plan(
+            timerId = "timer-1",
+            taskId = null,
+            current = timer,
+            reservation = reservation,
+            plannedDurationMs = 1_500_000,
+            physicalNowMs = WallMs + 1_000,
+            elapsedMs = 100_000,
+        )
+        assertTrue(command != null)
+        assertNull(command!!.taskId)
+        assertEquals(CommandType.Retarget, command.type)
     }
 
     @Test
-    fun pruneKeepsOnlyLiveTimerAndHistoryEntries() {
-        val timer = timer(id = "timer-1", taskId = "task-b")
-        val history = listOf(historyItem(id = "history-1", timerId = "timer-1", taskId = "task-b"))
-        val retarget = mapOf("timer-1" to "task-b", "timer-stale" to "task-c")
-
-        val pruned = pruneTimerTaskRetarget(retarget, timer, history)
-
-        assertEquals(mapOf("timer-1" to "task-b"), pruned)
+    fun retargetSameAssignmentIsIgnored() {
+        val timer = timer(id = "timer-1", taskId = TaskB)
+        val reservation = reservation(sequence = 2, wallMs = WallMs + 1_000)
+        val command = TimerRetargetPolicy.plan(
+            timerId = "timer-1",
+            taskId = TaskB,
+            current = timer,
+            reservation = reservation,
+            plannedDurationMs = 1_500_000,
+            physicalNowMs = WallMs + 1_000,
+            elapsedMs = 100_000,
+        )
+        assertNull(command)
     }
 
     @Test
-    fun pruneKeepsHistoryEntryAfterTimerCompletes() {
-        val history = listOf(historyItem(id = "history-1", timerId = "timer-1", taskId = "task-b"))
+    fun retargetPausedTimerIsAllowed() {
+        val timer = timer(id = "timer-1", taskId = "task-a", status = TimerStatus.Paused)
+        val reservation = reservation(sequence = 2, wallMs = WallMs + 1_000)
+        val command = TimerRetargetPolicy.plan(
+            timerId = "timer-1",
+            taskId = TaskB,
+            current = timer,
+            reservation = reservation,
+            plannedDurationMs = 1_500_000,
+            physicalNowMs = WallMs + 1_000,
+            elapsedMs = 100_000,
+        )
+        assertTrue(command != null)
+        assertEquals(TaskB, command!!.taskId)
+    }
 
-        val pruned = pruneTimerTaskRetarget(mapOf("timer-1" to "task-b"), null, history)
+    @Test
+    fun retargetNonFocusTimerIsIgnored() {
+        val timer = timer(id = "timer-1", taskId = null, phase = TimerPhase.ShortBreak)
+        val reservation = reservation(sequence = 2, wallMs = WallMs + 1_000)
+        val command = TimerRetargetPolicy.plan(
+            timerId = "timer-1",
+            taskId = TaskB,
+            current = timer,
+            reservation = reservation,
+            plannedDurationMs = 1_500_000,
+            physicalNowMs = WallMs + 1_000,
+            elapsedMs = 0,
+        )
+        assertNull(command)
+    }
 
-        assertTrue(pruned.containsKey("timer-1"))
+    @Test
+    fun retargetEmptyTaskIsRejected() {
+        val timer = timer(id = "timer-1", taskId = "task-a")
+        val reservation = reservation(sequence = 2, wallMs = WallMs + 1_000)
+        val command = TimerRetargetPolicy.plan(
+            timerId = "timer-1",
+            taskId = "",
+            current = timer,
+            reservation = reservation,
+            plannedDurationMs = 1_500_000,
+            physicalNowMs = WallMs + 1_000,
+            elapsedMs = 100_000,
+        )
+        assertNull(command)
+    }
+
+    @Test
+    fun retargetDoesNotRewriteStartPayload() {
+        val start = command(id = "start-1", timerId = "timer-1", type = CommandType.Start)
+        val timer = timer(id = "timer-1", taskId = "task-a")
+        val reservation = reservation(sequence = 2, wallMs = WallMs + 1_000)
+        val retarget = TimerRetargetPolicy.plan(
+            timerId = "timer-1",
+            taskId = TaskB,
+            current = timer,
+            reservation = reservation,
+            plannedDurationMs = 1_500_000,
+            physicalNowMs = WallMs + 1_000,
+            elapsedMs = 100_000,
+        )!!
+        assertNotEquals(start.id, retarget.id)
+        assertEquals("task-a", start.taskId)
+        assertEquals(TaskB, retarget.taskId)
+        assertEquals(CommandType.Start, start.type)
+        assertEquals(CommandType.Retarget, retarget.type)
+    }
+
+    @Test
+    fun retargetProjectsThroughRealCore() {
+        val start = command(id = "start-1", timerId = "timer-1", type = CommandType.Start, taskId = "task-a")
+        val timer = timer(id = "timer-1", taskId = "task-a")
+        val reservation = reservation(sequence = 2, wallMs = WallMs + 1_000)
+        val retarget = TimerRetargetPolicy.plan(
+            timerId = "timer-1",
+            taskId = TaskB,
+            current = timer,
+            reservation = reservation,
+            plannedDurationMs = 1_500_000,
+            physicalNowMs = WallMs + 1_000,
+            elapsedMs = 100_000,
+        )!!
+        val dispatcher = CoreReconciliationDispatcher(dispatch)
+        val base = emptyResponse()
+        val result = dispatcher.rebaseV2(
+            local = CoreProjectionPending(
+                commands = listOf(DeviceOperation("device-1", start), DeviceOperation("device-1", retarget)),
+            ),
+            sent = CoreReconciliationSent(),
+            neverSent = CoreNeverSentProof(commands = listOf(start.id, retarget.id)),
+            response = base,
+            dependencies = emptyList(),
+        )
+        assertEquals(TaskB, result.projection.canonicalTimer?.taskId)
+        assertEquals(setOf(start.id, retarget.id), result.pending.commands.map { it.value.id }.toSet())
+        assertEquals(result.pending.commands.map { it.value.id }.toSet(), result.projectionPending.commands.map { it.value.id }.toSet())
+    }
+
+    @Test
+    fun acknowledgedRetargetLeavesPending() {
+        val start = command(id = "start-1", timerId = "timer-1", type = CommandType.Start, taskId = "task-a")
+        val retarget = command(id = "retarget-1", timerId = "timer-1", type = CommandType.Retarget, taskId = TaskB, sequence = 2, wallMs = WallMs + 1_000)
+        val dispatcher = CoreReconciliationDispatcher(dispatch)
+        val response = emptyResponse().copy(
+            acknowledgements = listOf(Acknowledgement(retarget.id, "applied")),
+            canonicalTimer = timer(id = "timer-1", taskId = TaskB),
+        )
+        val result = dispatcher.rebaseV2(
+            local = CoreProjectionPending(commands = listOf(DeviceOperation("device-1", start), DeviceOperation("device-1", retarget))),
+            sent = CoreReconciliationSent(commands = listOf(retarget.id)),
+            neverSent = CoreNeverSentProof(commands = listOf(start.id)),
+            response = response,
+            dependencies = emptyList(),
+        )
+        assertTrue(result.pending.commands.none { it.value.id == retarget.id })
+        assertTrue(result.pending.commands.any { it.value.id == start.id })
+    }
+
+    @Test
+    fun possiblyDeliveredRetargetIsExcludedFromProjection() {
+        val start = command(id = "start-1", timerId = "timer-1", type = CommandType.Start, taskId = "task-a", wallMs = WallMs - 10_000)
+        val retarget = command(id = "retarget-1", timerId = "timer-1", type = CommandType.Retarget, taskId = TaskB, sequence = 2, wallMs = WallMs - 5_000)
+        val dispatcher = CoreReconciliationDispatcher(dispatch)
+        val response = emptyResponse()
+        val result = dispatcher.rebaseV2(
+            local = CoreProjectionPending(commands = listOf(DeviceOperation("device-1", start), DeviceOperation("device-1", retarget))),
+            sent = CoreReconciliationSent(),
+            neverSent = CoreNeverSentProof(),
+            response = response,
+            dependencies = emptyList(),
+        )
+        assertEquals(2, result.pending.commands.size)
+        assertTrue(result.projectionPending.commands.isEmpty())
+    }
+
+    @Test
+    fun v2NeverRebasesClocks() {
+        val start = command(id = "start-1", timerId = "timer-1", type = CommandType.Start, taskId = "task-a", wallMs = 1_000)
+        val dispatcher = CoreReconciliationDispatcher(dispatch)
+        val result = dispatcher.rebaseV2(
+            local = CoreProjectionPending(commands = listOf(DeviceOperation("device-1", start))),
+            sent = CoreReconciliationSent(),
+            neverSent = CoreNeverSentProof(commands = listOf(start.id)),
+            response = emptyResponse(),
+            dependencies = emptyList(),
+        )
+        assertEquals(1_000L, result.pending.commands.single().value.hlcWallMs)
+    }
+
+    @Test
+    fun neverSentProofRequiresLocalId() {
+        val dispatcher = CoreReconciliationDispatcher(dispatch)
+        try {
+            dispatcher.rebaseV2(
+                local = CoreProjectionPending(),
+                sent = CoreReconciliationSent(),
+                neverSent = CoreNeverSentProof(commands = listOf("missing")),
+                response = emptyResponse(),
+                dependencies = emptyList(),
+            )
+            assertTrue("expected InvalidInput", false)
+        } catch (error: CoreProjectionException.InvalidInput) {
+            assertTrue(true)
+        }
+    }
+
+    @Test
+    fun neverSentProofRejectsSentId() {
+        val start = command(id = "start-1", timerId = "timer-1", type = CommandType.Start)
+        val dispatcher = CoreReconciliationDispatcher(dispatch)
+        try {
+            dispatcher.rebaseV2(
+                local = CoreProjectionPending(commands = listOf(DeviceOperation("device-1", start))),
+                sent = CoreReconciliationSent(commands = listOf(start.id)),
+                neverSent = CoreNeverSentProof(commands = listOf(start.id)),
+                response = emptyResponse(),
+                dependencies = emptyList(),
+            )
+            assertTrue("expected InvalidInput", false)
+        } catch (error: CoreProjectionException.InvalidInput) {
+            assertTrue(true)
+        }
     }
 
     @Test
     fun retargetPersistenceFailureReportsAndNotices() {
-        // Structural pin for TimerRepository.retargetRunningTimer: the
-        // persistence-failure branch must report and surface a notice, and
-        // cancellation must propagate.
-        // Accepted risk: TimerRepository requires Context/Dao so behavioral
-        // report-once + notice UI + no-report-on-cancel lives in androidTest;
-        // this JVM pin only fails fast if the guard/report is dropped.
         val root = sequenceOf(File("src/main/java"), File("app/src/main/java"))
             .firstOrNull(File::isDirectory)
         val source = File(
             checkNotNull(root) { "production source root" },
             "me/egigoka/pomodorough/data/TimerRepository.kt",
         ).readText()
-        val start = source.indexOf("fun retargetRunningTimer(")
+        val start = source.indexOf("fun commitRetarget(")
         assertTrue(start >= 0)
-        val window = source.drop(start).take(1_200)
+        val window = source.drop(start).take(1_600)
         assertTrue(window.contains("CancellationException"))
         assertTrue(window.contains("CrashReporter.report"))
         assertTrue(window.contains("mutationFailure"))
@@ -114,12 +277,6 @@ class TimerTaskRetargetTest {
 
     @Test
     fun afterLocalMutationFailureReportsAndConflicts() {
-        // Structural pin for TimerRepository.afterLocalMutation: post-mutation
-        // refresh failure must report plus conflict UI (mirrors retarget),
-        // cancellation propagates without report.
-        // Accepted risk: TimerRepository requires Context/Dao so behavioral
-        // report-once + conflict UI + no-report-on-cancel lives in androidTest;
-        // this JVM pin only fails fast if the guard/report is dropped.
         val root = sequenceOf(File("src/main/java"), File("app/src/main/java"))
             .firstOrNull(File::isDirectory)
         val source = File(
@@ -136,12 +293,6 @@ class TimerTaskRetargetTest {
 
     @Test
     fun finishExpiredIrohTimerFailureReportsAndConflicts() {
-        // Structural pin for TimerRepository.finishExpiredIrohTimer: expired
-        // projection failure must report plus conflict UI (mirrors deliver
-        // which reports), cancellation propagates without report.
-        // Accepted risk: TimerRepository requires Context/Dao so behavioral
-        // report-once + conflict UI + no-report-on-cancel lives in androidTest;
-        // this JVM pin only fails fast if the guard/report is dropped.
         val root = sequenceOf(File("src/main/java"), File("app/src/main/java"))
             .firstOrNull(File::isDirectory)
         val source = File(
@@ -156,36 +307,93 @@ class TimerTaskRetargetTest {
         assertTrue(window.contains("conflict"))
     }
 
-    private fun command(id: String, timerId: String, type: String) = TimerCommand(
+    @Test
+    fun noStartRewriteOrOverlayRemains() {
+        val root = sequenceOf(File("src/main/java"), File("app/src/main/java"))
+            .firstOrNull(File::isDirectory)
+        val source = File(
+            checkNotNull(root) { "production source root" },
+            "me/egigoka/pomodorough/data/TimerRepository.kt",
+        ).readText()
+        assertTrue(!source.contains("retargetStartCommands"))
+        assertTrue(!source.contains("applyTimerTaskRetarget"))
+        assertTrue(!source.contains("pruneTimerTaskRetarget"))
+        assertTrue(!source.contains("timerTaskRetarget"))
+        val policy = File(
+            checkNotNull(root) { "production source root" },
+            "me/egigoka/pomodorough/data/TimerTaskRetarget.kt",
+        ).readText()
+        assertTrue(!policy.contains("fun retargetStartCommands"))
+        assertTrue(!policy.contains("fun applyTimerTaskRetarget"))
+        assertTrue(!policy.contains("fun pruneTimerTaskRetarget"))
+    }
+
+    private fun reservation(sequence: Long, wallMs: Long) = TimerMutationReservation(
+        stamps = listOf(
+            SyncWireBounds.MutationStamp(
+                deviceSequence = sequence,
+                wallMs = wallMs,
+                counter = 0,
+                occurredAt = java.time.Instant.ofEpochMilli(wallMs).toString(),
+            ),
+        ),
+        uuids = listOf(java.util.UUID.randomUUID()),
+        lastUuidV7 = java.util.UUID.randomUUID().toString(),
+    )
+
+    private fun command(
+        id: String,
+        timerId: String,
+        type: String,
+        taskId: String? = "task-a",
+        sequence: Long = 1,
+        wallMs: Long = WallMs,
+    ) = TimerCommand(
         id = id,
-        deviceSequence = 1,
+        deviceSequence = sequence,
         timerId = timerId,
         type = type,
         phase = TimerPhase.Focus,
         plannedDurationMs = 1_500_000,
-        occurredAt = "2026-01-01T00:00:00Z",
-        hlcWallMs = 1_767_225_600_000,
-        hlcCounter = 1,
-        observedElapsedMs = 0,
-        taskId = "task-a",
+        occurredAt = java.time.Instant.ofEpochMilli(wallMs).toString(),
+        hlcWallMs = wallMs,
+        hlcCounter = 0,
+        observedElapsedMs = if (type == CommandType.Start) 0 else 100_000,
+        taskId = taskId,
     )
 
-    private fun timer(id: String, taskId: String?) = CanonicalTimer(
+    private fun timer(
+        id: String,
+        taskId: String?,
+        status: String = TimerStatus.Running,
+        phase: String = TimerPhase.Focus,
+    ) = CanonicalTimer(
         id = id,
-        phase = TimerPhase.Focus,
-        status = TimerStatus.Running,
+        phase = phase,
+        status = status,
         plannedDurationMs = 1_500_000,
         elapsedAtAnchorMs = 0,
-        anchorAt = "2026-01-01T00:00:00Z",
+        anchorAt = java.time.Instant.ofEpochMilli(WallMs).toString(),
         taskId = taskId,
     )
 
-    private fun historyItem(id: String, timerId: String, taskId: String?) = HistoryItem(
-        id = id,
-        timerId = timerId,
-        phase = TimerPhase.Focus,
-        status = TimerStatus.Completed,
-        plannedDurationMs = 1_500_000,
-        taskId = taskId,
+    private fun emptyResponse() = SyncResponse(
+        acknowledgements = emptyList(),
+        revision = 7,
+        canonicalTimer = null,
+        history = emptyList(),
+        serverTime = java.time.Instant.ofEpochMilli(WallMs - 10_000).toString(),
+        serverHlcWallMs = WallMs - 10_000,
+        serverHlcCounter = 0,
+        durationAcknowledgements = emptyList(),
+        durationsMs = DurationsMs(),
+        taskAcknowledgements = emptyList(),
+        tasks = emptyList(),
     )
+
+    private companion object {
+        const val WallMs = 1_767_225_600_000L
+        const val ServerWallMs = 1_767_225_700_000L
+        const val TaskB = "aaf83054-24b2-8c0e-901f-a974147bfe82"
+    }
 }

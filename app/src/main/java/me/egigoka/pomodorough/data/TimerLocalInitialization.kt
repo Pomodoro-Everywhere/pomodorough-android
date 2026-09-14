@@ -38,6 +38,7 @@ internal data class LocalInitializationData(
     val taskOperations: List<TaskOperation>,
     val autoStartOperations: List<AutoStartOperation>,
     val selectedTaskOperations: List<SelectedTaskOperation>,
+    val neverSent: CoreNeverSentProof,
     val bootstrapResolution: PendingBootstrapResolutionEntity?,
     val decoded: DecodedLocalJson,
 )
@@ -58,19 +59,27 @@ internal class TimerLocalInitializer(
         val stored = workspace.localState()
         val local = stored ?: createLocalState()
         val commandEntities = workspace.loadCommandsBounded()
+        val taskEntities = workspace.loadTaskOperationsBounded()
+        val durationEntities = workspace.loadDurationOperationsBounded()
+        val autoStartEntities = workspace.loadAutoStartOperationsBounded()
+        val selectedEntities = workspace.loadSelectedTaskOperationsBounded()
         return LocalInitializationData(
             storedLocal = stored,
             local = local,
             commandEntities = commandEntities,
             commands = commandEntities.map(PendingCommandEntity::toModel),
             commandDependencies = commandDependencies(commandEntities),
-            durationOperations = workspace.loadDurationOperationsBounded()
-                .map(PendingDurationOperationEntity::toModel),
-            taskOperations = workspace.loadTaskOperationsBounded().map(PendingTaskOperationEntity::toModel),
-            autoStartOperations = workspace.loadAutoStartOperationsBounded()
-                .map(PendingAutoStartOperationEntity::toModel),
-            selectedTaskOperations = workspace.loadSelectedTaskOperationsBounded()
-                .map(PendingSelectedTaskOperationEntity::toModel),
+            durationOperations = durationEntities.map(PendingDurationOperationEntity::toModel),
+            taskOperations = taskEntities.map(PendingTaskOperationEntity::toModel),
+            autoStartOperations = autoStartEntities.map(PendingAutoStartOperationEntity::toModel),
+            selectedTaskOperations = selectedEntities.map(PendingSelectedTaskOperationEntity::toModel),
+            neverSent = CoreNeverSentProof(
+                commands = commandEntities.filter { it.neverSent }.map { it.id },
+                taskOperations = taskEntities.filter { it.neverSent }.map { it.id },
+                durationOperations = durationEntities.filter { it.neverSent }.map { it.id },
+                autoStartOperations = autoStartEntities.filter { it.neverSent }.map { it.id },
+                selectedTaskOperations = selectedEntities.filter { it.neverSent }.map { it.id },
+            ),
             bootstrapResolution = bootstrap.pendingBootstrapResolution(),
             decoded = try {
                 decode(local)

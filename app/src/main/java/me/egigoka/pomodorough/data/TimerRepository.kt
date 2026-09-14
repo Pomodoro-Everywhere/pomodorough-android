@@ -218,6 +218,7 @@ class TimerRepository(
     private var pendingAutoStartOperations = emptyList<AutoStartOperation>()
     private var pendingSelectedTaskOperations = emptyList<SelectedTaskOperation>()
     private var pendingBootstrapResolution: PendingBootstrapResolutionEntity? = null
+    private var neverSentProof = CoreNeverSentProof()
     private var canonicalTimer: CanonicalTimer? = null
     private var canonicalHistory = emptyList<HistoryItem>()
     private var canonicalTasks = emptyList<FocusTask>()
@@ -225,7 +226,6 @@ class TimerRepository(
     private var knownTasks = emptyMap<String, FocusTask>()
     private var tasks = emptyList<FocusTask>()
     private var selectedTaskId: String? = null
-    private val timerTaskRetarget = mutableMapOf<String, String?>()
     private var projection = TimerProjection(null, emptyList())
     private var settings = TimerSettings()
     private var user: User?
@@ -476,6 +476,7 @@ class TimerRepository(
         pendingAutoStartOperations = data.autoStartOperations
         pendingSelectedTaskOperations = data.selectedTaskOperations
         pendingBootstrapResolution = data.bootstrapResolution
+        neverSentProof = data.neverSent
         settings = data.decoded.settings
         canonicalAutoStartBreaks = local.canonicalAutoStartBreaks
         canonicalTimer = data.decoded.canonicalTimer
@@ -598,6 +599,7 @@ class TimerRepository(
         pendingAutoStartOperations = emptyList()
         pendingSelectedTaskOperations = emptyList()
         pendingBootstrapResolution = null
+        neverSentProof = CoreNeverSentProof()
         user = null
         historyResolution = null
         accountSwitch = null
@@ -1047,6 +1049,7 @@ class TimerRepository(
         pendingAutoStartOperations = emptyList()
         pendingSelectedTaskOperations = emptyList()
         pendingBootstrapResolution = null
+        neverSentProof = CoreNeverSentProof()
     }
 
     private fun installClearedSession(
@@ -1378,6 +1381,7 @@ class TimerRepository(
         local = mutation.local
         settings = mutation.settings
         pendingDurationOperations = mutation.operations
+        neverSentProof = neverSentProof.copy(durationOperations = neverSentProof.durationOperations + mutation.operation.id)
         installCoreProjection(mutation.projection)
         publish()
     }
@@ -1397,6 +1401,7 @@ class TimerRepository(
             local = event.plan.local
             settings = event.plan.settings
             pendingAutoStartOperations = event.plan.operations
+            neverSentProof = neverSentProof.copy(autoStartOperations = neverSentProof.autoStartOperations + event.plan.operation.id)
             installCoreProjection(event.plan.projection)
             publish()
             saved = true
@@ -1412,25 +1417,13 @@ class TimerRepository(
             if (taskId != null && tasks.none { it.id == taskId }) return@withLock
             val runningFocusTimer = projection.timer
                 ?.takeIf { it.status in activeStatuses && it.phase == TimerPhase.Focus }
-            val retargetNeeded = runningFocusTimer != null &&
-                timerTaskRetarget.getOrElse(runningFocusTimer.id) { runningFocusTimer.taskId } != taskId
+            val retargetNeeded = runningFocusTimer != null && runningFocusTimer.taskId != taskId
             if (taskId == selectedTaskId && !retargetNeeded) return@withLock
-            val state = timerMutationState()
-            val reservation = reserveMutation(count = 1, withDeviceSequences = false)
-                ?: return@withLock
-            val mutation = plannedMutation {
-                mutationCoordinator.selectedTask(
-                    SelectedTaskMutationInput(state, taskId, reservation),
-                )
+            if (taskId != selectedTaskId) {
+                if (!commitSelectedTask(taskId)) return@withLock
             }
-            if (mutation != null) {
-                val event = transitionCommitter.commit(RepositorySelectedTaskTransition(mutation))
-                local = event.plan.local
-                pendingSelectedTaskOperations = event.plan.operations
-                installCoreProjection(event.plan.projection)
-            }
-            if (runningFocusTimer != null) {
-                retargetRunningTimer(runningFocusTimer.id, taskId)
+            if (runningFocusTimer != null && retargetNeeded) {
+                if (!commitRetarget(runningFocusTimer, taskId)) return@withLock
             }
             publish()
             saved = true
@@ -1438,15 +1431,31 @@ class TimerRepository(
         if (saved) afterLocalMutation()
     }
 
-    private suspend fun retargetRunningTimer(timerId: String, taskId: String?) {
-        timerTaskRetarget[timerId] = taskId
-        val rewritten = retargetStartCommands(pending, timerId, taskId)
-        if (rewritten == pending) return
+    private suspend fun commitSelectedTask(taskId: String?): Boolean {
+        val state = timerMutationState()
+        val reservation = reserveMutation(count = 1, withDeviceSequences = false) ?: return false
+        val mutation = plannedMutation {
+            mutationCoordinator.selectedTask(SelectedTaskMutationInput(state, taskId, reservation))
+        } ?: return false
+        val event = transitionCommitter.commit(RepositorySelectedTaskTransition(mutation))
+        local = event.plan.local
+        pendingSelectedTaskOperations = event.plan.operations
+        neverSentProof = neverSentProof.copy(
+            selectedTaskOperations = neverSentProof.selectedTaskOperations + event.plan.operation.id,
+        )
+        installCoreProjection(event.plan.projection)
+        return true
+    }
+
+    private suspend fun commitRetarget(current: CanonicalTimer, taskId: String?): Boolean {
+        val state = timerMutationState()
+        val reservation = reserveMutation(count = 1, withDeviceSequences = true) ?: return false
+        val mutation = plannedMutation {
+            mutationCoordinator.retarget(TimerRetargetMutationInput(state, current.id, taskId, reservation, currentTimeMillis()))
+        } ?: return false
         try {
-            val queues = pendingSyncQueues().copy(commands = rewritten)
-            timerStore.saveMutationState(local, queues, commandDependencies)
-            pending = rewritten
-            installCoreProjection(projectSynchronizedState())
+            val event = transitionCommitter.commit(RepositoryTimerCommandTransition(mutation))
+            installRetargetMutation(event.plan)
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
@@ -1455,7 +1464,23 @@ class TimerRepository(
             mutationFailure = message
             notice = message
             publish()
+            return false
         }
+        return true
+    }
+
+    private fun installRetargetMutation(mutation: TimerCommandMutationPlan) {
+        local = mutation.local
+        pending = pending + mutation.commands
+        commandDependencies = commandDependencies + mutation.dependencies
+        mutation.commands.forEach { command ->
+            if (command.type == CommandType.Retarget) {
+                neverSentProof = neverSentProof.copy(commands = neverSentProof.commands + command.id)
+            }
+        }
+        installCoreProjection(mutation.projection)
+        publish()
+        scheduleAlarm()
     }
 
     override suspend fun addTask(title: String): Boolean {
@@ -2463,6 +2488,7 @@ class TimerRepository(
         settings = mutation.settings
         pending = pending + mutation.commands
         commandDependencies = commandDependencies + mutation.dependencies
+        neverSentProof = neverSentProof.copy(commands = neverSentProof.commands + mutation.commands.map { it.id })
         installCoreProjection(mutation.projection)
         publish()
         scheduleAlarm()
@@ -2514,6 +2540,12 @@ class TimerRepository(
         knownTasks = mutation.knownTasks
         pendingTaskOperations = mutation.taskOperations
         pendingSelectedTaskOperations = mutation.selectedTaskOperations
+        neverSentProof = neverSentProof.copy(
+            taskOperations = neverSentProof.taskOperations + mutation.operation.id,
+            selectedTaskOperations = mutation.selectedOperation?.let {
+                neverSentProof.selectedTaskOperations + it.id
+            } ?: neverSentProof.selectedTaskOperations,
+        )
         installCoreProjection(mutation.projection)
         publish()
     }
@@ -2723,6 +2755,7 @@ class TimerRepository(
             pendingAutoStartOperations = stored.pending.autoStartOperations
             pendingSelectedTaskOperations = stored.pending.selectedTaskOperations
             pendingBootstrapResolution = stored.bootstrapResolution
+            neverSentProof = stored.neverSent
             settings = stored.settings
             canonicalTimer = stored.canonicalTimer
             canonicalHistory = stored.canonicalHistory
@@ -2761,7 +2794,7 @@ class TimerRepository(
             pendingAutoStartOperations.isEmpty() &&
             pendingSelectedTaskOperations.isEmpty()
 
-    private fun prepareSyncAttempt(identity: SyncAttemptIdentity): SyncAttempt? {
+    private suspend fun prepareSyncAttempt(identity: SyncAttemptIdentity): SyncAttempt? {
         if (historyResolution != null || accountSwitch != null) return null
         if (identity.accountGeneration != accountWorkspaceController.generation ||
             authStatus != AuthStatus.SignedIn || replicationMode() != ReplicationMode.CENTRALIZED
@@ -2775,6 +2808,17 @@ class TimerRepository(
                 sentElapsedRealtimeMs = elapsedRealtimeMillis(),
             ),
         )
+        try {
+            timerStore.retireNeverSent(attempt.request)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            CrashReporter.report(error)
+            notice = error.message ?: appContext.getString(me.egigoka.pomodorough.R.string.sync_stopped_after_a_local_failure)
+            publish()
+            return null
+        }
+        neverSentProof = neverSentProof.retiredFor(attempt.request)
         syncing = true
         retrying = false
         publish()
@@ -2838,6 +2882,7 @@ class TimerRepository(
             retainedCommandDependencies = application.pending.dependencies,
             discardedCommands = application.generatedCommands.discarded,
             discardedCommandDependencies = commandDependencies,
+            retainedNeverSent = neverSentProof.filteredTo(application.pending.queues),
         ),
         application = application,
         response = response,
@@ -2924,6 +2969,7 @@ class TimerRepository(
     private fun centralizedSyncSnapshot() = CentralizedSyncSnapshot(
         local = local,
         queues = pendingSyncQueues(),
+        neverSent = neverSentProof,
         dependencies = commandDependencies,
         canonicalTimer = canonicalTimer,
         canonicalHistory = canonicalHistory,
@@ -2979,6 +3025,7 @@ class TimerRepository(
         pendingAutoStartOperations = reconciled.queues.autoStartOperations
         pendingSelectedTaskOperations = reconciled.queues.selectedTaskOperations
         commandDependencies = reconciled.dependencies
+        neverSentProof = neverSentProof.filteredTo(reconciled.queues)
     }
 
     private fun projectSynchronizedState(
@@ -3028,12 +3075,6 @@ class TimerRepository(
             localizedProjectedTimer(result.canonicalTimer, commands),
             localizedHistory(result.history, commands, defaultDeltaMs = 0L),
         )
-        val (retargetedTimer, retargetedHistory) =
-            applyTimerTaskRetarget(projection.timer, projection.history, timerTaskRetarget)
-        val pruned = pruneTimerTaskRetarget(timerTaskRetarget, retargetedTimer, retargetedHistory)
-        timerTaskRetarget.clear()
-        timerTaskRetarget.putAll(pruned)
-        projection = TimerProjection(retargetedTimer, retargetedHistory)
         alarmCoordinator.reconcileCompletionAlert(projection.timer)
         tasks = result.tasks
         selectedTaskId = result.selectedTaskId
@@ -3129,6 +3170,7 @@ class TimerRepository(
                     retainedAutoStartOperations = application.pending.queues.autoStartOperations,
                     clearSelectedTaskOperations = request.selectedTaskOperations != null,
                     retainedSelectedTaskOperations = application.pending.queues.selectedTaskOperations,
+                    retainedNeverSent = neverSentProof.filteredTo(application.pending.queues),
                 ),
                 application = application,
                 response = response,
@@ -3152,6 +3194,7 @@ class TimerRepository(
         pendingAutoStartOperations = application.pending.queues.autoStartOperations
         pendingSelectedTaskOperations = application.pending.queues.selectedTaskOperations
         pendingBootstrapResolution = null
+        neverSentProof = neverSentProof.filteredTo(pendingSyncQueues())
         canonicalTimer = application.canonical.timer
         canonicalHistory = application.canonical.history
         canonicalTasks = application.canonical.tasks

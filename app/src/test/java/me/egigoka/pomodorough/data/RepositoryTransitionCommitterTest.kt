@@ -209,6 +209,7 @@ private fun centralizedApplication(
     pending = CentralizedReconciledPending(
         local = local,
         queues = retained,
+        projectionQueues = retained,
         dependencies = emptyMap(),
         core = emptyReconciliation(local),
     ),
@@ -234,6 +235,7 @@ private fun centralizedApplication(
 private fun emptyReconciliation(local: LocalStateEntity) = CoreReconciliationResult(
     revision = local.revision,
     pending = CoreProjectionPending(),
+    projectionPending = CoreProjectionPending(),
     dependencies = emptyList(),
     promotedTimerOperationIds = emptySet(),
     droppedTimerOperationIds = emptySet(),

@@ -9,6 +9,7 @@ import me.egigoka.pomodorough.data.local.LocalStateEntity
 internal data class CentralizedSyncSnapshot(
     val local: LocalStateEntity,
     val queues: PendingSyncQueues,
+    val neverSent: CoreNeverSentProof,
     val dependencies: Map<String, String>,
     val canonicalTimer: CanonicalTimer?,
     val canonicalHistory: List<HistoryItem>,
@@ -29,6 +30,7 @@ internal data class CentralizedCanonicalState(
 internal data class CentralizedReconciledPending(
     val local: LocalStateEntity,
     val queues: PendingSyncQueues,
+    val projectionQueues: PendingSyncQueues,
     val dependencies: Map<String, String>,
     val core: CoreReconciliationResult,
 )
@@ -221,17 +223,7 @@ internal class CentralizedSyncCoordinator(
     ): CentralizedBootstrapPreparationTransition {
         val snapshot = input.snapshot
         val discardLocal = input.strategy == BootstrapStrategy.KeepRemote
-        val resolutionQueues = if (discardLocal) {
-            PendingSyncQueues(
-                commands = emptyList(),
-                taskOperations = emptyList(),
-                durationOperations = emptyList(),
-                autoStartOperations = emptyList(),
-                selectedTaskOperations = emptyList(),
-            )
-        } else {
-            snapshot.queues
-        }
+        val resolutionQueues = if (discardLocal) emptyQueues() else snapshot.queues
         val resolutionDependencies = if (discardLocal) emptyMap() else snapshot.dependencies
         bootstrapPreflightError(input, resolutionQueues, resolutionDependencies)?.let {
             return CentralizedBootstrapPreparationTransition.Invalid(it)
@@ -240,12 +232,13 @@ internal class CentralizedSyncCoordinator(
             response = input.bootstrap,
             queues = resolutionQueues,
             sent = CoreReconciliationSent(),
+            neverSent = if (discardLocal) CoreNeverSentProof() else snapshot.neverSent,
             dependencies = resolutionDependencies,
             sampledLocal = input.sampledLocal,
         )
         val projection = projectionDispatcher.apply(
             snapshot.projectionBase(),
-            reconciled.queues.toCorePending(snapshot.local.deviceId),
+            reconciled.projectionQueues.toCorePending(snapshot.local.deviceId),
             input.projectionNow,
         )
         val request = TimerSyncConstruction.bootstrapRequest(
@@ -336,6 +329,7 @@ internal class CentralizedSyncCoordinator(
             response = input.response,
             queues = queues,
             sent = input.request.toCoreSent(),
+            neverSent = if (keepRemote) CoreNeverSentProof() else snapshot.neverSent,
             dependencies = dependencies,
             sampledLocal = input.sampledLocal,
         )
@@ -356,6 +350,19 @@ internal class CentralizedSyncCoordinator(
             canonical,
             input.projectionNow,
         )
+        return resolutionApplication(input, snapshot, reconciled, generated, canonical, projected, dependencies, keepRemote)
+    }
+
+    private fun resolutionApplication(
+        input: CentralizedBootstrapResolutionInput,
+        snapshot: CentralizedSyncSnapshot,
+        reconciled: CentralizedReconciledPending,
+        generated: GeneratedTimerResolution,
+        canonical: CentralizedCanonicalState,
+        projected: CentralizedProjectedState,
+        dependencies: Map<String, String>,
+        keepRemote: Boolean,
+    ): CentralizedSyncApplication {
         val local = synchronizedLocal(
             base = reconciled.local,
             snapshot = snapshot,
@@ -400,22 +407,27 @@ internal class CentralizedSyncCoordinator(
         response: SyncResponse,
         queues: PendingSyncQueues,
         sent: CoreReconciliationSent,
+        neverSent: CoreNeverSentProof,
         dependencies: Map<String, String>,
         sampledLocal: LocalStateEntity,
     ): CentralizedReconciledPending {
-        val core = reconciliationDispatcher.rebase(
+        val filteredProof = neverSent.filteredTo(queues)
+        val core = reconciliationDispatcher.rebaseV2(
             local = queues.toCorePending(sampledLocal.deviceId),
             sent = sent,
+            neverSent = filteredProof,
             response = response,
             dependencies = timerDependencies(queues.commands, dependencies),
         )
         val reconciledQueues = core.pending.toPendingQueues()
+        val reconciledProjection = core.projectionPending.toPendingQueues()
         val reconciledDependencies = core.dependencies.associate {
             it.operationId to it.dependsOnOperationId
         }
         return CentralizedReconciledPending(
             local = localWithReconciledClock(sampledLocal, core.pending),
             queues = reconciledQueues,
+            projectionQueues = reconciledProjection,
             dependencies = reconciledDependencies,
             core = core,
         )
@@ -438,6 +450,7 @@ internal class CentralizedSyncCoordinator(
             response = response,
             queues = queues,
             sent = sentIds.toCoreSent(),
+            neverSent = snapshot.neverSent,
             dependencies = snapshot.dependencies,
             sampledLocal = input.sampledLocal,
         )
@@ -456,6 +469,7 @@ internal class CentralizedSyncCoordinator(
             response = input.response,
             queues = if (input.clearLocal) emptyQueues() else snapshot.queues,
             sent = CoreReconciliationSent(),
+            neverSent = if (input.clearLocal) CoreNeverSentProof() else snapshot.neverSent,
             dependencies = if (input.clearLocal) emptyMap() else snapshot.dependencies,
             sampledLocal = input.sampledLocal,
         )
@@ -476,7 +490,7 @@ internal class CentralizedSyncCoordinator(
             snapshot.local.deviceId,
             canonical,
             response,
-            reconciled.queues,
+            reconciled.projectionQueues,
             now,
         )
         val phase = reconciledSelectedPhase(
@@ -510,7 +524,7 @@ internal class CentralizedSyncCoordinator(
             snapshot.local.deviceId,
             canonical,
             response,
-            reconciled.queues,
+            reconciled.projectionQueues,
             now,
         )
         val settings = snapshot.settings.withDurations(projection.durationsMs).copy(
@@ -532,7 +546,7 @@ internal class CentralizedSyncCoordinator(
             snapshot.local.deviceId,
             canonical,
             response,
-            reconciled.queues,
+            reconciled.projectionQueues,
             now,
         )
         val phase = reconciledSelectedPhase(
@@ -955,4 +969,34 @@ internal class CentralizedSyncCoordinator(
         val ActiveStatuses = setOf(TimerStatus.Running, TimerStatus.Paused)
         val EmptyGeneratedResolution = GeneratedTimerResolution(emptyList(), emptyList(), emptySet())
     }
+}
+
+internal fun CoreNeverSentProof.filteredTo(queues: PendingSyncQueues): CoreNeverSentProof {
+    val commandIds = queues.commands.map { it.id }.toSet()
+    val taskIds = queues.taskOperations.map { it.id }.toSet()
+    val durationIds = queues.durationOperations.map { it.id }.toSet()
+    val autoStartIds = queues.autoStartOperations.map { it.id }.toSet()
+    val selectedIds = queues.selectedTaskOperations.map { it.id }.toSet()
+    return CoreNeverSentProof(
+        commands = commands.filter { it in commandIds },
+        taskOperations = taskOperations.filter { it in taskIds },
+        durationOperations = durationOperations.filter { it in durationIds },
+        autoStartOperations = autoStartOperations.filter { it in autoStartIds },
+        selectedTaskOperations = selectedTaskOperations.filter { it in selectedIds },
+    )
+}
+
+internal fun CoreNeverSentProof.retiredFor(request: SyncRequest): CoreNeverSentProof {
+    val sentCommands = request.commands.map { it.id }.toSet()
+    val sentTasks = request.taskOperations.map { it.id }.toSet()
+    val sentDurations = request.durationOperations.map { it.id }.toSet()
+    val sentAutoStart = request.autoStartOperations.map { it.id }.toSet()
+    val sentSelected = request.selectedTaskOperations.map { it.id }.toSet()
+    return CoreNeverSentProof(
+        commands = commands.filterNot { it in sentCommands },
+        taskOperations = taskOperations.filterNot { it in sentTasks },
+        durationOperations = durationOperations.filterNot { it in sentDurations },
+        autoStartOperations = autoStartOperations.filterNot { it in sentAutoStart },
+        selectedTaskOperations = selectedTaskOperations.filterNot { it in sentSelected },
+    )
 }

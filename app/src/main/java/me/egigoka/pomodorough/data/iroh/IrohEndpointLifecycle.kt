@@ -11,6 +11,7 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
@@ -18,6 +19,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import me.egigoka.pomodorough.crash.CrashReporter
 
 internal data class IrohEndpointSession(
@@ -60,6 +62,7 @@ internal class IrohEndpointLifecycle(
     private val scope = CoroutineScope(lifecycleJob + dispatcher)
     private val mutex = Mutex()
     private val closed = AtomicBoolean(false)
+    private var teardownComplete = false
     private val owner = AtomicLong()
 
     private var endpoint: Endpoint? = null
@@ -111,9 +114,22 @@ internal class IrohEndpointLifecycle(
     }
 
     suspend fun close() {
-        if (!closed.compareAndSet(false, true)) return
-        mutex.withLock { stopLocked() }
-        lifecycleJob.cancelAndJoin()
+        closed.set(true)
+        // Closing blocks new work immediately; every caller waits for teardown,
+        // even when already cancelled or racing another close.
+        withContext(NonCancellable) {
+            try {
+                mutex.withLock {
+                    if (!teardownComplete) {
+                        stopLocked()
+                        teardownComplete = true
+                    }
+                }
+            } finally {
+                lifecycleJob.cancelAndJoin()
+            }
+        }
+        currentCoroutineContext().ensureActive()
     }
 
     suspend fun stopIf(condition: () -> Boolean) = mutex.withLock {
