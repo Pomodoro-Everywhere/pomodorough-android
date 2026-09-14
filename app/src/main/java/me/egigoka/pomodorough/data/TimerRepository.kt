@@ -335,7 +335,7 @@ class TimerRepository(
                 retrying = false
                 authStatus = AuthStatus.SignedOut
                 user = null
-                notice = AccountDeletionOutcomeUnknownMessage
+                notice = appContext.getString(R.string.account_deletion_outcome_unknown)
                 publish()
                 initialized.complete(Unit)
                 true
@@ -355,13 +355,13 @@ class TimerRepository(
             credentialRecoveryRequired = true
             authStatus = AuthStatus.SignedOut
             user = null
-            notice = UnreadableCredentialMessage
+            notice = appContext.getString(R.string.unreadable_credential)
             publish()
             true
         }
         AuthCredentialState.LogoutPending -> {
             authStatus = AuthStatus.SignedOut
-            notice = PendingLogoutMessage
+            notice = appContext.getString(R.string.pending_logout)
             publish()
             logoutRevocations.startIfNeeded()
             true
@@ -750,7 +750,7 @@ class TimerRepository(
         user = null
         this.notice = notice
         restorePendingResolutionForSignedOut(
-            "Sign in again to retry the exact saved history choice.",
+            appContext.getString(R.string.sign_in_again_to_retry_history_choice),
         )
         publish()
     }
@@ -961,7 +961,7 @@ class TimerRepository(
         } catch (error: Exception) {
             // expected-silent: remote sign-out preservation failure surfaces as a notice, not a crash.
             actionMutex.withLock {
-                notice = error.message ?: "Could not preserve remote sign-out work"
+                notice = error.message ?: appContext.getString(R.string.could_not_preserve_remote_sign_out)
                 publish()
             }
             false
@@ -977,7 +977,7 @@ class TimerRepository(
         conflict = null
         terminalSyncError = null
         restorePendingResolutionForSignedOut(
-            "Sign in again to retry the exact saved history choice.",
+            appContext.getString(R.string.sign_in_again_to_retry_history_choice),
         )
         publish()
     }
@@ -1131,14 +1131,18 @@ class TimerRepository(
             .onFailure { error ->
                 if (error is CancellationException) throw error
                 actionMutex.withLock {
-                    notice = error.message ?: AccountDeletionRecoveryFailedMessage
+                    notice = error.message ?: appContext.getString(R.string.account_deletion_recovery_failed)
                     publish()
                 }
             }
     }
 
     private suspend fun scrubDeletedAccount(deletionGeneration: Long) {
-        replication?.clearAccountData()
+        // A78 product decision: deletion wipes Iroh rooms, peers,
+        // operations, and the vault (join-capable secrets must not
+        // survive); logout keeps device-local P2P rows and only scrubs
+        // account fields (see IrohRoomMetadataPersistence).
+        replication?.scrubDeletedAccount()
         actionMutex.withLock {
             if (accountWorkspaceController.generation != deletionGeneration) return@withLock
             val clearedSettings = runCatching {
@@ -1999,7 +2003,7 @@ class TimerRepository(
             // expected-silent: session expiry surfaces as sign-in notice, not a crash.
             handleAuthenticationRequired(
                 identity,
-                "Session expired. Sign in again to retry the exact saved history choice.",
+                appContext.getString(R.string.session_expired_sign_in_again_history_choice),
             )
         } catch (error: ApiException) {
             // expected-silent: server rejection surfaces as resolution UI, not a crash.
@@ -3877,14 +3881,6 @@ class TimerRepository(
         const val AccountDeletionPrepared = "prepared"
         const val AccountDeletionRemoteCommitted = "remote_committed"
         const val AccountLocalScrubRequired = "local_scrub_required"
-        const val AccountDeletionOutcomeUnknownMessage =
-            "Account deletion outcome is unresolved. Retry deletion or reset local account data."
-        const val AccountDeletionRecoveryFailedMessage =
-            "Account was deleted remotely, but local cleanup must be retried."
-        const val UnreadableCredentialMessage =
-            "Stored sign-in credentials are unreadable. Reset local account data to sign in again."
-        const val PendingLogoutMessage =
-            "Sign-out revocation is pending. Sign in to retry it before creating a new session."
         val commandTypes = setOf(
             CommandType.Start,
             CommandType.Pause,

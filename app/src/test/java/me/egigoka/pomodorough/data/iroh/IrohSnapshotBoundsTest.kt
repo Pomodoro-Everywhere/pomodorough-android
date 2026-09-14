@@ -9,7 +9,7 @@ import me.egigoka.pomodorough.data.local.IrohPeerEntity
 import me.egigoka.pomodorough.data.local.IrohPeersDao
 import me.egigoka.pomodorough.data.local.IrohRecordsDao
 import me.egigoka.pomodorough.data.local.IrohRoomMetadataDao
-import me.egigoka.pomodorough.data.local.IrohWorkspaceTransactionsDao
+import me.egigoka.pomodorough.data.local.IrohPersistenceDao
 import me.egigoka.pomodorough.data.local.LocalWorkspaceCoordinator
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -50,6 +50,8 @@ private class CountingRecordsDao(private val operationCount: Int) : IrohRecordsD
     override suspend fun insertIrohOperations(operations: List<IrohOperationEntity>) = emptyList<Long>()
 
     override suspend fun insertNewIrohOperations(operations: List<IrohOperationEntity>) = Unit
+
+    override suspend fun deleteAllIrohOperations() = Unit
 }
 
 private class CountingPeersDao(private val peerCount: Int) : IrohPeersDao {
@@ -62,11 +64,13 @@ private class CountingPeersDao(private val peerCount: Int) : IrohPeersDao {
     override suspend fun irohPeerCount(roomId: String): Int = peerCount
 
     override suspend fun upsertIrohPeer(peer: IrohPeerEntity) = Unit
+
+    override suspend fun deleteAllIrohPeers() = Unit
 }
 
 private fun fakeMetadata(): IrohRoomMetadataPersistence = IrohRoomMetadataPersistence(
     dao = proxy(
-        IrohWorkspaceTransactionsDao::class.java,
+        IrohPersistenceDao::class.java,
         mapOf("replicationSettings" to null, "upsertReplicationSettings" to Unit),
     ),
     conflicts = proxy(IrohConflictsDao::class.java, emptyMap()),

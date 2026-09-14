@@ -5,8 +5,8 @@ import kotlinx.serialization.encodeToString
 import me.egigoka.pomodorough.data.TimerSettings
 import me.egigoka.pomodorough.data.local.IrohConflictsDao
 import me.egigoka.pomodorough.data.local.IrohPeerEntity
+import me.egigoka.pomodorough.data.local.IrohPersistenceDao
 import me.egigoka.pomodorough.data.local.IrohRoomEntity
-import me.egigoka.pomodorough.data.local.IrohWorkspaceTransactionsDao
 import me.egigoka.pomodorough.data.local.LocalStateEntity
 import me.egigoka.pomodorough.data.local.LocalWorkspaceCoordinator
 import me.egigoka.pomodorough.data.local.LocalWorkspaceSnapshot
@@ -14,7 +14,7 @@ import me.egigoka.pomodorough.data.local.ReplicationSettingsEntity
 import me.egigoka.pomodorough.data.local.loadRoomsBounded
 
 internal class IrohRoomMetadataPersistence(
-    private val dao: IrohWorkspaceTransactionsDao,
+    private val dao: IrohPersistenceDao,
     private val conflicts: IrohConflictsDao,
     private val vault: IrohSecretVault,
     private val peerRegistry: IrohPeerRegistryPersistence,
@@ -284,6 +284,19 @@ internal class IrohRoomMetadataPersistence(
             malformedRoomIds = malformedRoomIds,
             snapshot = current,
             settings = clearedSettings,
+        )
+    }
+
+    // A78 product decision: account DELETION wipes rooms, peers,
+    // operations, conflicts, and the Iroh vault (endpoint secret +
+    // Keystore key). LOGOUT keeps device-local P2P rows and secrets
+    // (clearAccountData scrubs account fields only) so signing back in
+    // on the same device restores rooms; deletion is irreversible so it
+    // must not leave join-capable secrets behind.
+    suspend fun scrubDeletedAccount() = workspaceCoordinator.withLock {
+        vault.clearAccountSecrets()
+        dao.scrubDeletedIrohWorkspace(
+            ReplicationSettingsEntity(mode = ReplicationMode.OFFLINE.name),
         )
     }
 }

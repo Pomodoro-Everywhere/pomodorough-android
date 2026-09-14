@@ -303,7 +303,7 @@ private fun HeaderTextButton(label: String, onClick: () -> Unit, enabled: Boolea
 private fun HeaderSyncRow(state: AppState) {
     val accountLabel = headerAccountLabel(state)
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Surface(color = syncColor(state.syncStatus), contentColor = darkModeTextColor(Ink), shape = CircleShape) {
+        Surface(color = syncColor(state.syncStatus), contentColor = contentColorForContainer(syncColor(state.syncStatus)), shape = CircleShape) {
             Row(
                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
                 verticalAlignment = Alignment.CenterVertically,

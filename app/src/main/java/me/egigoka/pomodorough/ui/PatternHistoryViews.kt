@@ -224,7 +224,7 @@ internal fun PhaseCard(
     val selected = settings.selectedPhase == phase
     val minutes = settings.minutesFor(phase)
     val palette = phasePalette(phase)
-    val selectedTextColor = darkModeTextColor(Ink)
+    val selectedTextColor = contentColorForContainer(palette.container)
     val durationDescription = pluralStringResource(R.plurals.minutes_long, minutes, minutes)
     Surface(
         onClick = { onSelect(phase) },
@@ -494,7 +494,7 @@ private fun HistoryPhaseStamp(phase: String, palette: PhasePalette) {
     Surface(
         modifier = Modifier.size(48.dp),
         color = palette.container,
-        contentColor = darkModeTextColor(Ink),
+        contentColor = contentColorForContainer(palette.container),
         shape = RoundedCornerShape(16.dp),
     ) {
         Box(contentAlignment = Alignment.Center) {

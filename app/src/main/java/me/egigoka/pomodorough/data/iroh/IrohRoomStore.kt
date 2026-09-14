@@ -126,4 +126,6 @@ class IrohRoomStore(
         metadata.discardIncompleteInactiveRoom(roomId)
 
     suspend fun clearAccountData() = metadata.clearAccountData()
+
+    suspend fun scrubDeletedAccount() = metadata.scrubDeletedAccount()
 }

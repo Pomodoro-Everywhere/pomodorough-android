@@ -41,6 +41,9 @@ interface IrohRoomMetadataDao {
     @Query("DELETE FROM iroh_rooms WHERE roomId = :roomId")
     suspend fun deleteIrohRoom(roomId: String)
 
+    @Query("DELETE FROM iroh_rooms")
+    suspend fun deleteAllIrohRooms()
+
     @Query(
         "DELETE FROM iroh_rooms WHERE NOT EXISTS (" +
             "SELECT 1 FROM iroh_operations WHERE iroh_operations.roomId = iroh_rooms.roomId " +
@@ -62,6 +65,9 @@ interface IrohPeersDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertIrohPeer(peer: IrohPeerEntity)
+
+    @Query("DELETE FROM iroh_peers")
+    suspend fun deleteAllIrohPeers()
 }
 
 @Dao
@@ -100,6 +106,9 @@ interface IrohRecordsDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertIrohOperations(operations: List<IrohOperationEntity>): List<Long>
 
+    @Query("DELETE FROM iroh_operations")
+    suspend fun deleteAllIrohOperations()
+
     @Insert
     suspend fun insertNewIrohOperations(operations: List<IrohOperationEntity>)
 }
@@ -127,4 +136,7 @@ interface IrohConflictsDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertIrohConflict(conflict: IrohConflictEntity)
+
+    @Query("DELETE FROM iroh_conflicts")
+    suspend fun deleteAllIrohConflicts()
 }

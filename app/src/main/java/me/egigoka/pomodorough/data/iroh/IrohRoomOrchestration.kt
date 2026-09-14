@@ -48,6 +48,7 @@ internal data class IrohRoomPersistencePort(
     val discardIncompleteInactiveRoom: suspend (String) -> Unit,
     val leaveActiveRoom: suspend () -> Unit,
     val clearAccountData: suspend () -> Unit,
+    val scrubDeletedAccount: suspend () -> Unit = ::unsupportedRecoveryAction,
     val validateRoomSecrets: suspend () -> Unit = ::unsupportedRecoveryAction,
     val resetIdentityData: suspend () -> Unit = ::unsupportedRecoveryAction,
 )
@@ -215,6 +216,18 @@ internal class IrohRoomOrchestration(
 
     suspend fun clearAccountData() = mutex.withLock {
         persistence.clearAccountData()
+        publish(
+            service.state.value.copy(
+                mode = ReplicationMode.OFFLINE,
+                operationCount = 0,
+                invite = null,
+            ),
+        )
+        initialized = true
+    }
+
+    suspend fun scrubDeletedAccount() = mutex.withLock {
+        persistence.scrubDeletedAccount()
         publish(
             service.state.value.copy(
                 mode = ReplicationMode.OFFLINE,

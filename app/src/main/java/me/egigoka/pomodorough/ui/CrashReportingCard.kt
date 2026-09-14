@@ -21,8 +21,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import me.egigoka.pomodorough.BuildConfig
 import me.egigoka.pomodorough.R
 import me.egigoka.pomodorough.crash.CrashReportingConsent
+import me.egigoka.pomodorough.crash.CrashReportingRuntime
 
 @Composable
 internal fun CrashReportingCard(modifier: Modifier = Modifier) {
@@ -54,7 +56,21 @@ internal fun CrashReportingCard(modifier: Modifier = Modifier) {
                 checked = enabled,
                 onCheckedChange = {
                     enabled = it
+                    // A76: opt-out takes effect immediately (no restart):
+                    // Sentry.close() stops errors + session replay; re-init
+                    // on re-enable restores scrubbed reporting.
                     CrashReportingConsent.setEnabled(context, it)
+                    CrashReportingRuntime.applyConsent(
+                        enabled = it,
+                        onEnable = {
+                            CrashReportingRuntime.start(
+                                context,
+                                BuildConfig.SENTRY_DSN,
+                                "${BuildConfig.VERSION_NAME}+${BuildConfig.VERSION_CODE}",
+                            )
+                        },
+                        onDisable = { CrashReportingRuntime.stop() },
+                    )
                 },
                 modifier = Modifier.testTag("crash_reporting_switch"),
             )

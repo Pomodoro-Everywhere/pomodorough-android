@@ -20,6 +20,7 @@ object CrashReporter {
 
     fun report(error: Throwable) {
         if (!shouldReport(error)) return
+        if (!CrashReportingRuntime.reportingEnabled) return
         try {
             delegate(error)
         } catch (failure: Throwable) {

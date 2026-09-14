@@ -107,6 +107,17 @@ class IrohSecretVault private constructor(
         }
     }
 
+    // A78: account-deletion wipe. Removes the endpoint secret payload
+    // plus the Keystore key so saved room secrets become undecryptable.
+    @Synchronized
+    @SuppressLint("ApplySharedPref")
+    fun clearAccountSecrets() {
+        deleteKey()
+        check(preferences.edit().remove(EndpointPayloadKey).remove(ResetPendingKey).commit()) {
+            "Could not wipe Iroh account secrets"
+        }
+    }
+
     private fun decodeEndpointPayload(encoded: String): ByteArray = try {
         Base64.decode(encoded, Base64.NO_WRAP)
     } catch (error: IllegalArgumentException) {

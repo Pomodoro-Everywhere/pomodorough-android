@@ -147,7 +147,7 @@ internal fun TimerHero(
     val phase = displayPhase(state.timer, state.settings)
     val showContextLabel = true
     val palette = phasePalette(phase)
-    val textColor = darkModeTextColor(palette.onContainer)
+    val textColor = contentColorForContainer(palette.container)
     val containerColor by animateColorAsState(palette.container, label = "timer container")
     val corner by animateDpAsState(
         targetValue = when (status) {
@@ -308,7 +308,7 @@ internal fun LandscapeTimerHero(
     showContextLabel: Boolean,
 ) {
     Column(
-        modifier = Modifier.padding(14.dp),
+        modifier = Modifier.padding(14.dp).verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         if (showContextLabel) {
@@ -318,11 +318,20 @@ internal fun LandscapeTimerHero(
                 style = MaterialTheme.typography.labelMedium,
             )
         }
-        LandscapeTimerReadout(state, Modifier.weight(1f))
+        LandscapeTimerReadout(state, Modifier.fillMaxWidth())
         LongBreakProgress(state.longBreakProgress, darkModeTextColor(Butter))
         LandscapeTaskSelector(state.taskSelectorState, actions.onSelectTask)
         LandscapeTimerActions(state, actions)
     }
+}
+
+// A75: landscape readout derives from constraints (portrait-orbit
+// pattern). Proportions of the available box, capped to a readable
+// band so small-landscape phones shrink instead of clipping.
+internal fun landscapeReadoutFontSize(availableHeight: Dp, availableWidth: Dp): androidx.compose.ui.unit.TextUnit {
+    val byHeight = availableHeight.value * 0.28f
+    val byWidth = availableWidth.value * 0.11f
+    return min(byHeight, byWidth).coerceIn(40f, 84f).sp
 }
 
 @Composable
@@ -391,29 +400,32 @@ internal fun LandscapeTimerReadout(
 ) {
     val textColor = darkModeTextColor(Butter)
     val readout = timerReadout(state, textColor, "Landscape timer progress")
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .background(Cloud.copy(alpha = 0.07f), RoundedCornerShape(20.dp))
-            .clearAndSetSemantics {
-                progressBarRangeInfo = ProgressBarRangeInfo(readout.progress, 0f..1f)
-                contentDescription = readout.description
-            }
-            .padding(horizontal = 20.dp, vertical = 8.dp),
-    ) {
-        LandscapeReadoutHeader(readout.phase, textColor)
-        Text(
-            text = readout.timeText,
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-            color = textColor,
-            fontFamily = FontFamily.Monospace,
-            fontWeight = FontWeight.Black,
-            fontSize = 112.sp,
-            letterSpacing = (-6).sp,
-            maxLines = 1,
-            textAlign = TextAlign.Center,
-        )
-        TimerProgressBar(readout.animatedProgress)
+    BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
+        val fontSize = landscapeReadoutFontSize(maxHeight, maxWidth)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Cloud.copy(alpha = 0.07f), RoundedCornerShape(20.dp))
+                .clearAndSetSemantics {
+                    progressBarRangeInfo = ProgressBarRangeInfo(readout.progress, 0f..1f)
+                    contentDescription = readout.description
+                }
+                .padding(horizontal = 20.dp, vertical = 8.dp),
+        ) {
+            LandscapeReadoutHeader(readout.phase, textColor)
+            Text(
+                text = readout.timeText,
+                modifier = Modifier.fillMaxWidth(),
+                color = textColor,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Black,
+                fontSize = fontSize,
+                letterSpacing = (-6).sp,
+                maxLines = 1,
+                textAlign = TextAlign.Center,
+            )
+            TimerProgressBar(readout.animatedProgress)
+        }
     }
 }
 
@@ -527,7 +539,7 @@ internal fun TimerOrbit(
     palette: PhasePalette,
     maxSize: Dp,
 ) {
-    val textColor = darkModeTextColor(palette.onContainer)
+    val textColor = contentColorForContainer(palette.container)
     val readout = timerReadout(state, textColor, "Timer progress")
     BoxWithConstraints(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         val orbitSize = min(min(maxWidth.value, maxSize.value), 318f).dp

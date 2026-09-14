@@ -144,7 +144,7 @@ internal fun MessageCard(
     Surface(
         modifier = modifier.fillMaxWidth(),
         color = containerColor,
-        contentColor = darkModeTextColor(Ink),
+        contentColor = contentColorForContainer(containerColor),
         shape = MaterialTheme.shapes.large,
     ) {
         Row(
@@ -156,7 +156,7 @@ internal fun MessageCard(
                 Text(message, style = MaterialTheme.typography.bodyMedium)
             }
             TextButton(onClick = onDismiss, modifier = Modifier.heightIn(min = 48.dp)) {
-                Text(stringResource(R.string.dismiss), color = darkModeTextColor(Ink))
+                Text(stringResource(R.string.dismiss), color = contentColorForContainer(containerColor))
             }
         }
     }
@@ -235,6 +235,34 @@ internal fun SectionLabel(text: String) {
 @Composable
 internal fun darkModeTextColor(lightColor: Color): Color =
     if (LocalPomodoroughDarkTheme.current) Color.White else lightColor
+
+// A77: Lavender keeps Ink text in both themes. White-on-Lavender is
+// 2.48:1 (WCAG AA fail); Ink-on-Lavender is 7.13:1. Other containers
+// keep the dark-mode inversion (light Butter needs Ink, dark brown
+// tertiary needs White).
+internal fun textColorOnLavender(): Color = Ink
+
+internal fun contrastRatio(foreground: Color, background: Color): Double {
+    val light = relativeLuminance(foreground)
+    val dark = relativeLuminance(background)
+    val high = maxOf(light, dark)
+    val low = minOf(light, dark)
+    return (high + 0.05) / (low + 0.05)
+}
+
+internal fun relativeLuminance(color: Color): Double =
+    0.2126 * linearChannel(color.red) +
+        0.7152 * linearChannel(color.green) +
+        0.0722 * linearChannel(color.blue)
+
+internal fun linearChannel(value: Float): Double {
+    val step = value.toDouble()
+    return if (step <= 0.04045) step / 12.92 else Math.pow((step + 0.055) / 1.055, 2.4)
+}
+
+@Composable
+internal fun contentColorForContainer(container: Color): Color =
+    if (container == Lavender) textColorOnLavender() else darkModeTextColor(Ink)
 
 internal data class PhasePalette(
     val container: Color,

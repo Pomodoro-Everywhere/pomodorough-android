@@ -39,14 +39,20 @@ class CrashReportingInitTest {
             .readText()
         val gate = application.indexOf("CrashReportingConsent.shouldStart")
         val consentRead = application.indexOf("CrashReportingConsent.isEnabled")
-        val init = application.indexOf("SentryAndroid.init")
-        val configure = application.indexOf("CrashReportingInit.configure")
+        // A76: init moved behind CrashReportingRuntime.start so the
+        // opt-out toggle can re-init without a restart.
+        val start = application.indexOf("CrashReportingRuntime.start")
+        val runtime = productionFile("me/egigoka/pomodorough/crash/CrashReportingRuntime.kt")
+            .readText()
+        val init = runtime.indexOf("SentryAndroid.init")
+        val configure = runtime.indexOf("CrashReportingInit.configure")
 
         assertTrue(gate >= 0)
         assertTrue(consentRead >= 0)
+        assertTrue(start >= 0)
         assertTrue(init >= 0)
         assertTrue(configure >= 0)
-        assertTrue(gate < init)
+        assertTrue(gate < start)
         assertTrue(init < configure)
     }
 

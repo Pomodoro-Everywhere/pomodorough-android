@@ -27,6 +27,9 @@ interface IrohReplicationController {
         // Account quarantine is optional for lightweight replication adapters.
     }
     suspend fun clearAccountData()
+    suspend fun scrubDeletedAccount() {
+        clearAccountData()
+    }
     fun onForeground()
     fun onBackground() {
         // Lifecycle observation is optional for replication adapters.
@@ -84,6 +87,7 @@ class IrohReplicationRepository(
                 Unit
             },
             clearAccountData = store::clearAccountData,
+            scrubDeletedAccount = store::scrubDeletedAccount,
             validateRoomSecrets = store::validateRoomSecrets,
             resetIdentityData = store::resetIdentityData,
         ),
@@ -112,6 +116,8 @@ class IrohReplicationRepository(
     override suspend fun releaseAccountQuarantine() = orchestration.releaseAccountQuarantine()
 
     override suspend fun clearAccountData() = orchestration.clearAccountData()
+
+    override suspend fun scrubDeletedAccount() = orchestration.scrubDeletedAccount()
 
     override fun onForeground() = orchestration.onForeground()
 

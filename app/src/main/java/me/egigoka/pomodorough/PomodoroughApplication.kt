@@ -2,13 +2,12 @@ package me.egigoka.pomodorough
 
 import android.app.Application
 import computer.iroh.IrohAndroid
-import io.sentry.android.core.SentryAndroid
 import java.util.concurrent.TimeUnit
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import me.egigoka.pomodorough.core.SharedCore
 import me.egigoka.pomodorough.crash.CrashReportingConsent
-import me.egigoka.pomodorough.crash.CrashReportingInit
+import me.egigoka.pomodorough.crash.CrashReportingRuntime
 import me.egigoka.pomodorough.data.TimerRepository
 import me.egigoka.pomodorough.data.api.PomodoroughApi
 import me.egigoka.pomodorough.data.auth.AuthRepository
@@ -34,19 +33,18 @@ class PomodoroughApplication : Application() {
 
     private fun startCrashReporting() {
         val dsn = BuildConfig.SENTRY_DSN
-        if (!CrashReportingConsent.shouldStart(dsn, CrashReportingConsent.isEnabled(this))) {
+        // A76: launch-time gate also seeds the runtime toggle so a
+        // later opt-out can Sentry.close() without a restart.
+        val enabled = CrashReportingConsent.shouldStart(dsn, CrashReportingConsent.isEnabled(this))
+        CrashReportingRuntime.reportingEnabled = enabled
+        if (!enabled) {
             return
         }
-        SentryAndroid.init(this) { options ->
-            options.release = "${BuildConfig.VERSION_NAME}+${BuildConfig.VERSION_CODE}"
-            options.environment = "production"
-            CrashReportingInit.configure(options, dsn)
-            options.sessionReplay.sessionSampleRate = 0.1
-            options.sessionReplay.onErrorSampleRate = 1.0
-            // Masking flags are setter-only on SentryReplayOptions.
-            options.sessionReplay.setMaskAllText(true)
-            options.sessionReplay.setMaskAllImages(true)
-        }
+        CrashReportingRuntime.start(
+            this,
+            dsn,
+            "${BuildConfig.VERSION_NAME}+${BuildConfig.VERSION_CODE}",
+        )
     }
 }
 

@@ -339,11 +339,17 @@ private class InventoryPersistenceHarness(currentTimeMillis: () -> Long = { 1L }
         override suspend fun hasIrohGenesis(roomId: String) = 0
         override suspend fun insertIrohOperations(operations: List<IrohOperationEntity>) = emptyList<Long>()
         override suspend fun insertNewIrohOperations(operations: List<IrohOperationEntity>) = Unit
+        override suspend fun deleteAllIrohOperations() {
+            records.clear()
+        }
     }
     private val conflictDao = object : IrohConflictsDao {
         override suspend fun irohConflict(roomId: String): IrohConflictEntity? = null
         override suspend fun upsertIrohConflict(conflict: IrohConflictEntity) {
             savedConflicts += conflict
+        }
+        override suspend fun deleteAllIrohConflicts() {
+            savedConflicts.clear()
         }
     }
     private val canonicalRecords = IrohCanonicalRecordPersistence(
@@ -381,6 +387,8 @@ private class RegistryPersistenceHarness : IrohRoomTransactionsDao {
     override suspend fun updateIrohRoom(room: IrohRoomEntity) { calls += "updateRoom" }
     override suspend fun deleteIrohRoom(roomId: String) { calls += "deleteRoom" }
 
+    override suspend fun deleteAllIrohRooms() { calls += "deleteAllRooms" }
+
     override suspend fun deleteIncompleteIrohRooms() { calls += "deleteIncompleteRooms" }
     override suspend fun irohPeers(roomId: String): List<IrohPeerEntity> {
         calls += "listPeers"
@@ -398,6 +406,7 @@ private class RegistryPersistenceHarness : IrohRoomTransactionsDao {
         calls += "upsertPeer"
         upsertedPeers += peer
     }
+    override suspend fun deleteAllIrohPeers() { calls += "deleteAllPeers" }
 }
 
 private fun operation(

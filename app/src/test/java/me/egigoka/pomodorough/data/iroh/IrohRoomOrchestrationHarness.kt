@@ -48,6 +48,7 @@ internal class IrohRoomOrchestrationHarness(
     var syncCount = 0
     var joinCount = 0
     var clearCount = 0
+    var scrubCount = 0
     val modes = mutableListOf<ReplicationMode>()
     val discardedRooms = mutableListOf<String>()
     val createdNames = mutableListOf<String?>()
@@ -118,6 +119,13 @@ internal class IrohRoomOrchestrationHarness(
                 room = null
             },
             clearAccountData = { clearCount += 1 },
+            scrubDeletedAccount = {
+                scrubCount += 1
+                roomSecret?.fill(0)
+                roomSecret = null
+                room = null
+                settings = ReplicationSettingsEntity(mode = ReplicationMode.OFFLINE.name)
+            },
         ),
     )
 

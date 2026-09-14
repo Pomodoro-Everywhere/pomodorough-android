@@ -191,4 +191,13 @@ interface IrohPersistenceDao :
     IrohRoomTransactionsDao,
     IrohWorkspaceTransactionsDao,
     IrohInventoryDao,
-    IrohConflictsDao
+    IrohConflictsDao {
+    @Transaction
+    suspend fun scrubDeletedIrohWorkspace(settings: ReplicationSettingsEntity) {
+        deleteAllIrohOperations()
+        deleteAllIrohPeers()
+        deleteAllIrohConflicts()
+        deleteAllIrohRooms()
+        upsertReplicationSettings(settings)
+    }
+}
