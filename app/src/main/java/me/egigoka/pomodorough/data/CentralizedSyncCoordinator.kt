@@ -1000,3 +1000,22 @@ internal fun CoreNeverSentProof.retiredFor(request: SyncRequest): CoreNeverSentP
         selectedTaskOperations = selectedTaskOperations.filterNot { it in sentSelected },
     )
 }
+
+// Bootstrap resolution publishes queues exactly like a sync attempt: an
+// interrupted resolve remains possibly delivered, so publication retires the
+// published proof. Without this, a resolution retry reconciles with the same
+// ids in both sent and neverSent, which Core rejects.
+internal fun CoreNeverSentProof.retiredForResolution(request: BootstrapResolutionRequest): CoreNeverSentProof {
+    val sentCommands = request.commands.map { it.id }.toSet()
+    val sentTasks = request.taskOperations.map { it.id }.toSet()
+    val sentDurations = request.durationOperations.map { it.id }.toSet()
+    val sentAutoStart = request.autoStartOperations.orEmpty().map { it.id }.toSet()
+    val sentSelected = request.selectedTaskOperations.orEmpty().map { it.id }.toSet()
+    return CoreNeverSentProof(
+        commands = commands.filterNot { it in sentCommands },
+        taskOperations = taskOperations.filterNot { it in sentTasks },
+        durationOperations = durationOperations.filterNot { it in sentDurations },
+        autoStartOperations = autoStartOperations.filterNot { it in sentAutoStart },
+        selectedTaskOperations = selectedTaskOperations.filterNot { it in sentSelected },
+    )
+}

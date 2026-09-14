@@ -161,7 +161,7 @@ class BootstrapResolutionTest {
 
         val request = service.resolutionRequests.single()
         assertEquals(BootstrapStrategy.ReplaceRemote, request.strategy)
-        assertRebasedCommands(commands, request.commands, 1_767_225_600_002)
+        assertExactRequestCommands(commands, request.commands)
         assertEquals(listOf("me", "bootstrap", "resolve"), service.callOrder.take(3))
         assertEquals("user-1", database.timerDao().localState()?.ownerUserId)
         assertEquals(listOf(canonicalHistory), repository.state.value.history)
@@ -1142,7 +1142,8 @@ class BootstrapResolutionTest {
         assertEquals(command.id, request.commands.single().id)
         assertEquals(taskOperation.id, request.taskOperations.single().id)
         assertEquals(durationOperation.id, request.durationOperations.single().id)
-        assertTrue(request.commands.single().hlcWallMs in 1_767_225_300_000L..1_767_225_900_000L)
+        // V2 immutable: the request carries the exact inserted wall clock.
+        assertEquals(now, request.commands.single().hlcWallMs)
         assertEquals(
             request.commands.single().hlcWallMs,
             Instant.parse(request.commands.single().occurredAt).toEpochMilli(),
@@ -1194,13 +1195,21 @@ class BootstrapResolutionTest {
 
     @Test
     fun networkRetryUsesExactPersistedRequestIdentityAndPayload() = runBlocking {
-        val commands = completedLocalCommands()
+        // V2 immutable: seeds must clear the revision-5 head so the local
+        // history stays projected; the retry then resends them bit-for-bit.
+        val commands = completedLocalCommands().mapIndexed { index, command ->
+            command.copy(hlcWallMs = 1_767_225_600_006 + index)
+        }
         val task = requireNotNull(TaskReducer.taskFromTitle("Retry task"))
-        val taskOperation = taskOperation(task).copy(id = "task-operation-retry")
+        val taskOperation = taskOperation(task).copy(
+            id = "task-operation-retry",
+            hlcWallMs = 1_767_225_600_006,
+        )
         val durationOperation = testDurationOperation(
             id = "duration-operation-retry",
             phase = TimerPhase.Focus,
             durationMs = 30 * 60_000L,
+            wallMs = 1_767_225_600_006,
         )
         database.timerDao().insertState(
             testState(deviceSequence = 2).copy(
@@ -1402,7 +1411,7 @@ class BootstrapResolutionTest {
         val retried = service.resolutionRequests.last()
         assertNotEquals(conflicted.requestId, retried.requestId)
         assertEquals(4L, retried.expectedRevision)
-        assertRebasedCommands(commands, retried.commands, 1_767_225_600_004)
+        assertExactRequestCommands(commands, retried.commands)
         assertTrue(database.timerDao().pendingCommands().isEmpty())
     }
 
@@ -1412,6 +1421,9 @@ class BootstrapResolutionTest {
         val operation = testAutoStartOperation(
             id = "00000000-0000-4000-8000-000000000001",
             enabled = true,
+            // V2 immutable: the retained op must clear both resolve heads to
+            // stay projected; its payload is never rewritten on retry.
+            wallMs = 1_767_225_600_003,
         )
         database.timerDao().insertState(testState(user = profile))
         database.timerDao().insertAutoStartOperation(PendingAutoStartOperationEntity.from(operation))
@@ -1463,7 +1475,7 @@ class BootstrapResolutionTest {
         val retainedOperation = database.timerDao().pendingAutoStartOperations().single().toModel()
         assertEquals(operation.id, retainedOperation.id)
         assertEquals(operation.occurredAt, retainedOperation.occurredAt)
-        assertClockAfter(retainedOperation.hlcWallMs, retainedOperation.hlcCounter, 1_767_225_600_002)
+        assertEquals(operation, retainedOperation)
         assertTrue(repository.state.value.settings.autoStartBreaks)
         assertNull(database.timerDao().pendingBootstrapResolution())
 
@@ -1549,7 +1561,7 @@ class BootstrapResolutionTest {
         assertEquals(operation.id, capturedOperation.id)
         assertEquals(operation.enabled, capturedOperation.enabled)
         assertEquals(operation.occurredAt, capturedOperation.occurredAt)
-        assertClockAfter(capturedOperation.hlcWallMs, capturedOperation.hlcCounter, 1_767_225_600_004)
+        assertEquals(operation, capturedOperation)
         assertEquals(
             repositoryJson.encodeToString(listOf(capturedOperation)),
             database.timerDao().pendingBootstrapResolution()?.autoStartOperationsJson,
@@ -1618,7 +1630,7 @@ class BootstrapResolutionTest {
         if (strategy == BootstrapStrategy.KeepRemote) {
             assertTrue(request.commands.isEmpty())
         } else {
-            assertRebasedCommands(commands, request.commands, 1_767_225_600_005)
+            assertExactRequestCommands(commands, request.commands)
         }
         assertEquals(canonicalHistory, repository.state.value.history)
         assertTrue(database.timerDao().pendingCommands().isEmpty())
@@ -1635,26 +1647,20 @@ class BootstrapResolutionTest {
         hlcCounter = 0,
     )
 
-    private fun assertRebasedCommands(
+    // V2 immutable: resolution requests carry the exact persisted payloads
+    // (physicalOccurredAt is transport-local). Clocks are never rebased.
+    private fun assertExactRequestCommands(
         expected: List<TimerCommand>,
         actual: List<TimerCommand>,
-        canonicalWallMs: Long,
     ) {
         assertEquals(expected.map(TimerCommand::id), actual.map(TimerCommand::id))
         assertEquals(expected.map(TimerCommand::type), actual.map(TimerCommand::type))
         assertEquals(expected.map(TimerCommand::timerId), actual.map(TimerCommand::timerId))
         assertEquals(expected.map(TimerCommand::occurredAt), actual.map(TimerCommand::occurredAt))
-        var wallMs = canonicalWallMs
-        var counter = 0L
-        actual.forEach { command ->
-            assertTrue(command.hlcWallMs > wallMs || command.hlcWallMs == wallMs && command.hlcCounter > counter)
-            wallMs = command.hlcWallMs
-            counter = command.hlcCounter
-        }
-    }
-
-    private fun assertClockAfter(wallMs: Long, counter: Long, canonicalWallMs: Long) {
-        assertTrue(wallMs > canonicalWallMs || wallMs == canonicalWallMs && counter > 0L)
+        assertEquals(
+            expected.map { it.copy(physicalOccurredAt = null) },
+            actual,
+        )
     }
 
     private fun acknowledgedResolution(

@@ -50,6 +50,7 @@ internal data class BootstrapPreparationStorageUpdate(
     val pending: PendingSyncQueues,
     val commandDependencies: Map<String, String>,
     val resolution: PendingBootstrapResolutionEntity,
+    val retainedNeverSent: CoreNeverSentProof = CoreNeverSentProof(),
 )
 
 internal data class FullSyncStorageUpdate(
@@ -142,14 +143,15 @@ internal class TimerStore(
         local: LocalStateEntity,
         pending: PendingSyncQueues,
         commandDependencies: Map<String, String>,
+        neverSent: CoreNeverSentProof = CoreNeverSentProof(),
     ) {
         dao.updateMutationState(
             local,
-            pending.commandEntities(commandDependencies),
-            pending.taskEntities(),
-            pending.durationEntities(),
-            pending.autoStartEntities(),
-            pending.selectedTaskEntities(),
+            pending.commandEntities(commandDependencies, neverSent.commands.toSet()),
+            pending.taskEntities(neverSent.taskOperations.toSet()),
+            pending.durationEntities(neverSent.durationOperations.toSet()),
+            pending.autoStartEntities(neverSent.autoStartOperations.toSet()),
+            pending.selectedTaskEntities(neverSent.selectedTaskOperations.toSet()),
         )
     }
 
@@ -207,12 +209,12 @@ internal class TimerStore(
     suspend fun prepareBootstrap(update: BootstrapPreparationStorageUpdate) {
         dao.persistBootstrapPreparation(
             update.local,
-            update.pending.commandEntities(update.commandDependencies),
-            update.pending.taskEntities(),
-            update.pending.durationEntities(),
-            update.pending.autoStartEntities(),
+            update.pending.commandEntities(update.commandDependencies, update.retainedNeverSent.commands.toSet()),
+            update.pending.taskEntities(update.retainedNeverSent.taskOperations.toSet()),
+            update.pending.durationEntities(update.retainedNeverSent.durationOperations.toSet()),
+            update.pending.autoStartEntities(update.retainedNeverSent.autoStartOperations.toSet()),
             update.resolution,
-            update.pending.selectedTaskEntities(),
+            update.pending.selectedTaskEntities(update.retainedNeverSent.selectedTaskOperations.toSet()),
         )
     }
 
@@ -283,19 +285,20 @@ internal class TimerStore(
 
     private fun PendingSyncQueues.commandEntities(
         dependencies: Map<String, String>,
+        neverSent: Set<String> = emptySet(),
     ): List<PendingCommandEntity> = commands.map { command ->
-        PendingCommandEntity.from(command, dependencies[command.id], neverSent = false)
+        PendingCommandEntity.from(command, dependencies[command.id], command.id in neverSent)
     }
 
-    private fun PendingSyncQueues.taskEntities() =
-        taskOperations.map { PendingTaskOperationEntity.from(it, neverSent = false) }
+    private fun PendingSyncQueues.taskEntities(neverSent: Set<String> = emptySet()) =
+        taskOperations.map { PendingTaskOperationEntity.from(it, it.id in neverSent) }
 
-    private fun PendingSyncQueues.durationEntities() =
-        durationOperations.map { PendingDurationOperationEntity.from(it, neverSent = false) }
+    private fun PendingSyncQueues.durationEntities(neverSent: Set<String> = emptySet()) =
+        durationOperations.map { PendingDurationOperationEntity.from(it, it.id in neverSent) }
 
-    private fun PendingSyncQueues.autoStartEntities() =
-        autoStartOperations.map { PendingAutoStartOperationEntity.from(it, neverSent = false) }
+    private fun PendingSyncQueues.autoStartEntities(neverSent: Set<String> = emptySet()) =
+        autoStartOperations.map { PendingAutoStartOperationEntity.from(it, it.id in neverSent) }
 
-    private fun PendingSyncQueues.selectedTaskEntities() =
-        selectedTaskOperations.map { PendingSelectedTaskOperationEntity.from(it, neverSent = false) }
+    private fun PendingSyncQueues.selectedTaskEntities(neverSent: Set<String> = emptySet()) =
+        selectedTaskOperations.map { PendingSelectedTaskOperationEntity.from(it, it.id in neverSent) }
 }

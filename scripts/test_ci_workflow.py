@@ -236,7 +236,7 @@ class CIWorkflowTests(unittest.TestCase):
                 inventory.extend((path.relative_to(ROOT), method) for method in methods)
         self.assertTrue(inventory)
         self.assertEqual(len(inventory), len(set(inventory)))
-        self.assertEqual(331, len(inventory), "Update exact instrumentation inventory contract")
+        self.assertEqual(332, len(inventory), "Update exact instrumentation inventory contract")
         self.assertEqual(int(default[1]), len(inventory), "Update runner's explicit inventory guard")
 
     def test_instrumentation_count_guard_fails_closed(self) -> None:

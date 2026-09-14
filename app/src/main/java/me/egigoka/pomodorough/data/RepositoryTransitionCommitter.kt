@@ -37,6 +37,7 @@ internal data class RepositoryBootstrapInstallationTransition(
     val response: SyncResponse,
     val clearLocal: Boolean,
     val clockSample: ServerClockSample,
+    val retainedNeverSent: CoreNeverSentProof = CoreNeverSentProof(),
 ) : RepositoryTransition<RepositoryTransitionEvent.BootstrapInstalled> {
     override fun event() = RepositoryTransitionEvent.BootstrapInstalled(
         application, response, clearLocal, clockSample,
@@ -198,6 +199,7 @@ private class TimerStoreTransitionPersistence(
                 application.local,
                 application.pending.queues,
                 application.pending.dependencies,
+                transition.retainedNeverSent,
             )
         }
     }

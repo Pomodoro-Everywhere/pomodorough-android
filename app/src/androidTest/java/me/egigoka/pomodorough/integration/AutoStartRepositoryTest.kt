@@ -45,6 +45,7 @@ import okhttp3.sse.EventSource
 import okhttp3.sse.EventSourceListener
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -175,7 +176,7 @@ class AutoStartRepositoryTest {
         awaitState { service.syncCalls == 1 && repository.state.value.pendingCount == 0 }
 
         assertEquals(
-            listOf(operations.first().copy(hlcCounter = 1), operations.last()),
+            operations,
             service.syncRequests.single().autoStartOperations,
         )
         assertTrue(!repository.state.value.settings.autoStartBreaks)
@@ -215,7 +216,9 @@ class AutoStartRepositoryTest {
         )
         assertEquals(operation.id, database.timerDao().pendingAutoStartOperations().single().id)
         assertEquals(0L, database.timerDao().localState()?.revision)
-        assertTrue(repository.state.value.settings.autoStartBreaks)
+        // V2 immutable: the queued op has no never-sent proof, so it stays
+        // pending for exact retry without optimistic projection over canonical.
+        assertFalse(repository.state.value.settings.autoStartBreaks)
     }
 
     @Test
@@ -224,6 +227,9 @@ class AutoStartRepositoryTest {
         val sent = testAutoStartOperation(
             "00000000-0000-4000-8000-000000000001",
             enabled = true,
+            // V2 immutable: the seed op must clear the bootstrap head so it is
+            // projected (settings true) and the mid-sync toggle flips it.
+            wallMs = 1_767_225_600_001,
         )
         database.timerDao().insertState(testState(user = profile))
         database.timerDao().insertAutoStartOperation(PendingAutoStartOperationEntity.from(sent))
@@ -507,7 +513,7 @@ class AutoStartRepositoryTest {
         awaitState { retryService.syncCalls == 1 && restarted.state.value.pendingCount == 0 }
 
         assertEquals(
-            listOf(operation.copy(hlcCounter = 1)),
+            listOf(operation),
             retryService.syncRequests.single().autoStartOperations,
         )
         assertTrue(restarted.state.value.settings.autoStartBreaks)

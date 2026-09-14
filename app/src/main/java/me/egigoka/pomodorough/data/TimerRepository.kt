@@ -551,7 +551,12 @@ class TimerRepository(
 
     private suspend fun persistLocalInitializationRepair(repair: LocalInitializationRepair) {
         if (repair.shouldPersistMutationState) {
-            timerStore.saveMutationState(local, pendingSyncQueues(), commandDependencies)
+            timerStore.saveMutationState(
+                local,
+                pendingSyncQueues(),
+                commandDependencies,
+                neverSentProof.filteredTo(pendingSyncQueues()),
+            )
         }
         if (repair.invalidDependentEntities.isNotEmpty()) {
             timerStore.deleteCommands(repair.invalidDependentEntities)
@@ -1930,6 +1935,9 @@ class TimerRepository(
         val request = plan.request
         val reconciled = plan.pending
         val resolution = request.toEntity(profile)
+        // The prepared resolution publishes the reconciled queues: only the
+        // unpublished remainder keeps never-sent proof, in memory and in storage.
+        val retainedProof = neverSentProof.retiredForResolution(request).filteredTo(reconciled.queues)
         val event = transitionCommitter.commit(
             RepositoryBootstrapPreparationTransition(
                 update = BootstrapPreparationStorageUpdate(
@@ -1937,6 +1945,7 @@ class TimerRepository(
                     pending = reconciled.queues,
                     commandDependencies = reconciled.dependencies,
                     resolution = resolution,
+                    retainedNeverSent = retainedProof,
                 ),
                 profile = profile,
                 bootstrap = bootstrap,
@@ -1948,6 +1957,10 @@ class TimerRepository(
         trustedClock.install(event.clockSample)
         installPending(event.plan.pending)
         pendingBootstrapResolution = event.resolution
+        // The prepared resolution publishes the reconciled queues: retire the
+        // published never-sent proof now, so a resolution retry reconciles
+        // the same ids as possibly delivered instead of claimed never-sent.
+        neverSentProof = retainedProof
         installCoreProjection(event.plan.projection)
         historyResolution = HistoryResolutionState(
             localHistoryCount = visibleHistoryCount(projection.history),
@@ -2365,6 +2378,7 @@ class TimerRepository(
                 response = response,
                 clearLocal = clearLocal,
                 clockSample = clockSample,
+                retainedNeverSent = neverSentProof.filteredTo(application.pending.queues),
             ),
         )
         installBootstrapState(
@@ -3398,16 +3412,18 @@ class TimerRepository(
     }
 
     private suspend fun persistLegacyMutationQueueRepair(repair: LegacyMutationQueueRepair) {
+        val queues = PendingSyncQueues(
+            commands = repair.commands,
+            taskOperations = repair.taskOperations,
+            durationOperations = repair.durationOperations,
+            autoStartOperations = repair.autoStartOperations,
+            selectedTaskOperations = emptyList(),
+        )
         timerStore.saveMutationState(
             repair.local,
-            PendingSyncQueues(
-                commands = repair.commands,
-                taskOperations = repair.taskOperations,
-                durationOperations = repair.durationOperations,
-                autoStartOperations = repair.autoStartOperations,
-                selectedTaskOperations = emptyList(),
-            ),
+            queues,
             commandDependencies,
+            neverSentProof.filteredTo(queues),
         )
     }
 

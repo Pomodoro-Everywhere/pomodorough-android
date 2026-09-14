@@ -993,6 +993,7 @@ class GeneratedAutoBreakDependencyTest {
             PomodoroughDatabase.Migration10To11,
             PomodoroughDatabase.Migration11To12,
             PomodoroughDatabase.Migration12To13,
+            PomodoroughDatabase.Migration13To14,
         ).build()
         val service = TestRepositoryService(profile).apply {
             bootstrapResponse = response(revision = 5)
@@ -1049,10 +1050,12 @@ class GeneratedAutoBreakDependencyTest {
                 settings = TimerSettings(autoStartBreaks = true),
             ),
         )
+        // V2 immutable: queued ops must clear response heads to stay
+        // projected; a tied head excludes the whole command queue.
         val repository = testRepository(
             context,
             database.timerDao(),
-            currentTimeMillis = { TestPhysicalNowMs },
+            currentTimeMillis = { TestPhysicalNowMs + 1 },
         )
         repository.initialize()
         assertTrue(repository.finishExpiredTimer())

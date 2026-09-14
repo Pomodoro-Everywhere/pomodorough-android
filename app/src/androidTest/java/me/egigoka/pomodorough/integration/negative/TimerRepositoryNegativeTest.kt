@@ -403,7 +403,9 @@ class TimerRepositoryNegativeTest {
                                     "Selection was superseded",
                                 ),
                             ),
-                            serverHlcWallMs = 1_767_225_600_100,
+                            // V2 immutable: the concurrent replacement must clear
+                            // the head to stay projected over canonical null.
+                            serverHlcWallMs = 1_767_225_600_000,
                         )
                     }
                     2 -> {
@@ -420,7 +422,9 @@ class TimerRepositoryNegativeTest {
                                     "",
                                 ),
                             ),
-                            serverHlcWallMs = 1_767_225_600_200,
+                            // V2 immutable: the queued replacement must clear
+                            // the head to stay projected over canonical.
+                            serverHlcWallMs = 1_767_225_600_000,
                         )
                     }
                     else -> {

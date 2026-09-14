@@ -206,6 +206,36 @@ class PomodoroughDatabaseTest {
     }
 
     @Test
+    fun migrationThirteenToFourteenAddsNeverSentColumns() {
+        context.deleteDatabase(MigrationDatabaseName)
+        migrationHelper.createDatabase(MigrationDatabaseName, 13).close()
+
+        val migrated = migrationHelper.runMigrationsAndValidate(
+            MigrationDatabaseName,
+            14,
+            true,
+            PomodoroughDatabase.Migration13To14,
+        )
+
+        listOf(
+            "pending_commands",
+            "pending_task_operations",
+            "pending_duration_operations",
+            "pending_auto_start_operations",
+            "pending_selected_task_operations",
+        ).forEach { table ->
+            migrated.query("PRAGMA table_info($table)").use { cursor ->
+                var found = false
+                while (cursor.moveToNext()) {
+                    if (cursor.getString(1) == "neverSent") found = true
+                }
+                assertTrue(found)
+            }
+        }
+        migrated.close()
+    }
+
+    @Test
     fun clearAccountRemovesQueueAndPersistsClearedOwner() = runBlocking {
         val initial = state().copy(ownerUserId = "old-user", userJson = "{\"id\":\"old-user\"}")
         dao.insertState(initial)

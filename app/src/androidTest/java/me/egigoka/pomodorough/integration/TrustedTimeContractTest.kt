@@ -281,7 +281,7 @@ class TrustedTimeContractTest {
     }
 
     @Test
-    fun bootstrapSampleRebasesOnceBeforeFirstSyncCapture() = runBlocking {
+    fun bootstrapSamplePreservesExactClocksBeforeFirstSyncCapture() = runBlocking {
         val profile = testUser()
         val futureMs = NowMs + 60 * 60_000L
         val futureOperation = testDurationOperation(
@@ -316,8 +316,9 @@ class TrustedTimeContractTest {
         val persisted = database.timerDao().pendingDurationOperations().single().toModel()
         assertEquals(futureOperation.id, captured.id)
         assertEquals(captured, persisted)
-        assertTrue(captured.hlcWallMs in NowMs - SyncWireBounds.MaxClockSkewMs..
-            NowMs + SyncWireBounds.MaxClockSkewMs)
+        // V2 immutable: bootstrap never rewrites operation clocks, even beyond
+        // trusted-time skew. Skew bounds constrain sampling, not payloads.
+        assertEquals(futureMs, captured.hlcWallMs)
         assertEquals(captured.hlcWallMs, java.time.Instant.parse(captured.occurredAt).toEpochMilli())
     }
 
@@ -519,7 +520,7 @@ class TrustedTimeContractTest {
     }
 
     @Test
-    fun bootstrapRebaseAlignsCommandHlcWithDeviceSequence() = runBlocking {
+    fun bootstrapRejectsCommandHlcInversionWithoutRewriting() = runBlocking {
         val profile = testUser()
         val first = testCommand("sequence-first", 1).copy(
             hlcWallMs = NowMs + 100,
@@ -547,15 +548,16 @@ class TrustedTimeContractTest {
 
         repository.initialize()
         repository.refresh()
-        awaitState { service.syncCalls == 1 }
-
-        val captured = service.syncRequests.single().commands.sortedBy { it.deviceSequence }
-        assertEquals(listOf(1L, 2L), captured.map { it.deviceSequence })
-        assertTrue(
-            captured[1].hlcWallMs > captured[0].hlcWallMs ||
-                captured[1].hlcWallMs == captured[0].hlcWallMs &&
-                captured[1].hlcCounter > captured[0].hlcCounter,
+        // V2 immutable: inverted device-sequence clocks are rejected, never
+        // silently realigned. No sync fires and the persisted queues keep
+        // their exact clocks for recovery instead of a rewrite.
+        kotlinx.coroutines.delay(5_000)
+        assertEquals(0, service.syncCalls)
+        assertEquals(
+            listOf(first, second),
+            database.timerDao().pendingCommands().map { it.toModel() },
         )
+        assertEquals(0L, database.timerDao().localState()?.revision)
     }
 
     @Test
@@ -665,7 +667,7 @@ class TrustedTimeContractTest {
     }
 
     @Test
-    fun acceptedSyncDurablyRebasesUnsentSuffixBeforeRetry() = runBlocking {
+    fun acceptedSyncDurablyPreservesUnsentSuffixBeforeRetry() = runBlocking {
         val profile = testUser()
         val sent = testDurationOperation(
             "sent-duration",
@@ -716,15 +718,17 @@ class TrustedTimeContractTest {
         firstSyncStarted.await()
         repository.setAutoStart(true)
         val retainedId = database.timerDao().pendingAutoStartOperations().single().id
+        val created = database.timerDao().pendingAutoStartOperations().single().toModel()
         releaseFirstSync.complete(Unit)
         awaitState { repository.state.value.conflict == "stop after trusted rebase verification" }
 
         val stored = database.timerDao().pendingAutoStartOperations().single().toModel()
         val retried = service.syncRequests[1].autoStartOperations.single()
         assertEquals(retainedId, stored.id)
+        // V2 immutable: the unsent suffix survives the ack verbatim — no
+        // rebase to server time — and the retry resends the exact payload.
+        assertEquals(created, stored)
         assertEquals(stored, retried)
-        assertTrue(stored.hlcWallMs in nextServerMs - SyncWireBounds.MaxClockSkewMs..
-            nextServerMs + SyncWireBounds.MaxClockSkewMs)
         assertTrue(database.timerDao().pendingDurationOperations().isEmpty())
     }
 
@@ -849,7 +853,12 @@ class TrustedTimeContractTest {
         awaitState { service.syncCalls == 1 }
         repository.addTask("Accepted after fresh sample")
         assertEquals(1, database.timerDao().pendingTaskOperations().size)
-        assertEquals(queuedBeforeReboot, database.timerDao().pendingAutoStartOperations())
+        // V2 immutable: the sync attempt retires never-sent proof, so compare
+        // payloads — the queued operation itself must survive bit-for-bit.
+        assertEquals(
+            queuedBeforeReboot.map { it.toModel() },
+            database.timerDao().pendingAutoStartOperations().map { it.toModel() },
+        )
     }
 
     @Test

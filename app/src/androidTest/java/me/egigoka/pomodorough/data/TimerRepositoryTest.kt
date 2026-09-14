@@ -226,7 +226,7 @@ class TimerRepositoryTest {
         val repository = repository(
             service,
             sharedCoreDispatch = { operation, input ->
-                if (operation == "reconcile.rebase.v1" && ++reconciliationCalls == 2) {
+                if (operation == "reconcile.rebase.v2" && ++reconciliationCalls == 2) {
                     throw SharedCoreException.Load("core unavailable")
                 }
                 core.dispatch(operation, input)

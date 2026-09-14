@@ -568,9 +568,7 @@ class TimerRepositoryPositiveTest {
         awaitState { service.syncCalls == 1 && repository.state.value.pendingCount == 0 }
 
         assertEquals(
-            operations.mapIndexed { index, operation ->
-                if (index == 0) operation.copy(hlcCounter = 1) else operation
-            },
+            operations,
             service.syncRequests.single().durationOperations,
         )
         assertTrue(database.timerDao().pendingDurationOperations().isEmpty())
@@ -640,6 +638,9 @@ class TimerRepositoryPositiveTest {
             id = "duration-sent",
             phase = TimerPhase.Focus,
             durationMs = 26 * 60_000L,
+            // V2 immutable: the seed op must clear the bootstrap head so the
+            // mid-sync edit rebases from the projected 26-minute setting.
+            wallMs = 1_767_225_600_001,
         )
         val initialDurations = DurationsMs(focus = sent.durationMs)
         database.timerDao().insertState(
@@ -667,7 +668,9 @@ class TimerRepositoryPositiveTest {
                         taskAcknowledgements = emptyList(),
                         tasks = emptyList(),
                         serverTime = "2026-01-01T00:00:00Z",
-                        serverHlcWallMs = 1_767_225_600_100,
+                        // V2 immutable: the mid-sync edit must clear the head
+                        // to stay projected over canonical 30-minute durations.
+                        serverHlcWallMs = 1_767_225_600_000,
                         serverHlcCounter = 0,
                     )
                 } else {
@@ -797,7 +800,7 @@ class TimerRepositoryPositiveTest {
         awaitState { service.syncCalls == 1 && repository.state.value.pendingCount == 0 }
 
         assertEquals(
-            listOf(operation.copy(hlcWallMs = 1_767_225_600_100, hlcCounter = 1)),
+            listOf(operation),
             service.syncRequests.single().taskOperations,
         )
         assertEquals(listOf(task), repository.state.value.tasks)
@@ -851,7 +854,7 @@ class TimerRepositoryPositiveTest {
         awaitState { service.syncCalls == 1 && repository.state.value.pendingCount == 0 }
 
         assertEquals(
-            listOf(operation.copy(hlcWallMs = 1_767_225_600_100, hlcCounter = 1)),
+            listOf(operation),
             service.syncRequests.single().taskOperations,
         )
         assertTrue(database.timerDao().pendingTaskOperations().isEmpty())
@@ -1073,7 +1076,9 @@ class TimerRepositoryPositiveTest {
                         ),
                         tasks = listOf(task),
                         serverTime = "2026-01-01T00:00:00Z",
-                        serverHlcWallMs = 1_767_225_600_100,
+                        // V2 immutable: the mid-sync delete must clear the head
+                        // to stay optimistically projected over canonical.
+                        serverHlcWallMs = 1_767_225_600_000,
                         serverHlcCounter = 0,
                     )
                 } else {
