@@ -428,8 +428,12 @@ class CIWorkflowTests(unittest.TestCase):
         emulator_runner_count = workflow.count("python3 .github/scripts/run-android-emulator.py")
         self.assertEqual(2, emulator_runner_count)
         self.assertNotIn("ReactiveCircus/android-emulator-runner@", workflow)
-        self.assertEqual(emulator_runner_count, workflow.count("          cmdline-tools-version: '14742923'"))
-        self.assertEqual(emulator_runner_count, workflow.count("          packages: platform-tools"))
+        # The verify job carries the same SDK pin: setup-android defaults
+        # install an obsolete `tools` package that refreshed runner images
+        # reject, so all three invocations pin cmdline-tools and packages.
+        sdk_setup_count = workflow.count("          cmdline-tools-version: '14742923'")
+        self.assertEqual(emulator_runner_count + 1, sdk_setup_count)
+        self.assertEqual(sdk_setup_count, workflow.count("          packages: platform-tools"))
 
         script = SMOKE_SCRIPT.read_text(encoding="utf-8")
         self.assertTrue(script.startswith("#!/usr/bin/env bash\nset -euo pipefail\n"))
