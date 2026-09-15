@@ -39,8 +39,11 @@ class SourceCheckTests(unittest.TestCase):
     def assert_source_gates(self, workflow):
         verify = job_text(workflow, "verify")
         connected = job_text(workflow, "connected")
+        # Build-once: verify gates on candidate-source; connected gates on
+        # verify (which already gates on candidate-source) to reuse its APKs.
+        self.assertIn("    needs: candidate-source\n", verify)
+        self.assertIn("    needs: verify\n", connected)
         for job in (verify, connected):
-            self.assertIn("    needs: candidate-source\n", job)
             self.assertNotRegex(job, r"(?m)^    (?:if|continue-on-error):")
             self.assertIn('run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"', job)
         commands = []
@@ -57,7 +60,7 @@ class SourceCheckTests(unittest.TestCase):
         self.assertIn("\n    needs: ci\n", release)
         self.assertIn("uses: ./.github/workflows/ci.yml", release)
 
-    def test_source_gates_run_once_without_serializing_connected_jobs(self):
+    def test_source_gates_run_once_in_verify_with_connected_after_verify(self):
         self.assert_source_gates(WORKFLOW.read_text())
 
     def test_gate_bypass_mutations_are_rejected(self):
@@ -66,7 +69,8 @@ class SourceCheckTests(unittest.TestCase):
         mutations += [("python3 " + command, "true # omitted") for command in COMMANDS]
         mutations += [
             ("  verify:\n    needs: candidate-source", "  verify:\n    needs: candidate-source\n    if: false"),
-            ("  connected:\n    needs: candidate-source", "  connected:\n    needs: verify"),
+            ("  connected:\n    needs: verify", "  connected:\n    needs: candidate-source"),
+            ("  connected:\n    needs: verify", "  connected:\n    needs: verify\n    if: false"),
             ('run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"', "run: true"),
         ]
         for name in STEPS:

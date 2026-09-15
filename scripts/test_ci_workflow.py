@@ -163,12 +163,31 @@ class CIWorkflowTests(unittest.TestCase):
         self.assertIn("PomodoroughRtlAccessibilityTest", workflow := CI_WORKFLOW.read_text(encoding="utf-8"))
         self.assertIn("TEST_CLASS=${{ matrix.test-class }}", workflow)
 
-    def test_connected_assembly_precedes_emulator_with_identical_targets(self) -> None:
+    def test_connected_reuses_verify_apks_before_emulator(self) -> None:
         workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+        verify = workflow.split("  verify:", 1)[1].split("\n  connected:", 1)[0]
         connected = workflow.split("  connected:", 1)[1].split("\n  release-smoke:", 1)[0]
         command = "./gradlew --no-daemon --stacktrace :app:assembleDebug :app:assembleDebugAndroidTest"
-        self.assertEqual(connected.count(command), 1)
-        self.assertLess(connected.index(command), connected.index("- name: Run connected tests"))
+        # Build-once: verify builds, connected downloads. No per-cell rebuild.
+        self.assertEqual(verify.count(command), 1)
+        self.assertEqual(connected.count(command), 0)
+        self.assertNotIn(":app:assembleDebug", connected)
+        self.assertIn("- name: Upload debug test APKs for connected matrix", verify)
+        self.assertIn("name: debug-test-apks", verify)
+        self.assertIn("- name: Download debug test APKs", connected)
+        self.assertIn("name: debug-test-apks", connected)
+        self.assertIn("- name: Restore debug test APKs to Gradle outputs", connected)
+        self.assertIn("app/build/outputs/apk/debug/app-debug.apk", connected)
+        self.assertIn("app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk", connected)
+        self.assertLess(
+            connected.index("- name: Download debug test APKs"),
+            connected.index("- name: Run connected tests"),
+        )
+        self.assertLess(
+            connected.index("- name: Restore debug test APKs to Gradle outputs"),
+            connected.index("- name: Run connected tests"),
+        )
+        self.assertIn("\n    needs: verify\n", connected)
         self.assertIn("python3 -m unittest scripts/test_android_readiness.py -v", workflow)
         self.assertIn("python3 .github/scripts/run-android-emulator.py", connected)
         self.assertIn("--api-level ${{ matrix.api-level }} --architecture x86_64", connected)
@@ -196,6 +215,14 @@ class CIWorkflowTests(unittest.TestCase):
         self.assertIn(":app:assembleDebug :app:assembleDebugAndroidTest", assembly)
         self.assertNotIn(":app:lint", assembly)
         self.assertNotIn("UnitTest", assembly)
+        # Build-once contract: verify stages and uploads APKs for connected.
+        self.assertIn("mkdir -p debug-test-apks", assembly)
+        self.assertIn("cp app/build/outputs/apk/debug/*.apk debug-test-apks/", assembly)
+        self.assertIn("cp app/build/outputs/apk/androidTest/debug/*.apk debug-test-apks/", assembly)
+        self.assertIn("- name: Upload debug test APKs for connected matrix", assembly)
+        self.assertIn("name: debug-test-apks", assembly)
+        self.assertIn("path: debug-test-apks/", assembly)
+        self.assertIn("if-no-files-found: error", assembly)
 
     def test_runner_gates_active_windows_without_dismissing_or_clearing_evidence(self) -> None:
         script = INSTRUMENTED_SCRIPT.read_text(encoding="utf-8")

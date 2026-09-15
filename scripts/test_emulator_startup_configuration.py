@@ -162,7 +162,11 @@ class EmulatorStartupConfigurationTests(unittest.TestCase):
     def test_prerequisite_gates_and_diagnostic_retention_remain_strict(self) -> None:
         connected = self.job("connected")
         verify = self.job("verify")
-        self.assertIn("    needs: candidate-source\n", connected)
+        # Build-once: connected reuses verify's APKs, so it waits on verify
+        # (which itself waits on candidate-source). Release-smoke still only
+        # waits on verify to preserve overlap; never add connected there.
+        self.assertIn("    needs: verify\n", connected)
+        self.assertIn("    needs: candidate-source\n", verify)
         self.assertIn("    timeout-minutes: 60\n", connected)
         for gate in (
             "python3 -m unittest scripts/test_android_readiness.py -v",
@@ -175,8 +179,17 @@ class EmulatorStartupConfigurationTests(unittest.TestCase):
         self.assertIn('assert os.environ["GITHUB_RUN_ATTEMPT"] == "1"', self.job("candidate-source"))
         release = self.job("release-smoke")
         self.assertIn("    needs: verify\n", release)
+        self.assertNotIn("connected", release.split("needs:", 1)[1].split("\n", 1)[0])
         self.assertIn("    if: inputs.upload-release-bundle\n", release)
         self.assertIn("    timeout-minutes: 30\n", release)
+        # Build-once: connected must download verify's APKs before booting.
+        self.assertIn("- name: Download debug test APKs", connected)
+        self.assertIn("name: debug-test-apks", connected)
+        self.assertNotIn(":app:assembleDebug", connected)
+        self.assertLess(
+            connected.index("- name: Download debug test APKs"),
+            connected.index("Run connected tests"),
+        )
         finish = self.step("connected", "Finish Android startup diagnostics")
         self.assertIn("        if: always()\n", finish)
         self.assertIn('run: python3 .github/scripts/android-startup-diagnostics.py stop --output "$STARTUP_DIAGNOSTICS"', finish)

@@ -227,7 +227,19 @@ jobs:
           :app:lintRelease
 
       - name: Assemble debug and test APKs
-        run: ./gradlew --no-daemon --stacktrace :app:assembleDebug :app:assembleDebugAndroidTest
+        run: |
+          ./gradlew --no-daemon --stacktrace :app:assembleDebug :app:assembleDebugAndroidTest
+          mkdir -p debug-test-apks
+          cp app/build/outputs/apk/debug/*.apk debug-test-apks/
+          cp app/build/outputs/apk/androidTest/debug/*.apk debug-test-apks/
+
+      - name: Upload debug test APKs for connected matrix
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: debug-test-apks
+          path: debug-test-apks/
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Assemble unsigned release APK
         if: ${{ !inputs.upload-release-bundle }}
@@ -334,7 +346,7 @@ jobs:
           retention-days: 1
 
   connected:
-    needs: candidate-source
+    needs: verify
     name: Connected API ${{ matrix.api-level }} · ${{ matrix.font-scale }}x font · ${{ matrix.locale }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -389,11 +401,21 @@ jobs:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+      # Build-once: verify assembles and uploads the debug APKs; connected
+      # downloads them instead of rebuilding per cell (saves ~4.3m x8).
+      - name: Download debug test APKs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: debug-test-apks
+          path: debug-test-apks
 
-      - name: Assemble connected test APKs before emulator boot
-        run: ./gradlew --no-daemon --stacktrace :app:assembleDebug :app:assembleDebugAndroidTest
+      - name: Restore debug test APKs to Gradle outputs
+        run: |
+          mkdir -p app/build/outputs/apk/debug app/build/outputs/apk/androidTest/debug
+          cp debug-test-apks/app-debug.apk app/build/outputs/apk/debug/
+          cp debug-test-apks/*-androidTest.apk app/build/outputs/apk/androidTest/debug/
+          test -f app/build/outputs/apk/debug/app-debug.apk
+          test -f app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
 
       # Emulator cache is performance-only: run-android-emulator.py setup()
       # always reinstalls platform, emulator, image, and build-tools after
