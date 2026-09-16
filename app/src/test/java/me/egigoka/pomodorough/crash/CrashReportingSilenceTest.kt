@@ -24,6 +24,7 @@ class CrashReportingSilenceTest {
         "me/egigoka/pomodorough/data/api/PomodoroughApi.kt",
         "me/egigoka/pomodorough/core/SharedCore.kt",
         "me/egigoka/pomodorough/crash/CrashReporter.kt",
+        "me/egigoka/pomodorough/crash/CrashReportingConsent.kt",
         "me/egigoka/pomodorough/crash/SentryScrubber.kt",
         "me/egigoka/pomodorough/data/AccountDeletionScrubRetry.kt",
         "me/egigoka/pomodorough/data/CentralizedSyncCoordinator.kt",
@@ -49,6 +50,7 @@ class CrashReportingSilenceTest {
         "me/egigoka/pomodorough/domain/TimerPresentation.kt",
         "me/egigoka/pomodorough/timer/TimerAlarmReceiver.kt",
         "me/egigoka/pomodorough/timer/TimerAlarmScheduler.kt",
+        "me/egigoka/pomodorough/ui/TimerScreenScaffold.kt",
         "me/egigoka/pomodorough/ui/UiComponents.kt",
     )
 

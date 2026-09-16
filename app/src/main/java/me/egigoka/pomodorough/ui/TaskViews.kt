@@ -298,26 +298,41 @@ private fun TaskDraftCard(
 @Composable
 internal fun TaskColumnLabels(modifier: Modifier = Modifier) {
     if (LocalConfiguration.current.fontScale < 1.3f) {
-        Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
-            Text(stringResource(R.string.task), Modifier.weight(2f), style = MaterialTheme.typography.labelMedium)
-            Text(
-                stringResource(R.string.finished),
-                Modifier.weight(1.2f),
-                style = MaterialTheme.typography.labelMedium,
-                textAlign = TextAlign.Center,
-            )
-            Text(
-                stringResource(R.string.time),
-                Modifier.weight(1.35f),
-                style = MaterialTheme.typography.labelMedium,
-                textAlign = TextAlign.Center,
-            )
-            Text(
-                stringResource(R.string.action),
-                Modifier.weight(0.9f),
-                style = MaterialTheme.typography.labelMedium,
-                textAlign = TextAlign.Center,
-            )
+        BoxWithConstraints(modifier.fillMaxWidth()) {
+            val weights = taskRowWeights(isNarrow = maxWidth < 360.dp)
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text(
+                    stringResource(R.string.task),
+                    Modifier.weight(weights.title),
+                    style = MaterialTheme.typography.labelMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    stringResource(R.string.finished),
+                    Modifier.weight(weights.finished),
+                    style = MaterialTheme.typography.labelMedium,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    stringResource(R.string.time),
+                    Modifier.weight(weights.time),
+                    style = MaterialTheme.typography.labelMedium,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    stringResource(R.string.action),
+                    Modifier.weight(weights.action),
+                    style = MaterialTheme.typography.labelMedium,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }
@@ -382,28 +397,53 @@ private fun WideTaskSummary(
     enabled: Boolean,
     onDelete: () -> Unit,
 ) {
-    Row(
-        modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Row(
-            modifier = Modifier.weight(4.55f).clearAndSetSemantics {
-                contentDescription = description
-            },
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                summary.task.title,
-                Modifier.weight(2f),
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis,
-                style = MaterialTheme.typography.titleLarge,
-            )
-            TaskSummaryMetric(summary.finishedPomodoros.toString(), Modifier.weight(1.2f), true)
-            TaskSummaryMetric(formatTaskDuration(summary.timeSpentMs), Modifier.weight(1.35f), false)
+    BoxWithConstraints(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+        val weights = taskRowWeights(isNarrow = maxWidth < 360.dp)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                modifier = Modifier.weight(weights.content).clearAndSetSemantics {
+                    contentDescription = description
+                },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    summary.task.title,
+                    Modifier.weight(weights.title),
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.titleLarge,
+                )
+                TaskSummaryMetric(
+                    summary.finishedPomodoros.toString(),
+                    Modifier.weight(weights.finished).widthIn(min = 44.dp),
+                    true,
+                )
+                TaskSummaryMetric(
+                    formatTaskDuration(summary.timeSpentMs),
+                    Modifier.weight(weights.time).widthIn(min = 56.dp),
+                    false,
+                )
+            }
+            DeleteTaskButton(onDelete, enabled, Modifier.weight(weights.action).widthIn(min = 64.dp))
         }
-        DeleteTaskButton(onDelete, enabled, Modifier.weight(0.9f))
     }
+}
+
+internal data class TaskRowWeights(
+    val content: Float,
+    val title: Float,
+    val finished: Float,
+    val time: Float,
+    val action: Float,
+)
+
+// Rebalanced from 4.55f/2f/1.2f/1.35f/0.9f: title keeps flex but metrics
+// hold minimum widths so long titles ellipsize instead of squeezing
+// counts at 320dp. Narrow screens grant metrics a larger relative share.
+internal fun taskRowWeights(isNarrow: Boolean): TaskRowWeights = if (isNarrow) {
+    TaskRowWeights(content = 1f, title = 1f, finished = 0.7f, time = 0.85f, action = 0.7f)
+} else {
+    TaskRowWeights(content = 1f, title = 1f, finished = 0.55f, time = 0.65f, action = 0.6f)
 }
 
 @Composable
@@ -416,6 +456,8 @@ private fun TaskSummaryMetric(text: String, modifier: Modifier, monospace: Boole
             fontFamily = FontFamily.Monospace,
             fontWeight = FontWeight.Black,
             textAlign = TextAlign.Center,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
     } else {
         Text(
@@ -424,13 +466,19 @@ private fun TaskSummaryMetric(text: String, modifier: Modifier, monospace: Boole
             color = darkModeTextColor(MaterialTheme.colorScheme.primary),
             style = MaterialTheme.typography.labelLarge,
             textAlign = TextAlign.Center,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }
 
 @Composable
 private fun DeleteTaskButton(onDelete: () -> Unit, enabled: Boolean, modifier: Modifier) {
-    TextButton(onClick = onDelete, enabled = enabled, modifier = modifier) {
+    TextButton(
+        onClick = onDelete,
+        enabled = enabled,
+        modifier = modifier.heightIn(min = 48.dp),
+    ) {
         Text(stringResource(R.string.delete), color = darkModeTextColor(MaterialTheme.colorScheme.error))
     }
 }

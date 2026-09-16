@@ -12,9 +12,6 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.Orientation
-import androidx.compose.foundation.gestures.rememberScrollableState
-import androidx.compose.foundation.gestures.scrollable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -228,7 +225,7 @@ private fun PortraitTimerHero(
     showContextLabel: Boolean,
     orbitMaxSize: Dp,
 ) {
-    Column(Modifier.padding(14.dp)) {
+    Column(Modifier.padding(14.dp).verticalScroll(rememberScrollState())) {
         if (showContextLabel) {
             SectionLabel(stringResource(R.string.current_service))
             Spacer(Modifier.height(6.dp))
@@ -334,6 +331,32 @@ internal fun landscapeReadoutFontSize(availableHeight: Dp, availableWidth: Dp): 
     return min(byHeight, byWidth).coerceIn(40f, 84f).sp
 }
 
+// Orbit readout scales down its base size at large fontScale so the
+// monospace time text fits 320dp widths without clipping. sp already
+// scales with the system, so the base shrinks to compensate.
+internal fun orbitTimeFontSize(orbitSize: Dp, fontScale: Float): androidx.compose.ui.unit.TextUnit {
+    val base = if (orbitSize < 280.dp) 48f else 62f
+    val compensation = when {
+        fontScale >= 2f -> 0.6f
+        fontScale >= 1.3f -> 0.75f
+        fontScale >= 1.15f -> 0.85f
+        else -> 1f
+    }
+    return (base * compensation).sp
+}
+
+internal fun orbitTimeLetterSpacing(fontScale: Float): androidx.compose.ui.unit.TextUnit = when {
+    fontScale >= 1.3f -> (-1).sp
+    fontScale >= 1.15f -> (-2).sp
+    else -> (-3).sp
+}
+
+internal fun landscapeReadoutLetterSpacing(fontScale: Float): androidx.compose.ui.unit.TextUnit = when {
+    fontScale >= 1.3f -> (-2).sp
+    fontScale >= 1.15f -> (-4).sp
+    else -> (-6).sp
+}
+
 @Composable
 private fun LandscapeTimerActions(state: TimerHeroState, actions: TimerHeroActions) {
     val controls = timerControlState(state)
@@ -402,6 +425,7 @@ internal fun LandscapeTimerReadout(
     val readout = timerReadout(state, textColor, "Landscape timer progress")
     BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
         val fontSize = landscapeReadoutFontSize(maxHeight, maxWidth)
+        val fontScale = LocalConfiguration.current.fontScale
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -420,8 +444,9 @@ internal fun LandscapeTimerReadout(
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Black,
                 fontSize = fontSize,
-                letterSpacing = (-6).sp,
+                letterSpacing = landscapeReadoutLetterSpacing(fontScale),
                 maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
                 textAlign = TextAlign.Center,
             )
             TimerProgressBar(readout.animatedProgress)
@@ -635,14 +660,18 @@ private fun TimerOrbitLabels(
     palette: PhasePalette,
     textColor: Color,
 ) {
+    val fontScale = LocalConfiguration.current.fontScale
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Text(
             text = readout.timeText,
             color = textColor,
             fontFamily = FontFamily.Monospace,
             fontWeight = FontWeight.Black,
-            fontSize = if (orbitSize < 280.dp) 48.sp else 62.sp,
-            letterSpacing = (-3).sp,
+            fontSize = orbitTimeFontSize(orbitSize, fontScale),
+            letterSpacing = orbitTimeLetterSpacing(fontScale),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
         )
         Text(
             text = phaseLabel(readout.phase),

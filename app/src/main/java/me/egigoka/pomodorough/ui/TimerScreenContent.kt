@@ -12,9 +12,6 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.Orientation
-import androidx.compose.foundation.gestures.rememberScrollableState
-import androidx.compose.foundation.gestures.scrollable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -140,24 +137,52 @@ internal fun PortraitTimerScreen(
     mutationsEnabled: Boolean,
     actions: TimerContentActions,
 ) {
-    Column(Modifier.fillMaxSize()) {
-        AppHeader(state, actions.header)
-        TimerScreenMessages(state, actions, Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
-        BoxWithConstraints(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            val orbitSize = (maxHeight - 230.dp).coerceIn(132.dp, 318.dp)
-            TimerHero(
-                state = timerHeroState(state, mutationsEnabled),
-                actions = actions.hero,
-                orbitMaxSize = orbitSize,
-            )
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val fontScale = LocalConfiguration.current.fontScale
+        val hasMessages = state.conflict != null || state.notice != null
+        val orbitSize = portraitOrbitSize(maxHeight, maxWidth, fontScale, hasMessages)
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+            AppHeader(state, actions.header)
+            TimerScreenMessages(state, actions, Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                TimerHero(
+                    state = timerHeroState(state, mutationsEnabled),
+                    actions = actions.hero,
+                    orbitMaxSize = orbitSize,
+                )
+            }
         }
     }
+}
+
+// Header-aware deduction replaces the fixed 230.dp: base chrome plus
+// fontScale growth (header/buttons wrap taller) plus message cards.
+internal fun portraitOrbitDeduction(fontScale: Float, hasMessages: Boolean): Dp {
+    val base = 230.dp
+    val fontExtra = when {
+        fontScale >= 2f -> 72.dp
+        fontScale >= 1.3f -> 40.dp
+        fontScale >= 1.15f -> 20.dp
+        else -> 0.dp
+    }
+    val messagesExtra = if (hasMessages) 64.dp else 0.dp
+    return base + fontExtra + messagesExtra
+}
+
+internal fun portraitOrbitSize(
+    availableHeight: Dp,
+    availableWidth: Dp,
+    fontScale: Float,
+    hasMessages: Boolean,
+): Dp {
+    val deduced = availableHeight - portraitOrbitDeduction(fontScale, hasMessages)
+    val byWidth = availableWidth - 24.dp
+    return minOf(deduced, byWidth).coerceIn(132.dp, 318.dp)
 }
 
 @Composable
@@ -346,12 +371,20 @@ internal enum class MainTab(val labelRes: Int) {
     Network(R.string.network),
 }
 
+// Compact mode shrinks labels instead of dropping them so the 5-icon
+// bar stays understandable at large fontScale.
+internal fun shouldCompactNavLabels(fontScale: Float): Boolean = fontScale >= 1.3f
+
+internal fun navLabelFontSize(fontScale: Float): androidx.compose.ui.unit.TextUnit =
+    if (shouldCompactNavLabels(fontScale)) 10.sp else androidx.compose.ui.unit.TextUnit.Unspecified
+
 @Composable
 internal fun MainNavigationBar(
     active: MainTab,
     onSelect: (MainTab) -> Unit,
 ) {
-    val showLabels = LocalConfiguration.current.fontScale < 1.3f
+    val fontScale = LocalConfiguration.current.fontScale
+    val labelFontSize = navLabelFontSize(fontScale)
     NavigationBar {
         MainTab.entries.forEach { tab ->
             val label = stringResource(tab.labelRes)
@@ -370,10 +403,13 @@ internal fun MainNavigationBar(
                         contentDescription = label,
                     )
                 },
-                label = if (showLabels) {
-                    { Text(label, maxLines = 1) }
-                } else {
-                    null
+                label = {
+                    Text(
+                        label,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        fontSize = labelFontSize,
+                    )
                 },
             )
         }

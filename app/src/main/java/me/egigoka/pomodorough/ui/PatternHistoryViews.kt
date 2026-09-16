@@ -322,12 +322,15 @@ internal fun PhaseDurationControls(
     selectedTextColor: Color,
     onChangeDuration: (String, Int) -> Unit,
 ) {
+    val durationDescription = pluralStringResource(R.plurals.minutes_long, minutes, minutes)
     StepButton("−", stringResource(R.string.decrease_phase_duration, phaseLabel(phase)), enabled) {
         onChangeDuration(phase, -1)
     }
     Text(
         "$minutes",
-        modifier = Modifier.width(56.dp).clearAndSetSemantics { },
+        modifier = Modifier.width(56.dp).clearAndSetSemantics {
+            contentDescription = durationDescription
+        },
         color = if (selected) selectedTextColor else MaterialTheme.colorScheme.onSurfaceVariant,
         fontFamily = FontFamily.Monospace,
         fontWeight = FontWeight.Black,
