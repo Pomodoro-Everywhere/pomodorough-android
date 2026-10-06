@@ -5,6 +5,14 @@ import me.egigoka.pomodorough.timer.TimerAlarmScheduler
 
 internal sealed interface AlarmCoordinatorEvent {
     data class CompletionAlertChanged(val timerId: String?) : AlarmCoordinatorEvent
+    data class CompletionAlertPersistenceFailed(
+        val failure: CompletionAlertPersistenceFailure,
+    ) : AlarmCoordinatorEvent
+}
+
+internal enum class CompletionAlertPersistenceFailure {
+    Save,
+    Clear,
 }
 
 internal fun interface AlarmCoordinatorEventSink {
@@ -18,7 +26,7 @@ internal interface AlarmSchedulerPort {
 
 internal interface CompletionAlertStore {
     fun load(): String?
-    fun save(timerId: String?)
+    fun save(timerId: String?): Boolean
 }
 
 internal fun interface CompletionNotificationCanceller {
@@ -64,22 +72,35 @@ internal class AlarmCoordinator(
     }
 
     fun markCompletionAlert(timerId: String): AlarmTransition.CompletionAlert {
-        synchronized(completionAlertLock) {
-            currentCompletionAlertTimerId = timerId
-            alertStore.save(timerId)
-            emitCompletionAlert(timerId)
+        val saved = synchronized(completionAlertLock) {
+            if (!alertStore.save(timerId)) {
+                emitPersistenceFailure(CompletionAlertPersistenceFailure.Save)
+                false
+            } else {
+                currentCompletionAlertTimerId = timerId
+                emitCompletionAlert(timerId)
+                true
+            }
         }
-        return AlarmTransition.CompletionAlert(timerId, changed = true)
+        return if (saved) {
+            AlarmTransition.CompletionAlert(timerId, changed = true)
+        } else {
+            AlarmTransition.CompletionAlert(completionAlertTimerId, changed = false)
+        }
     }
 
     fun stopCompletionAlert(timerId: String?): AlarmTransition.CompletionAlert {
         if (timerId == null) return AlarmTransition.CompletionAlert(null, changed = false)
         val cleared = synchronized(completionAlertLock) {
             if (currentCompletionAlertTimerId != timerId) return@synchronized false
-            currentCompletionAlertTimerId = null
-            alertStore.save(null)
-            emitCompletionAlert(null)
-            true
+            if (!alertStore.save(null)) {
+                emitPersistenceFailure(CompletionAlertPersistenceFailure.Clear)
+                false
+            } else {
+                currentCompletionAlertTimerId = null
+                emitCompletionAlert(null)
+                true
+            }
         }
         if (!cleared) return AlarmTransition.CompletionAlert(timerId, changed = false)
         notificationCanceller.cancel()
@@ -97,6 +118,10 @@ internal class AlarmCoordinator(
     private fun emitCompletionAlert(timerId: String?) {
         eventSink.emit(AlarmCoordinatorEvent.CompletionAlertChanged(timerId))
     }
+
+    private fun emitPersistenceFailure(failure: CompletionAlertPersistenceFailure) {
+        eventSink.emit(AlarmCoordinatorEvent.CompletionAlertPersistenceFailed(failure))
+    }
 }
 
 internal class TimerAlarmSchedulerPort(
@@ -112,9 +137,9 @@ internal class SharedPreferencesCompletionAlertStore(
 ) : CompletionAlertStore {
     override fun load(): String? = preferences.getString(key, null)
 
-    override fun save(timerId: String?) {
-        preferences.edit().apply {
-            if (timerId == null) remove(key) else putString(key, timerId)
-        }.commit()
+    override fun save(timerId: String?): Boolean {
+        val editor = preferences.edit()
+        if (timerId == null) editor.remove(key) else editor.putString(key, timerId)
+        return editor.commit()
     }
 }

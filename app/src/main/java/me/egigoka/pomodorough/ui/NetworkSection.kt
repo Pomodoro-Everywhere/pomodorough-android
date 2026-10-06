@@ -141,14 +141,16 @@ internal fun NetworkSection(
     state: AppState,
     enabled: Boolean,
     actions: NetworkActions,
+    roomNameDraft: RoomNameDraftState,
+    joinCode: String,
+    onJoinCodeChange: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var roomName by remember { mutableStateOf("") }
-    var joinCode by remember { mutableStateOf("") }
     var confirmLeave by remember { mutableStateOf(false) }
     var confirmRecovery by remember { mutableStateOf(false) }
     val network = state.network
     val networkActionsEnabled = enabled && network.identityRecovery == null && !network.transitioning
+    ClearNetworkDraftsOnRoomOpened(network.roomId, roomNameDraft, onJoinCodeChange)
     Column(modifier, verticalArrangement = Arrangement.spacedBy(14.dp)) {
         NetworkSectionHeader()
         network.identityRecovery?.let { kind ->
@@ -161,26 +163,54 @@ internal fun NetworkSection(
         RouteSwitch(network.mode, network.roomId != null, networkActionsEnabled, actions.onSetMode)
         NetworkStatusCard(network, networkActionsEnabled, actions.onSyncNow) { confirmLeave = true }
         if (network.roomId == null) {
-            CreateRoomCard(roomName, networkActionsEnabled, { roomName = it }) { actions.onCreateRoom(roomName) }
-            JoinRoomCard(joinCode, networkActionsEnabled, { joinCode = it }) { actions.onJoinRoom(joinCode) }
+            CreateRoomCard(roomNameDraft.name, networkActionsEnabled, roomNameDraft::onChange) {
+                actions.onCreateRoom(roomNameDraft.name)
+            }
+            JoinRoomCard(joinCode, networkActionsEnabled, onJoinCodeChange) { actions.onJoinRoom(joinCode) }
         }
         network.invite?.let { RoomInviteCard(it, networkActionsEnabled, actions) }
         NetworkPrivacyCard()
         CrashReportingCard()
     }
+    NetworkConfirmDialogs(network, actions, confirmLeave, confirmRecovery, { confirmLeave = it }, { confirmRecovery = it })
+}
+
+@Composable
+private fun NetworkConfirmDialogs(
+    network: IrohNetworkState,
+    actions: NetworkActions,
+    confirmLeave: Boolean,
+    confirmRecovery: Boolean,
+    onConfirmLeaveChange: (Boolean) -> Unit,
+    onConfirmRecoveryChange: (Boolean) -> Unit,
+) {
     if (confirmLeave) {
         LeaveRoomDialog(
-            onConfirm = { confirmLeave = false; actions.onLeaveRoom() },
-            onDismiss = { confirmLeave = false },
+            onConfirm = { onConfirmLeaveChange(false); actions.onLeaveRoom() },
+            onDismiss = { onConfirmLeaveChange(false) },
         )
     }
     if (confirmRecovery) {
         network.identityRecovery?.let { kind ->
             IdentityRecoveryDialog(
                 kind = kind,
-                onConfirm = { confirmRecovery = false; actions.onConfirmIdentityRecovery() },
-                onDismiss = { confirmRecovery = false },
+                onConfirm = { onConfirmRecoveryChange(false); actions.onConfirmIdentityRecovery() },
+                onDismiss = { onConfirmRecoveryChange(false) },
             )
+        }
+    }
+}
+
+@Composable
+private fun ClearNetworkDraftsOnRoomOpened(
+    roomId: String?,
+    roomNameDraft: RoomNameDraftState,
+    onJoinCodeChange: (String) -> Unit,
+) {
+    androidx.compose.runtime.LaunchedEffect(roomId) {
+        if (roomId != null) {
+            roomNameDraft.clear()
+            onJoinCodeChange("")
         }
     }
 }

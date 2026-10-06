@@ -16,13 +16,37 @@ enum class TimerLayoutDecision {
     FoldHalfOpen,
 }
 
+// Navigation keeps every destination reachable from landscape Timer.
+// The choice derives from measured proportions, not a fixed width:
+// clearly-wide windows earn a side rail (vertical space is scarce),
+// near-square windows keep a bottom bar (horizontal space is scarce).
+internal enum class LandscapeNavigationStyle {
+    Rail,
+    Bar,
+}
+
+internal fun landscapeNavigationStyle(
+    maxWidthDp: Dp,
+    maxHeightDp: Dp,
+): LandscapeNavigationStyle =
+    if (maxWidthDp >= maxHeightDp * 1.4f) LandscapeNavigationStyle.Rail
+    else LandscapeNavigationStyle.Bar
+
 // Mirrors TimerScreenScaffold's BoxWithConstraints gate
 // (maxWidth > maxHeight); half-open wins so tabletop keeps its split.
+// Separating FLAT (two logical displays with a hinge gap) also splits:
+// it is a fold layout even though the angle is flat.
+internal fun shouldUseFoldSplit(
+    posture: FoldPosture = FoldPosture.Flat,
+    isSeparating: Boolean = false,
+): Boolean = posture == FoldPosture.HalfOpen || isSeparating
+
 internal fun timerLayoutDecision(
     maxWidthDp: Dp,
     maxHeightDp: Dp,
     posture: FoldPosture = FoldPosture.Flat,
+    isSeparating: Boolean = false,
 ): TimerLayoutDecision {
-    if (posture == FoldPosture.HalfOpen) return TimerLayoutDecision.FoldHalfOpen
+    if (shouldUseFoldSplit(posture, isSeparating)) return TimerLayoutDecision.FoldHalfOpen
     return if (maxWidthDp > maxHeightDp) TimerLayoutDecision.Landscape else TimerLayoutDecision.Portrait
 }

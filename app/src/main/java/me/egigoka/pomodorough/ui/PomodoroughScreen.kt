@@ -153,6 +153,8 @@ fun PomodoroughScreen(
     onDeleteAccount: (String) -> Unit = {},
     onOpenPrivacy: () -> Unit = {},
     onStopSound: () -> Unit = {},
+    joinInviteDraft: String = "",
+    onJoinInviteChange: (String) -> Unit = {},
 ) {
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         if (!state.ready) {
@@ -168,6 +170,7 @@ fun PomodoroughScreen(
                 onRefreshIrohInvite, onSyncIrohNow, onConfirmIrohIdentityRecovery,
                 onShareIrohInvite,
                 onDeleteAccount, onOpenPrivacy,
+                joinInviteDraft, onJoinInviteChange,
             ))
         }
     }
@@ -305,4 +308,6 @@ internal data class TimerScreenActions(
     val onConfirmIrohIdentityRecovery: () -> Unit,
     val onShareIrohInvite: (String) -> Unit,
     val onDeleteAccount: (String) -> Unit, val onOpenPrivacy: () -> Unit,
+    val joinInviteDraft: String = "",
+    val onJoinInviteChange: (String) -> Unit = {},
 )

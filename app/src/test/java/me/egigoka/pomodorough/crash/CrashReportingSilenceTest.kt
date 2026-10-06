@@ -19,6 +19,7 @@ class CrashReportingSilenceTest {
         "me/egigoka/pomodorough/data/auth/AuthRepository.kt",
         "me/egigoka/pomodorough/data/time/TrustedClock.kt",
         "me/egigoka/pomodorough/data/CoreProjectionDispatcher.kt",
+        "me/egigoka/pomodorough/data/CoreBatchPlanDispatcher.kt",
         "me/egigoka/pomodorough/data/CoreSynchronizationDispatchers.kt",
         "me/egigoka/pomodorough/data/CoreTimerPolicyDispatchers.kt",
         "me/egigoka/pomodorough/data/api/PomodoroughApi.kt",

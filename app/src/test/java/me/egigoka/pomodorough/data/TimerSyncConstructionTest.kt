@@ -2,6 +2,7 @@ package me.egigoka.pomodorough.data
 
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import me.egigoka.pomodorough.core.SharedCore
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
@@ -10,10 +11,19 @@ import org.junit.Test
 
 class TimerSyncConstructionTest {
     private val json = Json { explicitNulls = false }
+    private val core by lazy {
+        SharedCore.load(
+            requireNotNull(javaClass.classLoader?.getResourceAsStream("pomodorough_core.wasm")),
+        )
+    }
+    private val planner by lazy {
+        CoreBatchPlanDispatcher { operation, input -> core.dispatch(operation, input) }
+    }
 
     @Test
-    fun syncRequestPreservesWireBytesAndOrderWhileEncodingTimerCommands() {
-        val commands = listOf(command("command-b"), command("command-a"))
+    fun syncRequestFollowsCoreOrderWhileEncodingTimerCommands() {
+        val earlyCommand = command("command-a", sequence = 1, wallMs = 10L)
+        val lateCommand = command("command-b", sequence = 2, wallMs = 20L)
         val lateDuration = duration("duration-late", 20L)
         val earlyDuration = duration("duration-early", 10L)
         val taskB = task("task-b")
@@ -23,30 +33,34 @@ class TimerSyncConstructionTest {
         val lateSelection = selection("selection-late", 20L)
         val earlySelection = selection("selection-early", 10L)
         val queues = PendingSyncQueues(
-            commands = commands,
+            commands = listOf(lateCommand, earlyCommand),
             taskOperations = listOf(taskB, taskA),
             durationOperations = listOf(lateDuration, earlyDuration),
             autoStartOperations = listOf(lateAutoStart, earlyAutoStart),
             selectedTaskOperations = listOf(lateSelection, earlySelection),
         )
+        val plan = planner.planSync(queues, "device", emptyMap(), "commands")
 
-        val request = TimerSyncConstruction.syncAttempt(
+        val attempt = TimerSyncConstruction.syncAttempt(
             identity = SyncAttemptIdentity(4L, "construction-attempt"),
             deviceId = "device",
             revision = 7L,
-            eligibleCommands = commands,
             queues = queues,
+            plan = plan,
             sentPhysicalMs = 100L,
             sentElapsedRealtimeMs = 90L,
             selectedPhase = TimerPhase.Focus,
             selectedPhaseGeneration = 3L,
-        ).request
+        )
+        val request = attempt.request
+        // Core sorts every domain by (hlcWallMs, hlcCounter, deviceId, id);
+        // the adapter preserves the returned order and exact records.
         val expected = SyncRequest(
             deviceId = "device",
             lastRevision = 7L,
-            commands = commands.map { it.copy(physicalOccurredAt = null) },
+            commands = listOf(earlyCommand, lateCommand).map { it.copy(physicalOccurredAt = null) },
             durationOperations = listOf(earlyDuration, lateDuration),
-            taskOperations = listOf(taskB, taskA),
+            taskOperations = listOf(taskA, taskB),
             autoStartOperations = listOf(earlyAutoStart, lateAutoStart),
             selectedTaskOperations = listOf(earlySelection, lateSelection),
         )
@@ -55,14 +69,15 @@ class TimerSyncConstructionTest {
         assertEquals(json.encodeToString(expected), json.encodeToString(request))
         assertNull(request.commands.first().physicalOccurredAt)
         assertSame(earlyDuration, request.durationOperations[0])
-        assertSame(taskB, request.taskOperations[0])
+        assertSame(taskA, request.taskOperations[0])
         assertSame(earlyAutoStart, request.autoStartOperations[0])
         assertSame(earlySelection, request.selectedTaskOperations[0])
+        assertEquals("commands", attempt.nextDomain)
     }
 
     @Test
     fun bootstrapRequestPreservesPayloadOrderAndExcludesLocalPayloadForKeepRemote() {
-        val commands = listOf(command("command-b"), command("command-a"))
+        val commands = listOf(command("command-b", 2, 20L), command("command-a", 1, 10L))
         val task = task("task")
         val duration = duration("duration", 10L)
         val autoStart = autoStart("auto", 10L)
@@ -116,8 +131,33 @@ class TimerSyncConstructionTest {
     }
 
     @Test
+    fun bootstrapRequestFromPlanResolvesCoreOrderExactly() {
+        val lateCommand = command("command-b", sequence = 2, wallMs = 20L)
+        val earlyCommand = command("command-a", sequence = 1, wallMs = 10L)
+        val queues = PendingSyncQueues(
+            commands = listOf(lateCommand, earlyCommand),
+            taskOperations = emptyList(),
+            durationOperations = emptyList(),
+            autoStartOperations = emptyList(),
+            selectedTaskOperations = emptyList(),
+        )
+        val plan = planner.planBootstrap(BootstrapStrategy.Merge, queues, "device", emptyMap())
+
+        val request = TimerSyncConstruction.bootstrapRequestFromPlan(
+            deviceId = "device",
+            revision = 7L,
+            strategy = BootstrapStrategy.Merge,
+            queues = queues,
+            plan = plan,
+        )
+
+        assertEquals(listOf("command-a", "command-b"), request.commands.map(TimerCommand::id))
+        assertEquals(earlyCommand.timerId, request.commands[0].timerId)
+    }
+
+    @Test
     fun timerCommandRequestEncoderStripsOnlyPhysicalOccurrence() {
-        val command = command("command")
+        val command = command("command", 1, 10L)
 
         val encoded = TimerCommandRequestEncoder.encode(command)
 
@@ -126,15 +166,15 @@ class TimerSyncConstructionTest {
         assertEquals("2026-08-25T10:00:00Z", command.physicalOccurredAt)
     }
 
-    private fun command(id: String) = TimerCommand(
+    private fun command(id: String, sequence: Int, wallMs: Long) = TimerCommand(
         id = id,
-        deviceSequence = 1L,
+        deviceSequence = sequence.toLong(),
         timerId = "timer-$id",
         type = CommandType.Start,
         phase = TimerPhase.Focus,
         plannedDurationMs = 1_500_000L,
         occurredAt = "2026-08-25T10:00:00Z",
-        hlcWallMs = 1L,
+        hlcWallMs = wallMs,
         hlcCounter = 0L,
         observedElapsedMs = 0L,
         physicalOccurredAt = "2026-08-25T10:00:00Z",

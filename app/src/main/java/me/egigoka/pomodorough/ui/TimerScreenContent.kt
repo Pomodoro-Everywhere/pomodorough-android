@@ -55,6 +55,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -77,6 +79,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalAccessibilityManager
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
@@ -224,7 +227,7 @@ internal data class TimerContentActions(
     val onDismissNotice: () -> Unit,
 )
 
-private fun timerHeroState(state: AppState, mutationsEnabled: Boolean) = TimerHeroState(
+internal fun timerHeroState(state: AppState, mutationsEnabled: Boolean) = TimerHeroState(
     timer = state.timer,
     activeCompletionAlertTimerId = state.completionAlertTimerId,
     settings = state.settings,
@@ -378,6 +381,46 @@ internal fun shouldCompactNavLabels(fontScale: Float): Boolean = fontScale >= 1.
 internal fun navLabelFontSize(fontScale: Float): androidx.compose.ui.unit.TextUnit =
     if (shouldCompactNavLabels(fontScale)) 10.sp else androidx.compose.ui.unit.TextUnit.Unspecified
 
+private fun mainTabIcon(tab: MainTab): ImageVector = when (tab) {
+    MainTab.Timer -> Icons.Outlined.Timer
+    MainTab.Tasks -> Icons.Outlined.Checklist
+    MainTab.Pattern -> Icons.Outlined.Tune
+    MainTab.Arrivals -> Icons.Outlined.History
+    MainTab.Network -> Icons.Outlined.Hub
+}
+
+@Composable
+internal fun MainNavigationRail(
+    active: MainTab,
+    onSelect: (MainTab) -> Unit,
+) {
+    val fontScale = LocalConfiguration.current.fontScale
+    val labelFontSize = navLabelFontSize(fontScale)
+    NavigationRail {
+        MainTab.entries.forEach { tab ->
+            val label = stringResource(tab.labelRes)
+            NavigationRailItem(
+                selected = tab == active,
+                onClick = { onSelect(tab) },
+                icon = {
+                    Icon(
+                        imageVector = mainTabIcon(tab),
+                        contentDescription = label,
+                    )
+                },
+                label = {
+                    Text(
+                        label,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        fontSize = labelFontSize,
+                    )
+                },
+            )
+        }
+    }
+}
+
 @Composable
 internal fun MainNavigationBar(
     active: MainTab,
@@ -393,13 +436,7 @@ internal fun MainNavigationBar(
                 onClick = { onSelect(tab) },
                 icon = {
                     Icon(
-                        imageVector = when (tab) {
-                            MainTab.Timer -> Icons.Outlined.Timer
-                            MainTab.Tasks -> Icons.Outlined.Checklist
-                            MainTab.Pattern -> Icons.Outlined.Tune
-                            MainTab.Arrivals -> Icons.Outlined.History
-                            MainTab.Network -> Icons.Outlined.Hub
-                        },
+                        imageVector = mainTabIcon(tab),
                         contentDescription = label,
                     )
                 },

@@ -122,9 +122,10 @@ class AlarmCoordinatorTest {
 
         override fun load(): String? = timerId
 
-        override fun save(timerId: String?) {
+        override fun save(timerId: String?): Boolean {
             this.timerId = timerId
             order?.add("alert.save:$timerId")
+            return true
         }
     }
 }

@@ -66,6 +66,7 @@ internal data class CentralizedSyncAttemptInput(
     val snapshot: CentralizedSyncSnapshot,
     val sentPhysicalMs: Long,
     val sentElapsedRealtimeMs: Long,
+    val nextDomain: String = "commands",
 )
 
 internal data class CentralizedSyncApplicationInput(
@@ -133,17 +134,27 @@ internal class CentralizedSyncCoordinator(
     private val reconciliationDispatcher: CoreReconciliationDispatcher,
     private val projectionDispatcher: CoreProjectionDispatcher,
     private val completionDispatcher: CoreCompletionDispatcher,
+    private val batchPlanner: CoreBatchPlanDispatcher,
     private val zoneId: ZoneId = ZoneId.systemDefault(),
 ) {
     fun prepareSyncAttempt(input: CentralizedSyncAttemptInput): SyncAttempt {
         val snapshot = input.snapshot
         TimerSyncValidation.validatePendingQueues(snapshot.queues, snapshot.local.deviceId)
+        val plan = batchPlanner.planSync(
+            snapshot.queues,
+            snapshot.local.deviceId,
+            snapshot.dependencies,
+            input.nextDomain,
+        )
+        if (plan.status != "planned" && plan.status != "blocked_dependency") {
+            throw SyncProtocolException("Sync batch plan is not sendable")
+        }
         return TimerSyncConstruction.syncAttempt(
             identity = input.identity,
             deviceId = snapshot.local.deviceId,
             revision = snapshot.local.revision,
-            eligibleCommands = eligibleCommands(snapshot.queues, snapshot.dependencies),
             queues = snapshot.queues,
+            plan = plan,
             sentPhysicalMs = input.sentPhysicalMs,
             sentElapsedRealtimeMs = input.sentElapsedRealtimeMs,
             selectedPhase = snapshot.settings.selectedPhase,
@@ -241,12 +252,20 @@ internal class CentralizedSyncCoordinator(
             reconciled.projectionQueues.toCorePending(snapshot.local.deviceId),
             input.projectionNow,
         )
-        val request = TimerSyncConstruction.bootstrapRequest(
+        val plan = runCatching {
+            plannedBootstrap(input.strategy, reconciled.queues, snapshot.local.deviceId, reconciled.dependencies)
+        }.getOrElse { return CentralizedBootstrapPreparationTransition.Invalid(it) }
+        if (plan.status != "planned") {
+            return CentralizedBootstrapPreparationTransition.Invalid(
+                IllegalArgumentException("Bootstrap batch exceeds Core aggregate limits"),
+            )
+        }
+        val request = TimerSyncConstruction.bootstrapRequestFromPlan(
             deviceId = snapshot.local.deviceId,
             revision = input.bootstrap.revision,
             strategy = input.strategy,
-            eligibleCommands = eligibleCommands(reconciled.queues, reconciled.dependencies),
             queues = reconciled.queues,
+            plan = plan,
         )
         // A60: pure require()-only validators cannot throw CancellationException;
         // ordinary failures map to Invalid, pinned by CentralizedSyncCoordinatorTest.
@@ -265,18 +284,36 @@ internal class CentralizedSyncCoordinator(
         queues: PendingSyncQueues,
         dependencies: Map<String, String>,
     ): Throwable? {
-        val request = TimerSyncConstruction.bootstrapRequest(
-            deviceId = input.snapshot.local.deviceId,
-            revision = input.bootstrap.revision,
-            strategy = input.strategy,
-            eligibleCommands = eligibleCommands(queues, dependencies),
-            queues = queues,
-        )
         // A60: same purity note as prepareBootstrapResolution above;
         // oversized queues map to Invalid, pinned by the same test.
         return runCatching {
-            TimerSyncValidation.validateResolutionCollectionSizes(request)
+            requirePlannedBootstrap(input, queues, dependencies)
         }.exceptionOrNull()
+    }
+
+    private fun plannedBootstrap(
+        strategy: BootstrapStrategy,
+        queues: PendingSyncQueues,
+        deviceId: String,
+        dependencies: Map<String, String>,
+    ): CoreBatchPlan = batchPlanner.planBootstrap(strategy, queues, deviceId, dependencies)
+
+    private fun requirePlannedBootstrap(
+        input: CentralizedBootstrapPreparationInput,
+        queues: PendingSyncQueues,
+        dependencies: Map<String, String>,
+    ) {
+        val plan = plannedBootstrap(input.strategy, queues, input.snapshot.local.deviceId, dependencies)
+        require(plan.status == "planned") { "Bootstrap batch exceeds Core aggregate limits" }
+        TimerSyncValidation.validateResolutionCollectionSizes(
+            TimerSyncConstruction.bootstrapRequestFromPlan(
+                deviceId = input.snapshot.local.deviceId,
+                revision = input.bootstrap.revision,
+                strategy = input.strategy,
+                queues = queues,
+                plan = plan,
+            ),
+        )
     }
 
     fun applyBootstrapInstallation(
@@ -392,9 +429,6 @@ internal class CentralizedSyncCoordinator(
         reconciled.queues,
         dependencies.values.toSet(),
     )
-
-    fun eligibleCommands(snapshot: CentralizedSyncSnapshot): List<TimerCommand> =
-        eligibleCommands(snapshot.queues, snapshot.dependencies)
 
     fun queuesEmpty(queues: PendingSyncQueues): Boolean =
         queues.commands.isEmpty() &&
@@ -527,8 +561,19 @@ internal class CentralizedSyncCoordinator(
             reconciled.projectionQueues,
             now,
         )
+        val phase = reconciledSelectedPhase(
+            snapshot = snapshot,
+            currentPhase = snapshot.settings.selectedPhase,
+            selectedPhaseAtSend = null,
+            selectedPhaseGenerationAtSend = null,
+            sentCommands = emptyList(),
+            acknowledgementResponse = response,
+            canonicalResponse = response,
+            nextProjection = TimerProjection(projection.canonicalTimer, projection.history),
+        )
         val settings = snapshot.settings.withDurations(projection.durationsMs).copy(
             autoStartBreaks = projection.autoStartBreaks,
+            selectedPhase = phase,
         )
         return CentralizedProjectedState(reconciled.queues, settings, projection)
     }
@@ -613,6 +658,10 @@ internal class CentralizedSyncCoordinator(
             userJson = profile?.let { json.encodeToString(it) } ?: base.userJson,
             ownerUserId = profile?.id ?: base.ownerUserId,
             canonicalAutoStartBreaks = response.autoStartBreaks,
+            safeBaseDurationsJson = json.encodeToString(response.durationsMs),
+            safeBaseSelectedTaskId = response.selectedTaskId,
+            safeCanonicalHeadWallMs = response.serverHlcWallMs,
+            safeCanonicalHeadCounter = response.serverHlcCounter,
             ownedTimerId = when {
                 clearOwnedTimer -> null
                 profile != null && generated === EmptyGeneratedResolution -> snapshot.local.ownedTimerId
@@ -690,7 +739,7 @@ internal class CentralizedSyncCoordinator(
         ) return currentPhase
         val acknowledgements = acknowledgementResponse.acknowledgements
             .associateBy(Acknowledgement::commandId)
-        return sentCommands.asSequence()
+        val afterLocal = sentCommands.asSequence()
             .filter { it.type == CommandType.Finish }
             .sortedWith(compareBy(TimerCommand::deviceSequence, TimerCommand::id))
             .fold(currentPhase) { phase, finish ->
@@ -704,6 +753,105 @@ internal class CentralizedSyncCoordinator(
                     nextProjection,
                 )
             }
+        return phaseAfterRemote(afterLocal, snapshot, canonicalResponse, sentCommands)
+    }
+
+    private fun phaseAfterRemote(
+        currentPhase: String,
+        snapshot: CentralizedSyncSnapshot,
+        canonicalResponse: SyncResponse,
+        sentCommands: List<TimerCommand>,
+    ): String {
+        val newest = newestRemoteCompletion(snapshot, canonicalResponse, sentCommands)
+            ?: return currentPhase
+        return remotePhaseAfterCompletion(snapshot, canonicalResponse, newest)
+    }
+
+    private fun newestRemoteCompletion(
+        snapshot: CentralizedSyncSnapshot,
+        canonicalResponse: SyncResponse,
+        sentCommands: List<TimerCommand>,
+    ): HistoryItem? = newRemoteCompletions(snapshot, canonicalResponse, sentCommands)
+        .maxWithOrNull(compareBy({ completionInstant(it, canonicalResponse) }, { it.timerId }, { it.id }))
+
+    private fun newRemoteCompletions(
+        snapshot: CentralizedSyncSnapshot,
+        canonicalResponse: SyncResponse,
+        sentCommands: List<TimerCommand>,
+    ): List<HistoryItem> {
+        val known = snapshot.canonicalHistory.asSequence()
+            .filter { it.status == TimerStatus.Completed }
+            .map(HistoryItem::timerId)
+            .toSet() + knownCompletedCanonicalId(snapshot)
+        val sentTimerIds = sentCommands.asSequence()
+            .filter { it.type == CommandType.Finish }
+            .map(TimerCommand::timerId)
+            .toSet()
+        return responseCompletions(canonicalResponse)
+            .filter { it.phase in TimerPhase.all }
+            .filter { it.timerId !in known && it.timerId !in sentTimerIds }
+    }
+
+    private fun knownCompletedCanonicalId(snapshot: CentralizedSyncSnapshot): Set<String> {
+        val timer = snapshot.canonicalTimer
+        return if (timer != null && timer.status == TimerStatus.Completed) {
+            setOf(timer.id)
+        } else {
+            emptySet()
+        }
+    }
+
+    private fun responseCompletions(response: SyncResponse): List<HistoryItem> {
+        val completed = response.history.filter { it.status == TimerStatus.Completed }
+        val timer = response.canonicalTimer ?: return completed
+        if (timer.status != TimerStatus.Completed) return completed
+        if (completed.any { it.timerId == timer.id }) return completed
+        return completed + HistoryItem(
+            id = "canonical-completion:${timer.id}",
+            timerId = timer.id,
+            commandId = timer.lastIntent?.commandId ?: "remote-completion:${timer.id}",
+            phase = timer.phase,
+            status = timer.status,
+            plannedDurationMs = timer.plannedDurationMs,
+            completedAt = timer.anchorAt,
+            endedAt = timer.anchorAt,
+            taskId = timer.taskId,
+        )
+    }
+
+    private fun remotePhaseAfterCompletion(
+        snapshot: CentralizedSyncSnapshot,
+        canonicalResponse: SyncResponse,
+        item: HistoryItem,
+    ): String {
+        val occurredAt = item.completedAt ?: item.endedAt ?: canonicalResponse.serverTime
+        return completionDispatcher.finishApplied(
+            CoreFinishAppliedInput(
+                commandId = item.commandId?.takeIf(String::isNotEmpty)
+                    ?: "remote-completion:${item.timerId}",
+                timerId = item.timerId,
+                phase = item.phase,
+                occurredAt = occurredAt,
+                history = remoteCompletionHistory(canonicalResponse, item),
+                autoStartBreaks = snapshot.settings.autoStartBreaks,
+                localDeviceId = snapshot.local.deviceId,
+                ownedTimerId = snapshot.local.ownedTimerId,
+                reference = completionInstant(item, canonicalResponse),
+                zoneId = zoneId,
+            ),
+        ).selectedPhase
+    }
+
+    private fun remoteCompletionHistory(response: SyncResponse, item: HistoryItem): List<HistoryItem> {
+        if (response.history.any { it.timerId == item.timerId && it.status == TimerStatus.Completed }) {
+            return response.history
+        }
+        return response.history + item
+    }
+
+    private fun completionInstant(item: HistoryItem, response: SyncResponse): Instant {
+        val raw = item.completedAt ?: item.endedAt ?: response.serverTime
+        return runCatching { Instant.parse(raw) }.getOrElse { Instant.parse(response.serverTime) }
     }
 
     private fun phaseAfterFinish(
@@ -905,11 +1053,6 @@ internal class CentralizedSyncCoordinator(
             }
         }
     }
-
-    private fun eligibleCommands(
-        queues: PendingSyncQueues,
-        dependencies: Map<String, String>,
-    ): List<TimerCommand> = queues.commands.filter { it.id !in dependencies }
 
     internal fun resolutionQueues(
         queues: PendingSyncQueues,

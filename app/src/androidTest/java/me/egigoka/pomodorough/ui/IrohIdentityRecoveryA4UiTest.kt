@@ -82,6 +82,9 @@ class IrohIdentityRecoveryA4UiTest {
                             recoveryState(kind),
                             enabled = true,
                             actions = recoveryActions(onConfirm),
+                            roomNameDraft = RoomNameDraftState(),
+                            joinCode = "",
+                            onJoinCodeChange = {},
                             modifier = Modifier.fillMaxWidth(),
                         )
                     }

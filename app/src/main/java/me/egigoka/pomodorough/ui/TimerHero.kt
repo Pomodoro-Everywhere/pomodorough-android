@@ -225,7 +225,8 @@ private fun PortraitTimerHero(
     showContextLabel: Boolean,
     orbitMaxSize: Dp,
 ) {
-    Column(Modifier.padding(14.dp).verticalScroll(rememberScrollState())) {
+    // PortraitTimerScreen owns scrolling for the header, messages, and hero together.
+    Column(Modifier.padding(14.dp)) {
         if (showContextLabel) {
             SectionLabel(stringResource(R.string.current_service))
             Spacer(Modifier.height(6.dp))
@@ -358,7 +359,7 @@ internal fun landscapeReadoutLetterSpacing(fontScale: Float): androidx.compose.u
 }
 
 @Composable
-private fun LandscapeTimerActions(state: TimerHeroState, actions: TimerHeroActions) {
+internal fun LandscapeTimerActions(state: TimerHeroState, actions: TimerHeroActions) {
     val controls = timerControlState(state)
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         Button(

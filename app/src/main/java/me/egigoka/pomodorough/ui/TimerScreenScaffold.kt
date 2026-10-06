@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -51,9 +52,12 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.window.layout.FoldingFeature
+import kotlinx.coroutines.CancellationException
 import androidx.window.layout.WindowInfoTracker
+import androidx.window.layout.WindowMetricsCalculator
 import me.egigoka.pomodorough.R
 import me.egigoka.pomodorough.data.AccountSwitchState
 import me.egigoka.pomodorough.data.AppState
@@ -139,12 +143,18 @@ private data class TimerScreenUiState(
     val dialogs: TimerDialogState,
     val navigation: TimerNavigationState,
     val confirmationStrategy: MutableState<BootstrapStrategy?>,
+    val taskDraft: TaskDraftUiState,
+    val roomNameDraft: RoomNameDraftState,
 )
 
 @Composable
 private fun rememberTimerScreenUiState(state: AppState): TimerScreenUiState {
     val dialogs = rememberSaveable(saver = TimerDialogSaver) { TimerDialogState() }
     val activeTabState = rememberSaveable(stateSaver = MainTabSaver) { mutableStateOf(MainTab.Timer) }
+    // R43-A07: drafts live above key(activeTab) so tab switches keep
+    // them. Non-sensitive drafts use SavedState to survive recreation.
+    val taskDraft = rememberSaveable(saver = TaskDraftSaver) { TaskDraftUiState() }
+    val roomNameDraft = rememberSaveable(saver = RoomNameDraftSaver) { RoomNameDraftState() }
     val tasks = rememberLazyListState()
     val pattern = rememberLazyListState()
     val arrivals = rememberLazyListState()
@@ -163,8 +173,8 @@ private fun rememberTimerScreenUiState(state: AppState): TimerScreenUiState {
         state.historyResolution?.pendingStrategy,
         state.historyResolution?.recovery,
     ) { mutableStateOf<BootstrapStrategy?>(null) }
-    return remember(dialogs, navigation, confirmation) {
-        TimerScreenUiState(dialogs, navigation, confirmation)
+    return remember(dialogs, navigation, confirmation, taskDraft, roomNameDraft) {
+        TimerScreenUiState(dialogs, navigation, confirmation, taskDraft, roomNameDraft)
     }
 }
 
@@ -192,16 +202,25 @@ private fun TimerScreenLayout(
         }
         // Flat posture falls back to the legacy maxWidth > maxHeight gate
         // inside timerLayoutDecision; unavailable window info stays Flat.
-        when (timerLayoutDecision(maxWidth, maxHeight, foldState.posture)) {
+        // Separating FLAT (isSeparating) keeps the fold split even when flat.
+        when (timerLayoutDecision(maxWidth, maxHeight, foldState.posture, foldState.isSeparating)) {
             TimerLayoutDecision.FoldHalfOpen -> HalfOpenTimerScreen(
                 state,
                 mutationsEnabled,
                 contentActions,
-                foldState.hinge,
+                foldState,
                 ui.navigation.activeTab,
                 onSelectTab = { ui.navigation.activeTab = it },
             )
-            TimerLayoutDecision.Landscape -> LandscapeTimerScreen(state, mutationsEnabled, contentActions)
+            TimerLayoutDecision.Landscape -> LandscapeTimerScaffold(
+                state,
+                mutationsEnabled,
+                contentActions,
+                activeTab = ui.navigation.activeTab,
+                onSelectTab = { ui.navigation.activeTab = it },
+                maxWidth = maxWidth,
+                maxHeight = maxHeight,
+            )
             TimerLayoutDecision.Portrait -> PortraitScreenScaffold(
                 state,
                 actions,
@@ -214,9 +233,51 @@ private fun TimerScreenLayout(
     }
 }
 
+// Landscape keeps navigation outside the orientation-specific timer
+// content: a side rail when clearly wide, a bottom bar when barely
+// wide. Both surfaces share MainTab so every destination stays
+// reachable without rotating.
+@Composable
+private fun LandscapeTimerScaffold(
+    state: AppState,
+    mutationsEnabled: Boolean,
+    actions: TimerContentActions,
+    activeTab: MainTab,
+    onSelectTab: (MainTab) -> Unit,
+    maxWidth: Dp,
+    maxHeight: Dp,
+) {
+    val style = landscapeNavigationStyle(maxWidth, maxHeight)
+    Scaffold(
+        modifier = Modifier.fillMaxSize().systemBarsPadding(),
+        bottomBar = {
+            if (style == LandscapeNavigationStyle.Bar) {
+                MainNavigationBar(activeTab, onSelectTab)
+            }
+        },
+    ) { padding ->
+        if (style == LandscapeNavigationStyle.Rail) {
+            Row(Modifier.fillMaxSize().padding(padding)) {
+                MainNavigationRail(activeTab, onSelectTab)
+                Box(Modifier.weight(1f).fillMaxHeight()) {
+                    LandscapeTimerScreen(state, mutationsEnabled, actions)
+                }
+            }
+        } else {
+            Box(Modifier.fillMaxSize().padding(padding)) {
+                LandscapeTimerScreen(state, mutationsEnabled, actions)
+            }
+        }
+    }
+}
+
 private data class FoldWindowState(
     val posture: FoldPosture = FoldPosture.Flat,
     val hinge: FoldHingeOrientation = FoldHingeOrientation.Unknown,
+    val hingeBounds: HingeBoundsPx? = null,
+    val windowSize: WindowSizePx? = null,
+    val isSeparating: Boolean = false,
+    val occlusionFull: Boolean = false,
 )
 
 @Composable
@@ -228,28 +289,46 @@ private fun rememberFoldWindowState(): FoldWindowState {
         try {
             WindowInfoTracker.getOrCreate(context).windowLayoutInfo(activity).collect { info ->
                 val feature = info.displayFeatures.filterIsInstance<FoldingFeature>().firstOrNull()
-                val halfOpened = feature?.state == FoldingFeature.State.HALF_OPENED
+                val bounds = feature?.bounds
+                val windowBounds = WindowMetricsCalculator.getOrCreate()
+                    .computeCurrentWindowMetrics(activity).bounds
                 foldState = FoldWindowState(
-                    posture = foldPostureForState(halfOpened),
+                    posture = foldPostureForState(feature?.state == FoldingFeature.State.HALF_OPENED),
                     hinge = foldHingeOrientation(
                         feature?.orientation?.let { it == FoldingFeature.Orientation.VERTICAL },
                     ),
+                    hingeBounds = bounds?.let { HingeBoundsPx(it.left, it.top, it.right, it.bottom) },
+                    windowSize = WindowSizePx(windowBounds.width(), windowBounds.height()),
+                    isSeparating = feature?.isSeparating == true,
+                    occlusionFull = feature?.occlusionType == FoldingFeature.OcclusionType.FULL,
                 )
             }
-        } catch (_: Exception) {
-            // expected-silent: fold tracker is best-effort UI; fall back to flat layout
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: UnsupportedOperationException) {
+            // expected-silent: unsupported window extensions stay flat; no report
+            foldState = FoldWindowState()
+        } catch (error: Exception) {
+            // Fold-tracker diagnostics: one bounded unexpected report
+            // via CrashReporter (deduplicated, no window payload).
+            handleFoldTrackerFailure(error)
             foldState = FoldWindowState()
         }
     }
     return foldState
 }
 
+// Fold split keeps navigation outside the hinge regions: the Scaffold
+// bottom bar and systemBarsPadding apply first, then the usable content
+// size converts window hinge bounds proportionally. Readout and controls
+// are complementary (one instance each), never duplicated across panes.
+// Posture transitions recompose from the current foldState, no caching.
 @Composable
 private fun HalfOpenTimerScreen(
     state: AppState,
     mutationsEnabled: Boolean,
     actions: TimerContentActions,
-    hinge: FoldHingeOrientation,
+    foldState: FoldWindowState,
     activeTab: MainTab,
     onSelectTab: (MainTab) -> Unit,
 ) {
@@ -257,45 +336,102 @@ private fun HalfOpenTimerScreen(
         modifier = Modifier.fillMaxSize().systemBarsPadding(),
         bottomBar = { MainNavigationBar(activeTab, onSelectTab) },
     ) { padding ->
-        if (hinge == FoldHingeOrientation.Vertical) {
-            HalfOpenSideBySide(state, mutationsEnabled, actions, Modifier.padding(padding))
-        } else {
-            HalfOpenTabletop(state, mutationsEnabled, actions, Modifier.padding(padding))
+        BoxWithConstraints(Modifier.fillMaxSize().padding(padding)) {
+            val hingeInContent = windowHingeToContent(
+                foldState.hingeBounds, foldState.windowSize, maxWidth, maxHeight,
+            )
+            val fractions = hingeFractions(foldState.hingeBounds, foldState.windowSize)
+            when (foldState.hinge) {
+                FoldHingeOrientation.Vertical -> FoldSideBySide(
+                    state, mutationsEnabled, actions, fractions, hingeInContent,
+                )
+                FoldHingeOrientation.Horizontal -> FoldTabletop(
+                    state, mutationsEnabled, actions, fractions, hingeInContent,
+                )
+                FoldHingeOrientation.Unknown -> FoldSinglePane(state, mutationsEnabled, actions)
+            }
         }
     }
 }
 
 @Composable
-private fun HalfOpenTabletop(
+private fun FoldSideBySide(
     state: AppState,
     mutationsEnabled: Boolean,
     actions: TimerContentActions,
-    modifier: Modifier = Modifier,
+    fractions: HingeFractions?,
+    hingeInContent: HingeInContent?,
 ) {
-    Column(modifier.fillMaxSize().testTag("timer_half_open")) {
-        Box(Modifier.weight(1f).fillMaxWidth()) {
-            PortraitTimerScreen(state, mutationsEnabled, actions)
+    val weights = verticalSplitWeights(fractions)
+    if (weights == null || hingeInContent == null) {
+        FoldSinglePane(state, mutationsEnabled, actions)
+        return
+    }
+    val hero = timerHeroState(state, mutationsEnabled)
+    Row(Modifier.fillMaxSize().testTag("timer_half_open")) {
+        Box(Modifier.fillMaxHeight().weight(weights.first.coerceAtLeast(0.01f))) {
+            FoldReadoutPane(hero)
         }
-        Box(Modifier.weight(1f).fillMaxWidth()) {
-            LandscapeTimerScreen(state, mutationsEnabled, actions)
+        if (weights.hinge > 0.001f) {
+            Spacer(Modifier.fillMaxHeight().weight(weights.hinge))
+        }
+        Box(Modifier.fillMaxHeight().weight(weights.second.coerceAtLeast(0.01f))) {
+            FoldControlsPane(hero, actions.hero)
         }
     }
 }
 
 @Composable
-private fun HalfOpenSideBySide(
+private fun FoldTabletop(
     state: AppState,
     mutationsEnabled: Boolean,
     actions: TimerContentActions,
-    modifier: Modifier = Modifier,
+    fractions: HingeFractions?,
+    hingeInContent: HingeInContent?,
 ) {
-    Row(modifier.fillMaxSize().testTag("timer_half_open")) {
-        Box(Modifier.weight(1f).fillMaxHeight()) {
-            PortraitTimerScreen(state, mutationsEnabled, actions)
+    val weights = horizontalSplitWeights(fractions)
+    if (weights == null || hingeInContent == null) {
+        FoldSinglePane(state, mutationsEnabled, actions)
+        return
+    }
+    val hero = timerHeroState(state, mutationsEnabled)
+    Column(Modifier.fillMaxSize().testTag("timer_half_open")) {
+        Box(Modifier.fillMaxWidth().weight(weights.first.coerceAtLeast(0.01f))) {
+            FoldReadoutPane(hero)
         }
-        Box(Modifier.weight(1f).fillMaxHeight()) {
-            LandscapeTimerScreen(state, mutationsEnabled, actions)
+        if (weights.hinge > 0.001f) {
+            Spacer(Modifier.fillMaxWidth().weight(weights.hinge))
         }
+        Box(Modifier.fillMaxWidth().weight(weights.second.coerceAtLeast(0.01f))) {
+            FoldControlsPane(hero, actions.hero)
+        }
+    }
+}
+
+@Composable
+private fun FoldReadoutPane(hero: TimerHeroState) {
+    Column(Modifier.fillMaxSize().padding(12.dp)) {
+        LandscapeTimerReadout(hero, Modifier.fillMaxWidth())
+        LongBreakProgress(hero.longBreakProgress, darkModeTextColor(Butter))
+    }
+}
+
+@Composable
+private fun FoldControlsPane(hero: TimerHeroState, actions: TimerHeroActions) {
+    Column(Modifier.fillMaxSize().padding(12.dp)) {
+        LandscapeTaskSelector(hero.taskSelectorState, actions.onSelectTask)
+        LandscapeTimerActions(hero, actions)
+    }
+}
+
+@Composable
+private fun FoldSinglePane(
+    state: AppState,
+    mutationsEnabled: Boolean,
+    actions: TimerContentActions,
+) {
+    Box(Modifier.fillMaxSize().testTag("timer_half_open")) {
+        LandscapeTimerScreen(state, mutationsEnabled, actions)
     }
 }
 
@@ -337,7 +473,7 @@ private fun PortraitScreenScaffold(
         if (ui.navigation.activeTab == MainTab.Timer) {
             PortraitTimerTab(state, actions.onRefresh, contentActions, mutationsEnabled, padding)
         } else {
-            SecondaryTabList(state, actions, contentActions, ui.navigation, mutationsEnabled, recentHistory, padding)
+            SecondaryTabList(state, actions, contentActions, ui, mutationsEnabled, recentHistory, padding)
         }
     }
 }
@@ -374,11 +510,12 @@ private fun SecondaryTabList(
     state: AppState,
     actions: TimerScreenActions,
     contentActions: TimerContentActions,
-    navigation: TimerNavigationState,
+    ui: TimerScreenUiState,
     mutationsEnabled: Boolean,
     recentHistory: List<HistoryItem>,
     padding: PaddingValues,
 ) {
+    val navigation = ui.navigation
     val activeTab = navigation.activeTab
     key(activeTab) {
         Box(
@@ -393,10 +530,10 @@ private fun SecondaryTabList(
                 secondaryHeader(state, contentActions)
                 when (activeTab) {
                     MainTab.Timer -> Unit
-                    MainTab.Tasks -> taskTab(state, actions, mutationsEnabled)
+                    MainTab.Tasks -> taskTab(state, actions, mutationsEnabled, ui.taskDraft)
                     MainTab.Pattern -> patternTab(state, actions, mutationsEnabled)
                     MainTab.Arrivals -> arrivalsTab(state, recentHistory)
-                    MainTab.Network -> networkTab(state, actions, mutationsEnabled)
+                    MainTab.Network -> networkTab(state, actions, mutationsEnabled, ui.roomNameDraft)
                 }
             }
         }
@@ -431,12 +568,14 @@ private fun LazyListScope.taskTab(
     state: AppState,
     actions: TimerScreenActions,
     mutationsEnabled: Boolean,
+    taskDraft: TaskDraftUiState,
 ) {
     item {
         TaskBoardHeader(
             state.taskSummaries,
             mutationsEnabled,
             actions.onAddTask,
+            taskDraft,
             Modifier.padding(horizontal = 16.dp, vertical = 16.dp),
         )
     }
@@ -514,6 +653,7 @@ private fun LazyListScope.networkTab(
     state: AppState,
     actions: TimerScreenActions,
     mutationsEnabled: Boolean,
+    roomNameDraft: RoomNameDraftState,
 ) {
     item {
         NetworkSection(
@@ -529,6 +669,9 @@ private fun LazyListScope.networkTab(
                 onConfirmIdentityRecovery = actions.onConfirmIrohIdentityRecovery,
                 onShareInvite = actions.onShareIrohInvite,
             ),
+            roomNameDraft,
+            actions.joinInviteDraft,
+            actions.onJoinInviteChange,
             Modifier.padding(horizontal = 16.dp, vertical = 18.dp),
         )
     }

@@ -214,25 +214,24 @@ internal fun TaskBoardHeader(
     summaries: List<TaskDailySummary>,
     mutationsEnabled: Boolean,
     onAddTask: (String, (Boolean) -> Unit) -> Unit,
+    draftState: TaskDraftUiState,
     modifier: Modifier = Modifier,
 ) {
-    var draft by remember { mutableStateOf("") }
-    var submissionError by remember { mutableStateOf<String?>(null) }
-    val validationErrorKey = TaskDraftPolicy.validate(draft, summaries.map { it.task.title })
+    val validationErrorKey = TaskDraftPolicy.validate(draftState.draft, summaries.map { it.task.title })
     val validationError = if (validationErrorKey == null) null else stringResource(validationErrorKey.messageRes)
     val submissionFailureCopy = stringResource(R.string.task_could_not_be_saved_try_again)
     Column(modifier) {
         TaskBoardSummary(summaries)
         Spacer(Modifier.height(16.dp))
         TaskDraftCard(
-            draft = draft,
-            error = submissionError ?: validationError?.takeIf { draft.isNotEmpty() },
+            draft = draftState.draft,
+            error = draftState.submissionError ?: validationError?.takeIf { draftState.draft.isNotEmpty() },
             valid = validationError == null,
             enabled = mutationsEnabled,
-            onDraftChange = { draft = it; submissionError = null },
+            onDraftChange = draftState::onDraftChange,
             onSubmit = {
-                onAddTask(draft) { accepted ->
-                    if (accepted) draft = "" else submissionError = submissionFailureCopy
+                onAddTask(draftState.draft) { accepted ->
+                    draftState.onSubmissionResult(accepted, submissionFailureCopy)
                 }
             },
         )
@@ -386,7 +385,7 @@ private fun StackedTaskSummary(
                 style = MaterialTheme.typography.labelLarge,
             )
         }
-        DeleteTaskButton(onDelete, enabled, Modifier.align(Alignment.End))
+        DeleteTaskButton(summary.task.title, onDelete, enabled, Modifier.align(Alignment.End))
     }
 }
 
@@ -424,7 +423,7 @@ private fun WideTaskSummary(
                     false,
                 )
             }
-            DeleteTaskButton(onDelete, enabled, Modifier.weight(weights.action).widthIn(min = 64.dp))
+            DeleteTaskButton(summary.task.title, onDelete, enabled, Modifier.weight(weights.action).widthIn(min = 64.dp))
         }
     }
 }
@@ -472,12 +471,20 @@ private fun TaskSummaryMetric(text: String, modifier: Modifier, monospace: Boole
     }
 }
 
+// Accessible Delete label keeps the concise visible text while
+// exposing task identity to TalkBack button navigation.
+internal fun deleteTaskAccessibilityLabel(template: String, taskTitle: String): String =
+    template.format(taskTitle)
+
 @Composable
-private fun DeleteTaskButton(onDelete: () -> Unit, enabled: Boolean, modifier: Modifier) {
+private fun DeleteTaskButton(taskTitle: String, onDelete: () -> Unit, enabled: Boolean, modifier: Modifier) {
+    val deleteLabel = deleteTaskAccessibilityLabel(stringResource(R.string.delete_task), taskTitle)
     TextButton(
         onClick = onDelete,
         enabled = enabled,
-        modifier = modifier.heightIn(min = 48.dp),
+        modifier = modifier.heightIn(min = 48.dp).semantics(mergeDescendants = true) {
+            contentDescription = deleteLabel
+        },
     ) {
         Text(stringResource(R.string.delete), color = darkModeTextColor(MaterialTheme.colorScheme.error))
     }

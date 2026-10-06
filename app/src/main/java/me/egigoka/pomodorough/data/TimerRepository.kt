@@ -197,8 +197,11 @@ class TimerRepository(
             reconciliationDispatcher = CoreReconciliationDispatcher(coreDispatch, coreProjection),
             projectionDispatcher = coreProjection,
             completionDispatcher = coreCompletion,
+            batchPlanner = coreBatchPlanner,
         )
     }
+    private val coreBatchPlanner by lazy { CoreBatchPlanDispatcher(coreDispatch) }
+    private var syncNextDomain = CoreBatchPlanDispatcher.InitialCursor
     private val repositoryJob = SupervisorJob()
     private val scope = CoroutineScope(repositoryJob + Dispatchers.IO)
     private val logoutRevocations = LogoutRevocationRetryController(auth, scope)
@@ -387,7 +390,17 @@ class TimerRepository(
                 pendingResolution.userJson.isNotBlank()
         } == true
         if (local.ownerUserId == null && local.userJson == null && auth.hasTokens() && !recoverablePendingOwner) {
-            runCatching(auth::clear)
+            val clearError = runCatching(auth::clear).exceptionOrNull()
+            if (clearError is CancellationException) throw clearError
+            val outcome = StaleCredentialClearRecovery.resolve(clearError)
+            if (outcome.recoveryRequired) {
+                credentialRecoveryRequired = true
+                authStatus = AuthStatus.SignedOut
+                user = null
+                notice = appContext.getString(R.string.unreadable_credential)
+                publish()
+                return
+            }
             authStatus = AuthStatus.SignedOut
             user = null
             publish()
@@ -448,7 +461,9 @@ class TimerRepository(
     private suspend fun loadLocalInitialization(): LocalInitializationData? = try {
         timerStore.initialize()
     } catch (error: LocalDecodingException) {
-        // expected-silent: corrupted persisted state surfaces as blocked UI, not a crash.
+        // Corrupt-state diagnostics: blocked UI plus one bounded decoding report
+        // via CrashReporter (deduplicated, consent-aware, no persisted payload).
+        CorruptStateReporter.report(CorruptStateCategory.Decoding)
         accountWorkspaceController.setDeletionAdmissionQuarantined(
             error.local.accountDeletionState != null,
         )
@@ -492,23 +507,31 @@ class TimerRepository(
         legacyRepair.exceptionOrNull()?.let { error ->
             if (error is CancellationException) throw error
         }
-        if (legacyRepair.isFailure) return failCorruptMutationState(LocalClockRangeError)
+        if (legacyRepair.isFailure) {
+            return failCorruptMutationState(LocalClockRangeError, CorruptStateCategory.ClockRange)
+        }
         val queueError = runCatching {
             TimerSyncValidation.validatePendingQueues(pendingSyncQueues(), local.deviceId)
         }.exceptionOrNull()
         if (queueError is CancellationException) throw queueError
         if (queueError != null) {
-            return failCorruptMutationState(queueError.message ?: LocalStateCorruptedError)
+            return failCorruptMutationState(
+                queueError.message ?: LocalStateCorruptedError,
+                CorruptStateCategory.QueueValidation,
+            )
         }
         val rangeError = runCatching {
             TimerSyncValidation.validatePersistedMutationRanges(local, pendingSyncQueues())
         }.exceptionOrNull()
         if (rangeError is CancellationException) throw rangeError
-        if (rangeError != null) return failCorruptMutationState(LocalClockRangeError)
+        if (rangeError != null) {
+            return failCorruptMutationState(LocalClockRangeError, CorruptStateCategory.ClockRange)
+        }
         return legacyRepair.getOrDefault(false)
     }
 
-    private fun failCorruptMutationState(message: String): Boolean? {
+    private fun failCorruptMutationState(message: String, category: CorruptStateCategory): Boolean? {
+        CorruptStateReporter.report(category)
         localMutationCorrupted = true
         terminalSyncError = message
         conflict = message
@@ -605,6 +628,7 @@ class TimerRepository(
         pendingSelectedTaskOperations = emptyList()
         pendingBootstrapResolution = null
         neverSentProof = CoreNeverSentProof()
+        syncNextDomain = CoreBatchPlanDispatcher.InitialCursor
         user = null
         historyResolution = null
         accountSwitch = null
@@ -1024,6 +1048,10 @@ class TimerRepository(
             serverClockSampleElapsedRealtimeMs = null,
             serverClockBootId = null,
             accountDeletionState = null,
+            safeBaseDurationsJson = null,
+            safeBaseSelectedTaskId = null,
+            safeCanonicalHeadWallMs = null,
+            safeCanonicalHeadCounter = null,
         )
         return if (resetSequence) cleared.copy(
             deviceSequence = 0,
@@ -1055,6 +1083,7 @@ class TimerRepository(
         pendingSelectedTaskOperations = emptyList()
         pendingBootstrapResolution = null
         neverSentProof = CoreNeverSentProof()
+        syncNextDomain = CoreBatchPlanDispatcher.InitialCursor
     }
 
     private fun installClearedSession(
@@ -2824,8 +2853,10 @@ class TimerRepository(
                 snapshot = centralizedSyncSnapshot(),
                 sentPhysicalMs = currentTimeMillis(),
                 sentElapsedRealtimeMs = elapsedRealtimeMillis(),
+                nextDomain = syncNextDomain,
             ),
         )
+        syncNextDomain = attempt.nextDomain
         try {
             timerStore.retireNeverSent(attempt.request)
         } catch (error: CancellationException) {
@@ -3050,7 +3081,10 @@ class TimerRepository(
         base: CoreProjectionBase = currentProjectionBase(),
         queues: PendingSyncQueues = pendingSyncQueues(),
     ): CoreProjectionResult {
-        val request = SynchronizedProjectionRequestFactory.create(base, queues, local.deviceId)
+        // R43-A03: rebuilds rerun the authoritative Core projection over safe
+        // queues only. Without a trustworthy head there is no filtering yet.
+        val safe = SafeProjectionPolicy.safeQueues(queues, neverSentProof, safeHeadOrNull())
+        val request = SynchronizedProjectionRequestFactory.create(base, safe, local.deviceId)
         return coreProjection.apply(
             base = request.base,
             pending = request.pending,
@@ -3063,11 +3097,20 @@ class TimerRepository(
             canonicalTimer = canonicalTimer,
             history = canonicalHistory,
             tasks = canonicalTasks,
-            durationsMs = settings.effectiveDurationsMs(),
+            durationsMs = safeBaseDurationsOrNull() ?: settings.effectiveDurationsMs(),
             autoStartBreaks = canonicalAutoStartBreaks,
-            selectedTaskId = local.selectedTaskId,
+            selectedTaskId = safeBaseSelectedTaskIdOrNull() ?: local.selectedTaskId,
         )
     }
+
+    private fun safeHeadOrNull(): Pair<Long, Long>? = SafeProjectionPolicy.headOrNull(local)
+
+    private fun safeBaseDurationsOrNull(): DurationsMs? = local.safeBaseDurationsJson?.let {
+        runCatching { strictJson.decodeFromString<DurationsMs>(it) }.getOrNull()
+    }
+
+    private fun safeBaseSelectedTaskIdOrNull(): String? =
+        if (safeHeadOrNull() == null) null else local.safeBaseSelectedTaskId
 
     private fun localizedProjectedTimer(
         timer: CanonicalTimer?,
@@ -3697,7 +3740,17 @@ class TimerRepository(
             request,
             allowLegacyFullCommandQueue = autoStartOperationsJson == null,
         )
+        requireSavedBootstrapReplayable(request)
         return request
+    }
+
+    private fun requireSavedBootstrapReplayable(request: BootstrapResolutionRequest) {
+        // Fail-closed: an oversized saved claim stays durable with no send or
+        // replacement. Callers map this to corrupted UI with Repreview recovery.
+        val plan = coreBatchPlanner.checkSavedBootstrap(request)
+        require(plan.status == "replay_saved") {
+            "Saved bootstrap operations exceed the 8192 item aggregate limit"
+        }
     }
 
     private fun validateResolutionQueues(

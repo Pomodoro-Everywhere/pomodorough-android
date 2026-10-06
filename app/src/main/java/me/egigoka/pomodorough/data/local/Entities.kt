@@ -35,6 +35,12 @@ data class LocalStateEntity(
     val serverClockBootId: String? = null,
     val lastUuidV7: String? = null,
     val accountDeletionState: String? = null,
+    // R43-A03: canonical projection inputs plus covering HLC, kept apart
+    // from optimistic settings and retained queues for safe rebuilds.
+    val safeBaseDurationsJson: String? = null,
+    val safeBaseSelectedTaskId: String? = null,
+    val safeCanonicalHeadWallMs: Long? = null,
+    val safeCanonicalHeadCounter: Long? = null,
 )
 
 @Entity(tableName = "pending_bootstrap_resolution")

@@ -59,6 +59,9 @@ class InviteShareOnlyA1UiTest {
                                 inviteState(invite),
                                 enabled = true,
                                 actions = networkActions(onShare, onRefresh),
+                                roomNameDraft = RoomNameDraftState(),
+                                joinCode = "",
+                                onJoinCodeChange = {},
                                 modifier = Modifier.fillMaxWidth(),
                             )
                         }

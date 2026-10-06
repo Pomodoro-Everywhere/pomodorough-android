@@ -102,6 +102,8 @@ class MainActivity : ComponentActivity() {
                 onDeleteAccount = viewModel::deleteAccount,
                 onOpenPrivacy = ::openPrivacyPolicy,
                 onStopSound = ::stopSound,
+                joinInviteDraft = viewModel.joinInviteDraft,
+                onJoinInviteChange = viewModel::updateJoinInviteDraft,
             )
             PermissionDialogs()
         }

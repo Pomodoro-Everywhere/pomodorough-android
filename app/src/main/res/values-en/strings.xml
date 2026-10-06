@@ -145,6 +145,7 @@
     <string name="time">Time</string>
     <string name="action">Action</string>
     <string name="delete">Delete</string>
+    <string name="delete_task">Delete %1$s</string>
     <string name="current_service">CURRENT SERVICE</string>
     <string name="pause">Pause</string>
     <string name="resume">Resume</string>

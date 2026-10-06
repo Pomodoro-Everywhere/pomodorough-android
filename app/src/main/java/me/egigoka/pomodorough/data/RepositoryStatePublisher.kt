@@ -90,6 +90,10 @@ internal class RepositoryStatePublisher {
                     completionAlertTimerId = event.timerId,
                 )
             }
+            is AlarmCoordinatorEvent.CompletionAlertPersistenceFailed -> {
+                // In-memory alert already matches what persisted; keep it.
+                Unit
+            }
         }
     }
 

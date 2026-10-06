@@ -109,6 +109,14 @@ internal object TimerSyncValidation {
         require(request.selectedTaskOperations == null ||
             request.selectedTaskOperations.size <= MaxBootstrapOperations
         ) { "Saved bootstrap selected-task operations exceed the 4096 item limit" }
+        // Aggregate cap mirrors Core sync.batchPlan.v1 bootstrap limits
+        // (per-domain 4096, total 8192). The authoritative budget check runs
+        // through Core in CentralizedSyncCoordinator; this fail-closed total
+        // keeps direct validation from accepting an aggregate overflow.
+        require(request.commands.size + request.taskOperations.size +
+            request.durationOperations.size + request.autoStartOperations.orEmpty().size +
+            request.selectedTaskOperations.orEmpty().size <= MaxBootstrapTotal
+        ) { "Saved bootstrap operations exceed the 8192 item aggregate limit" }
     }
 
     private fun requireUniqueResolutionOperations(request: BootstrapResolutionRequest) {
@@ -447,6 +455,7 @@ internal object TimerSyncValidation {
     private fun String.utf8Size(): Int = toByteArray(StandardCharsets.UTF_8).size
 
     private const val MaxBootstrapOperations = 4096
+    private const val MaxBootstrapTotal = 8192
     private const val MaxTimerDurationMs = 14_400_000L
     private const val MaxServerClockUncertaintyMs = 30_000L
     private val commandTypes = setOf(

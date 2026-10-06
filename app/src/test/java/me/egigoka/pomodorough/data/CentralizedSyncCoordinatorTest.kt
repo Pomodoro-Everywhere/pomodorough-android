@@ -31,6 +31,7 @@ class CentralizedSyncCoordinatorTest {
             reconciliationDispatcher = CoreReconciliationDispatcher(dispatch, projection),
             projectionDispatcher = projection,
             completionDispatcher = CoreCompletionDispatcher(dispatch),
+            batchPlanner = CoreBatchPlanDispatcher(dispatch),
             zoneId = ZoneId.of("UTC"),
         )
     }
@@ -83,6 +84,7 @@ class CentralizedSyncCoordinatorTest {
             completionDispatcher = CoreCompletionDispatcher { _, _ ->
                 completionOutput(TimerPhase.ShortBreak)
             },
+            batchPlanner = CoreBatchPlanDispatcher(dispatch),
             zoneId = ZoneId.of("UTC"),
         )
         val snapshot = generatedBreakSnapshot()

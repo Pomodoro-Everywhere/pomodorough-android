@@ -1043,7 +1043,8 @@ private data class CoreWireTaskOperation(
     val deviceId: String,
     val taskId: String,
     @SerialName("type") val type: String,
-    val title: String,
+    // Core 0.43+ omits an empty title on delete; absent means empty.
+    val title: String = "",
     val occurredAt: String,
     val hlcWallMs: Long,
     val hlcCounter: Long,

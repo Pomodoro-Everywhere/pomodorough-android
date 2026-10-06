@@ -1,5 +1,8 @@
 package me.egigoka.pomodorough.ui
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -21,6 +24,21 @@ class PomodoroughViewModel(
 ) : ViewModel() {
     val state = repository.state
     private var timerTickJob: Job? = null
+
+    // R43-A07: sensitive invite text is memory-only. It survives tab
+    // switches and config recreation in ViewModel memory, but must not
+    // survive process recreation, so it is never in SavedState. Invites
+    // grant full read/write access and reveal peer IPs.
+    var joinInviteDraft by mutableStateOf("")
+        private set
+
+    fun updateJoinInviteDraft(value: String) {
+        joinInviteDraft = value
+    }
+
+    fun clearJoinInviteDraft() {
+        joinInviteDraft = ""
+    }
 
     init {
         viewModelScope.launch { repository.initialize() }

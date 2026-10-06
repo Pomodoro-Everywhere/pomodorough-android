@@ -1,7 +1,6 @@
 package me.egigoka.pomodorough.data
 
 import java.util.UUID
-import me.egigoka.pomodorough.domain.SettingsReducer
 
 internal data class SyncAttempt(
     val identity: SyncAttemptIdentity,
@@ -10,6 +9,7 @@ internal data class SyncAttempt(
     val sentElapsedRealtimeMs: Long,
     val selectedPhaseAtSend: String,
     val selectedPhaseGenerationAtSend: Long,
+    val nextDomain: String = "commands",
 ) {
     val accountGeneration: Long get() = identity.accountGeneration
 }
@@ -67,19 +67,20 @@ internal object TimerSyncConstruction {
         identity: SyncAttemptIdentity,
         deviceId: String,
         revision: Long,
-        eligibleCommands: List<TimerCommand>,
         queues: PendingSyncQueues,
+        plan: CoreBatchPlan,
         sentPhysicalMs: Long,
         sentElapsedRealtimeMs: Long,
         selectedPhase: String,
         selectedPhaseGeneration: Long,
     ): SyncAttempt = SyncAttempt(
         identity = identity,
-        request = syncRequest(deviceId, revision, eligibleCommands, queues),
+        request = syncRequest(deviceId, revision, queues, plan),
         sentPhysicalMs = sentPhysicalMs,
         sentElapsedRealtimeMs = sentElapsedRealtimeMs,
         selectedPhaseAtSend = selectedPhase,
         selectedPhaseGenerationAtSend = selectedPhaseGeneration,
+        nextDomain = requireNotNull(plan.nextDomain) { "Core batch plan has no cursor" },
     )
 
     fun bootstrapRequest(
@@ -104,6 +105,47 @@ internal object TimerSyncConstruction {
         )
     }
 
+    fun bootstrapRequestFromPlan(
+        deviceId: String,
+        revision: Long,
+        strategy: BootstrapStrategy,
+        queues: PendingSyncQueues,
+        plan: CoreBatchPlan,
+    ): BootstrapResolutionRequest {
+        require(plan.status == "planned") { "Core bootstrap batch is not planned" }
+        val includeLocal = strategy != BootstrapStrategy.KeepRemote
+        if (!includeLocal) {
+            require(plan.selected.total() == 0) { "Core keep-remote batch must be empty" }
+        }
+        return BootstrapResolutionRequest(
+            requestId = "bootstrap-${UUID.randomUUID()}",
+            deviceId = deviceId,
+            expectedRevision = revision,
+            strategy = strategy,
+            commands = resolveCommands(queues.commands, plan.selected.commands)
+                .takeIf { includeLocal }.orEmpty().map(TimerCommandRequestEncoder::encode),
+            taskOperations = resolveById(
+                queues.taskOperations,
+                plan.selected.taskOperations,
+                TaskOperation::id,
+            ).takeIf { includeLocal }.orEmpty(),
+            durationOperations = resolveById(
+                queues.durationOperations,
+                plan.selected.durationOperations,
+                DurationOperation::id,
+            ).takeIf { includeLocal }.orEmpty(),
+            autoStartOperations = resolveById(
+                queues.autoStartOperations,
+                plan.selected.autoStartOperations,
+                AutoStartOperation::id,
+            ).takeIf { includeLocal }.orEmpty(),
+            selectedTaskOperations = resolveById(
+                queues.selectedTaskOperations,
+                plan.selected.selectedTaskOperations,
+                SelectedTaskOperation::id,
+            ).takeIf { includeLocal }.orEmpty(),
+        )
+    }
     fun sentIds(request: SyncRequest): SentSyncIds = SentSyncIds(
         commands = request.commands.map(TimerCommand::id).toSet(),
         taskOperations = request.taskOperations.map(TaskOperation::id).toSet(),
@@ -136,31 +178,56 @@ internal object TimerSyncConstruction {
     private fun syncRequest(
         deviceId: String,
         revision: Long,
-        eligibleCommands: List<TimerCommand>,
         queues: PendingSyncQueues,
+        plan: CoreBatchPlan,
     ) = SyncRequest(
         deviceId = deviceId,
         lastRevision = revision,
-        commands = eligibleCommands.take(MaxOperationsPerSync)
+        commands = resolveCommands(queues.commands, plan.selected.commands)
             .map(TimerCommandRequestEncoder::encode),
-        durationOperations = queues.durationOperations.sortedWith(durationComparator)
-            .take(MaxOperationsPerSync),
-        taskOperations = queues.taskOperations.take(MaxOperationsPerSync),
-        autoStartOperations = queues.autoStartOperations.sortedWith(autoStartComparator)
-            .take(MaxOperationsPerSync),
-        selectedTaskOperations = queues.selectedTaskOperations.sortedWith(selectedTaskComparator)
-            .take(MaxOperationsPerSync),
+        durationOperations = resolveById(
+            queues.durationOperations,
+            plan.selected.durationOperations,
+            DurationOperation::id,
+        ),
+        taskOperations = resolveById(
+            queues.taskOperations,
+            plan.selected.taskOperations,
+            TaskOperation::id,
+        ),
+        autoStartOperations = resolveById(
+            queues.autoStartOperations,
+            plan.selected.autoStartOperations,
+            AutoStartOperation::id,
+        ),
+        selectedTaskOperations = resolveById(
+            queues.selectedTaskOperations,
+            plan.selected.selectedTaskOperations,
+            SelectedTaskOperation::id,
+        ),
     )
+
+    private fun resolveCommands(
+        complete: List<TimerCommand>,
+        selected: List<String>,
+    ): List<TimerCommand> {
+        val byId = complete.associateBy(TimerCommand::id)
+        return selected.map { id ->
+            requireNotNull(byId[id]) { "Core selected an unknown timer command" }
+        }
+    }
+
+    private fun <T> resolveById(
+        complete: List<T>,
+        selected: List<String>,
+        id: (T) -> String,
+    ): List<T> {
+        val byId = complete.associateBy(id)
+        return selected.map { value ->
+            requireNotNull(byId[value]) { "Core selected an unknown batch operation" }
+        }
+    }
 
     private fun <T> merge(current: List<T>, sent: List<T>, id: (T) -> String): List<T> =
         (sent + current).associateBy(id).values.toList()
-
-    private const val MaxOperationsPerSync = 256
-    private val durationComparator = SettingsReducer.durationComparator
-    private val autoStartComparator = SettingsReducer.autoStartComparator
-    private val selectedTaskComparator = compareBy<SelectedTaskOperation>(
-        SelectedTaskOperation::hlcWallMs,
-        SelectedTaskOperation::hlcCounter,
-        SelectedTaskOperation::id,
-    )
 }
