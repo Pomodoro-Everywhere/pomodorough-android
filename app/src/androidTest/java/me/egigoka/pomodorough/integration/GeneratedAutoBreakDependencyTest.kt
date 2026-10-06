@@ -791,12 +791,12 @@ class GeneratedAutoBreakDependencyTest {
         )
 
         signedIn.initialize()
-        awaitState { profileService.syncCalls == 1 && signedIn.state.value.pendingCount == 0 }
+        // Core batch planning withholds generated dependents; manual supersede
+        // converges in two sequential syncs (source, then manual).
+        awaitState { profileService.syncCalls == 2 && signedIn.state.value.pendingCount == 0 }
 
-        assertEquals(
-            listOf(sourceFinish.id, manualStart.id),
-            profileService.syncRequests.single().commands.map { it.id },
-        )
+        assertEquals(listOf(sourceFinish.id), profileService.syncRequests[0].commands.map { it.id })
+        assertEquals(listOf(manualStart.id), profileService.syncRequests[1].commands.map { it.id })
         assertTrue(database.timerDao().pendingCommands().none { it.id == generatedStart.id })
         assertEquals(manualStart.timerId, signedIn.state.value.timer?.id)
         assertEquals(manualStart.timerId, database.timerDao().localState()?.ownedTimerId)

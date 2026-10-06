@@ -255,17 +255,18 @@ internal class CentralizedSyncCoordinator(
         val plan = runCatching {
             plannedBootstrap(input.strategy, reconciled.queues, snapshot.local.deviceId, reconciled.dependencies)
         }.getOrElse { return CentralizedBootstrapPreparationTransition.Invalid(it) }
-        if (plan.status != "planned") {
+        if (plan.status != "planned" && plan.status != "blocked_dependency") {
             return CentralizedBootstrapPreparationTransition.Invalid(
                 IllegalArgumentException("Bootstrap batch exceeds Core aggregate limits"),
             )
         }
-        val request = TimerSyncConstruction.bootstrapRequestFromPlan(
-            deviceId = snapshot.local.deviceId,
-            revision = input.bootstrap.revision,
-            strategy = input.strategy,
-            queues = reconciled.queues,
-            plan = plan,
+        val request = bootstrapResolutionRequest(
+            input.strategy,
+            snapshot.local.deviceId,
+            input.bootstrap.revision,
+            reconciled.queues,
+            reconciled.dependencies,
+            plan,
         )
         // A60: pure require()-only validators cannot throw CancellationException;
         // ordinary failures map to Invalid, pinned by CentralizedSyncCoordinatorTest.
@@ -304,16 +305,37 @@ internal class CentralizedSyncCoordinator(
         dependencies: Map<String, String>,
     ) {
         val plan = plannedBootstrap(input.strategy, queues, input.snapshot.local.deviceId, dependencies)
-        require(plan.status == "planned") { "Bootstrap batch exceeds Core aggregate limits" }
+        require(plan.status in setOf("planned", "blocked_dependency")) {
+            "Bootstrap batch exceeds Core aggregate limits"
+        }
         TimerSyncValidation.validateResolutionCollectionSizes(
-            TimerSyncConstruction.bootstrapRequestFromPlan(
-                deviceId = input.snapshot.local.deviceId,
-                revision = input.bootstrap.revision,
-                strategy = input.strategy,
-                queues = queues,
-                plan = plan,
+            bootstrapResolutionRequest(
+                input.strategy,
+                input.snapshot.local.deviceId,
+                input.bootstrap.revision,
+                queues,
+                dependencies,
+                plan,
             ),
         )
+    }
+
+    private fun bootstrapResolutionRequest(
+        strategy: BootstrapStrategy,
+        deviceId: String,
+        revision: Long,
+        queues: PendingSyncQueues,
+        dependencies: Map<String, String>,
+        plan: CoreBatchPlan,
+    ): BootstrapResolutionRequest {
+        if (plan.status == "planned") {
+            return TimerSyncConstruction.bootstrapRequestFromPlan(deviceId, revision, strategy, queues, plan)
+        }
+        require(plan.status == "blocked_dependency") { "Bootstrap batch exceeds Core aggregate limits" }
+        // Generated-break barrier: Core withholds dependents atomically; send
+        // unheld now, dependents follow via sync after acceptance.
+        val eligible = queues.commands.filter { it.id !in dependencies }
+        return TimerSyncConstruction.bootstrapRequest(deviceId, revision, strategy, eligible, queues)
     }
 
     fun applyBootstrapInstallation(
