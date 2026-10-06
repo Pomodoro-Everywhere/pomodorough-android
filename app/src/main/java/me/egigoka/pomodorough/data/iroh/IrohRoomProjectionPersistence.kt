@@ -105,7 +105,7 @@ internal class IrohRoomProjectionPersistence(
             tasks = input.genesis.tasks,
             durationsMs = input.genesis.durationsMs,
             autoStartBreaks = input.genesis.autoStartBreaks,
-            selectedTaskId = selectedTaskId,
+            selectedTaskId = selectedTaskId?.takeIf { id -> input.genesis.tasks.any { it.id == id } },
         ),
         pending = pendingOperations(input.operations, timerOperations),
         now = Instant.ofEpochMilli(currentTimeMillis()),
@@ -236,15 +236,16 @@ internal class IrohRoomProjectionPersistence(
         val baseTimer = local.canonicalTimerJson?.let {
             IrohJson.strict.decodeFromString<me.egigoka.pomodorough.data.CanonicalTimer>(it)
         }
+        val baseTasks = IrohJson.strict.decodeFromString<List<FocusTask>>(local.tasksJson)
         val timerOperations = snapshot.commands.map { DeviceOperation(local.deviceId, it.toModel()) }
         return coreProjection.apply(
             base = CoreProjectionBase(
                 canonicalTimer = baseTimer,
                 history = IrohJson.strict.decodeFromString(local.historyJson),
-                tasks = IrohJson.strict.decodeFromString(local.tasksJson),
+                tasks = baseTasks,
                 durationsMs = settings.effectiveDurationsMs(),
                 autoStartBreaks = settings.autoStartBreaks,
-                selectedTaskId = local.selectedTaskId,
+                selectedTaskId = local.selectedTaskId?.takeIf { id -> baseTasks.any { it.id == id } },
             ),
             pending = CoreProjectionPending(
                 commands = timerOperations,

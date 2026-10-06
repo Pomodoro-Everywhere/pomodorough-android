@@ -54,6 +54,7 @@ class P24SignedOutNetworkNavigationTest {
             network = IrohNetworkState(mode = ReplicationMode.OFFLINE),
         ),
     )
+    private var joinInviteDraft by mutableStateOf("")
     private val createdRooms = mutableListOf<String>()
     private val joinedInvites = mutableListOf<String>()
     private val accountCalls = mutableListOf<String>()
@@ -163,7 +164,7 @@ class P24SignedOutNetworkNavigationTest {
         navigation(MainTab.Timer).assertIsSelected()
         MainTab.entries.forEach { tab ->
             val visibleLabel = hasText(label(tab.labelRes))
-            navigation(tab).assert(if (fontScale < 1.3f) visibleLabel else visibleLabel.not())
+            navigation(tab).assert(visibleLabel)
         }
         assertSignedOutAccountRestrictions()
         navigation(MainTab.Network).assertIsNotSelected().performClick().assertIsSelected()
@@ -220,6 +221,8 @@ class P24SignedOutNetworkNavigationTest {
                         onShareIrohInvite = {},
                         onDeleteAccount = { accountCalls += "delete" },
                         onOpenPrivacy = { accountCalls += "privacy" },
+                        joinInviteDraft = joinInviteDraft,
+                        onJoinInviteChange = { joinInviteDraft = it },
                     )
                 }
             }

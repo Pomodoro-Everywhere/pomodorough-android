@@ -3099,8 +3099,13 @@ class TimerRepository(
             tasks = canonicalTasks,
             durationsMs = safeBaseDurationsOrNull() ?: settings.effectiveDurationsMs(),
             autoStartBreaks = canonicalAutoStartBreaks,
-            selectedTaskId = safeBaseSelectedTaskIdOrNull() ?: local.selectedTaskId,
+            selectedTaskId = sanitizedBaseSelectedTaskId(),
         )
+    }
+
+    private fun sanitizedBaseSelectedTaskId(): String? {
+        val candidate = safeBaseSelectedTaskIdOrNull() ?: local.selectedTaskId
+        return candidate?.takeIf { id -> canonicalTasks.any { it.id == id } }
     }
 
     private fun safeHeadOrNull(): Pair<Long, Long>? = SafeProjectionPolicy.headOrNull(local)

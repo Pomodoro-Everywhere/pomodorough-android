@@ -146,6 +146,7 @@ class PomodoroughRtlAccessibilityTest {
         val context = targetContext()
         var resolved: BootstrapStrategy? = null
         var state by mutableStateOf(offlineState())
+        var joinInviteDraft by mutableStateOf("")
         composeRule.setContent {
             ScreenUnderTest(
                 state = state,
@@ -157,6 +158,8 @@ class PomodoroughRtlAccessibilityTest {
                 },
                 onDismissConflict = { state = state.copy(conflict = null) },
                 onDismissNotice = { state = state.copy(notice = null) },
+                joinInviteDraft = joinInviteDraft,
+                onJoinInviteChange = { joinInviteDraft = it },
             )
         }
 
@@ -434,6 +437,8 @@ class PomodoroughRtlAccessibilityTest {
         onResolveHistory: (BootstrapStrategy) -> Unit = {},
         onDismissConflict: () -> Unit = {},
         onDismissNotice: () -> Unit = {},
+        joinInviteDraft: String = "",
+        onJoinInviteChange: (String) -> Unit = {},
     ) {
         PomodoroughTheme {
             PomodoroughScreen(
@@ -451,6 +456,8 @@ class PomodoroughRtlAccessibilityTest {
                 onLeaveIrohRoom = onLeaveIrohRoom, onRefreshIrohInvite = {},
                 onSyncIrohNow = {}, onShareIrohInvite = {},
                 onDeleteAccount = onDeleteAccount,
+                joinInviteDraft = joinInviteDraft,
+                onJoinInviteChange = onJoinInviteChange,
             )
         }
     }
