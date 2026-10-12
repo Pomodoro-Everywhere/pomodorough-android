@@ -389,6 +389,8 @@ private fun mainTabIcon(tab: MainTab): ImageVector = when (tab) {
     MainTab.Network -> Icons.Outlined.Hub
 }
 
+internal const val RailListTag = "landscapeRailList"
+
 @Composable
 internal fun MainNavigationRail(
     active: MainTab,
@@ -397,26 +399,32 @@ internal fun MainNavigationRail(
     val fontScale = LocalConfiguration.current.fontScale
     val labelFontSize = navLabelFontSize(fontScale)
     NavigationRail {
-        MainTab.entries.forEach { tab ->
-            val label = stringResource(tab.labelRes)
-            NavigationRailItem(
-                selected = tab == active,
-                onClick = { onSelect(tab) },
-                icon = {
-                    Icon(
-                        imageVector = mainTabIcon(tab),
-                        contentDescription = label,
-                    )
-                },
-                label = {
-                    Text(
-                        label,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        fontSize = labelFontSize,
-                    )
-                },
-            )
+        // The rail column is fixed-height and unscrollable, so short
+        // landscape clips trailing destinations. Weight bounds this list
+        // to the remaining rail height and scrolls it without touching
+        // labels, order, selection, or targets.
+        LazyColumn(Modifier.weight(1f).testTag(RailListTag)) {
+            items(MainTab.entries, key = { it.name }) { tab ->
+                val label = stringResource(tab.labelRes)
+                NavigationRailItem(
+                    selected = tab == active,
+                    onClick = { onSelect(tab) },
+                    icon = {
+                        Icon(
+                            imageVector = mainTabIcon(tab),
+                            contentDescription = label,
+                        )
+                    },
+                    label = {
+                        Text(
+                            label,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            fontSize = labelFontSize,
+                        )
+                    },
+                )
+            }
         }
     }
 }

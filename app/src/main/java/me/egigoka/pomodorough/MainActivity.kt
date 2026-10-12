@@ -28,6 +28,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 import me.egigoka.pomodorough.data.auth.SystemGoogleCredentialProvider
+import me.egigoka.pomodorough.timer.SystemTimerCompletionNotifier
 import me.egigoka.pomodorough.ui.PomodoroughScreen
 import me.egigoka.pomodorough.ui.PomodoroughTheme
 import me.egigoka.pomodorough.ui.PomodoroughViewModel
@@ -38,6 +39,11 @@ class MainActivity : ComponentActivity() {
     private val viewModel by viewModels<PomodoroughViewModel> {
         PomodoroughViewModel.Factory(
             (application as PomodoroughApplication).timerRepository,
+            // R48-A01: the foreground ticker posts its completion alert
+            // through the shared coordinator instead of going silent.
+            completionAlert = { timerId ->
+                SystemTimerCompletionNotifier(applicationContext, timerId).show()
+            },
         )
     }
 

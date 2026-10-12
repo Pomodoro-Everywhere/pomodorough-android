@@ -53,6 +53,7 @@ class CrashReportingSilenceTest {
         "me/egigoka/pomodorough/timer/TimerAlarmScheduler.kt",
         "me/egigoka/pomodorough/ui/TimerScreenScaffold.kt",
         "me/egigoka/pomodorough/ui/UiComponents.kt",
+        "me/egigoka/pomodorough/ui/PomodoroughViewModel.kt",
     )
 
     private val cancellationGuardSites = listOf(
@@ -91,6 +92,7 @@ class CrashReportingSilenceTest {
         "me/egigoka/pomodorough/data/iroh/IrohReplicationService.kt" to "fun updateState(",
         "me/egigoka/pomodorough/data/iroh/IrohRoomOrchestration.kt" to "fun rollbackJoinedRoom(",
         "me/egigoka/pomodorough/data/TimerLocalInitialization.kt" to "fun load(",
+        "me/egigoka/pomodorough/ui/PomodoroughViewModel.kt" to "fun deliverCompletionAlert(",
     )
 
     @Test

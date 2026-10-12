@@ -26,6 +26,13 @@ interface TimerRepositoryContract {
     suspend fun addTask(title: String): Boolean
     suspend fun deleteTask(taskId: String)
     suspend fun finishExpiredTimer(): Boolean
+    // R48-A01: unified once-only alert consumption shared by the
+    // foreground ticker and the alarm receiver. Default rejects so
+    // legacy implementations keep their behavior until they override.
+    suspend fun consumeCompletionAlert(
+        timerId: String,
+        notify: suspend (timerId: String) -> Boolean,
+    ): Boolean = false
     suspend fun resolveHistory(strategy: BootstrapStrategy)
     suspend fun recoverCorruptedResolution()
     suspend fun confirmAccountSwitch()

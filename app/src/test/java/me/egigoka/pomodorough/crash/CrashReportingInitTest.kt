@@ -37,23 +37,31 @@ class CrashReportingInitTest {
     fun startCrashReportingConsultsConsentBeforeInit() {
         val application = productionFile("me/egigoka/pomodorough/PomodoroughApplication.kt")
             .readText()
-        val gate = application.indexOf("CrashReportingConsent.shouldStart")
         val consentRead = application.indexOf("CrashReportingConsent.isEnabled")
+        // R48-A05: eligibility lives in the runtime entry, not duplicated in Application.
         // A76: init moved behind CrashReportingRuntime.start so the
         // opt-out toggle can re-init without a restart.
         val start = application.indexOf("CrashReportingRuntime.start")
         val runtime = productionFile("me/egigoka/pomodorough/crash/CrashReportingRuntime.kt")
             .readText()
+        val eligible = runtime.indexOf("fun isEligible")
+        val gate = runtime.indexOf("CrashReportingConsent.shouldStart")
         val init = runtime.indexOf("SentryAndroid.init")
         val configure = runtime.indexOf("CrashReportingInit.configure")
+        val card = productionFile("me/egigoka/pomodorough/ui/CrashReportingCard.kt").readText()
 
-        assertTrue(gate >= 0)
         assertTrue(consentRead >= 0)
         assertTrue(start >= 0)
+        assertTrue(eligible >= 0)
+        assertTrue(gate >= 0)
         assertTrue(init >= 0)
         assertTrue(configure >= 0)
-        assertTrue(gate < start)
+        assertTrue(eligible < gate)
         assertTrue(init < configure)
+        assertTrue(application.indexOf("CrashReportingConsent.shouldStart") < 0)
+        assertTrue(card.contains("CrashReportingRuntime.isEligible"))
+        assertTrue(card.contains("CrashReportingRuntime.start("))
+        assertTrue(card.contains("CrashReportingRuntime.stop()"))
     }
 
     private fun productionFile(relativePath: String) = File(productionRoot(), relativePath)

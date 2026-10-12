@@ -308,5 +308,7 @@
     <string name="reset_iroh_identity">Reset Iroh identity</string>
     <string name="crash_reporting_title">Crash reports</string>
     <string name="crash_reporting_body">Sentry crash reports and session replay are on by default when the build includes a DSN. Reports are scrubbed of invites, tokens, emails, and credentials, and long IDs are truncated. Turning this off disables all Sentry uploads on this device.</string>
+    <string name="switch_on">On</string>
+    <string name="switch_off">Off</string>
     <string name="version_label">Version %1$s</string>
 </resources>

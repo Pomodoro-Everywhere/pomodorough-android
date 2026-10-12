@@ -824,9 +824,14 @@ private fun DeleteAccountDialog(actions: TimerScreenActions, dialogs: TimerDialo
     )
 }
 
+internal const val DeleteConfirmationListTag = "deleteConfirmationList"
+
 @Composable
 private fun DeleteAccountContent(dialogs: TimerDialogState) {
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Column(
+        modifier = Modifier.verticalScroll(rememberScrollState()).testTag(DeleteConfirmationListTag),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
         Text(stringResource(R.string.this_permanently_deletes_profile_sessions_timers_history_tasks))
         Text(stringResource(R.string.type_delete_exactly_to_confirm), fontWeight = FontWeight.Bold)
         OutlinedTextField(
@@ -834,6 +839,7 @@ private fun DeleteAccountContent(dialogs: TimerDialogState) {
             onValueChange = { dialogs.deleteConfirmation = it },
             label = { Text(stringResource(R.string.confirmation)) },
             singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
         )
     }
 }

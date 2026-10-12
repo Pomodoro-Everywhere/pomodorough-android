@@ -172,6 +172,57 @@ class PomodoroughViewModelTest {
             runCurrent()
         }
 
+    @Test
+    fun tickerDeliversAlertThroughSharedCoordinatorAndStops() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val repository = RecordingTimerRepository().apply {
+                finishExpiredResult = true
+                consumeResult = true
+            }
+            val notified = mutableListOf<String>()
+            val viewModel = PomodoroughViewModel(repository) { timerId ->
+                notified += timerId
+                true
+            }
+            runCurrent()
+            repository.mutableState.value = AppState(timer = runningTimer())
+
+            viewModel.onForeground()
+            runCurrent()
+            advanceTimeBy(1_500)
+            runCurrent()
+            advanceTimeBy(1_500)
+            runCurrent()
+
+            assertEquals(1, repository.events.count { it == "finishExpiredTimer" })
+            assertEquals(listOf("consumeCompletionAlert:timer-1"), repository.consumeCalls)
+            assertEquals(listOf("timer-1"), notified)
+            viewModel.onBackground()
+            runCurrent()
+        }
+
+    @Test
+    fun tickerAlertFailureStillStopsPollingWithoutCrashing() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val repository = RecordingTimerRepository().apply {
+                finishExpiredResult = true
+                consumeError = java.io.IOException("sound failed")
+            }
+            val viewModel = PomodoroughViewModel(repository) { true }
+            runCurrent()
+            repository.mutableState.value = AppState(timer = runningTimer())
+
+            viewModel.onForeground()
+            runCurrent()
+            advanceTimeBy(1_500)
+            runCurrent()
+
+            assertEquals(1, repository.events.count { it == "finishExpiredTimer" })
+            assertEquals(listOf("consumeCompletionAlert:timer-1"), repository.consumeCalls)
+            viewModel.onBackground()
+            runCurrent()
+        }
+
     private fun runningTimer() = CanonicalTimer(
         id = "timer-1",
         phase = "focus",
@@ -201,6 +252,9 @@ private class RecordingTimerRepository : TimerRepositoryContract {
     val events = mutableListOf<String>()
     var credentialProvider: GoogleCredentialProvider? = null
     var finishExpiredResult = false
+    var consumeResult = false
+    var consumeError: Throwable? = null
+    val consumeCalls = mutableListOf<String>()
 
     override suspend fun initialize() = record("initialize")
     override suspend fun signIn(credentialProvider: GoogleCredentialProvider) {
@@ -228,6 +282,15 @@ private class RecordingTimerRepository : TimerRepositoryContract {
     override suspend fun finishExpiredTimer(): Boolean {
         record("finishExpiredTimer")
         return finishExpiredResult
+    }
+    override suspend fun consumeCompletionAlert(
+        timerId: String,
+        notify: suspend (timerId: String) -> Boolean,
+    ): Boolean {
+        record("consumeCompletionAlert:$timerId")
+        consumeCalls += "consumeCompletionAlert:$timerId"
+        consumeError?.let { throw it }
+        return if (consumeResult) notify(timerId) else false
     }
     override suspend fun resolveHistory(strategy: BootstrapStrategy) =
         record("resolveHistory:${strategy.name}")

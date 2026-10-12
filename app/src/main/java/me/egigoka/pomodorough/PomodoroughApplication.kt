@@ -32,18 +32,12 @@ class PomodoroughApplication : Application() {
     }
 
     private fun startCrashReporting() {
-        val dsn = BuildConfig.SENTRY_DSN
-        // A76: launch-time gate also seeds the runtime toggle so a
-        // later opt-out can Sentry.close() without a restart.
-        val enabled = CrashReportingConsent.shouldStart(dsn, CrashReportingConsent.isEnabled(this))
-        CrashReportingRuntime.reportingEnabled = enabled
-        if (!enabled) {
-            return
-        }
+        // R48-A05: runtime entry owns launch eligibility (DSN + opt-in + test/CI).
         CrashReportingRuntime.start(
             this,
-            dsn,
+            BuildConfig.SENTRY_DSN,
             "${BuildConfig.VERSION_NAME}+${BuildConfig.VERSION_CODE}",
+            CrashReportingConsent.isEnabled(this),
         )
     }
 }

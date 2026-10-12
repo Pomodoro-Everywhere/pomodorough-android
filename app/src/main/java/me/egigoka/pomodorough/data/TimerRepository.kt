@@ -1377,6 +1377,15 @@ class TimerRepository(
     fun stopCompletionAlert(timerId: String?): Boolean =
         alarmCoordinator.stopCompletionAlert(timerId).changed
 
+    // R48-A01: foreground ticker and alarm receiver share this once-only
+    // alert path. Only the finish winner reaches here with an eligible
+    // timer; showCompletionAlert still enforces owner, identity,
+    // quarantine, cancellation, and auto-break suppression.
+    override suspend fun consumeCompletionAlert(
+        timerId: String,
+        notify: suspend (timerId: String) -> Boolean,
+    ): Boolean = showCompletionAlert(timerId) { notify(timerId) }
+
     override suspend fun selectPhase(phase: String) {
         initialize()
         var saved = false

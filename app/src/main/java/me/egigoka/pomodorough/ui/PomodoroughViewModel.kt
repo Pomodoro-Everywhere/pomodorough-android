@@ -6,6 +6,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -21,6 +22,10 @@ import me.egigoka.pomodorough.data.auth.GoogleCredentialProvider
 
 class PomodoroughViewModel(
     private val repository: TimerRepositoryContract,
+    // R48-A01: foreground expiry delivers its alert through the same
+    // shared coordinator as the alarm receiver. Null keeps legacy
+    // fakes silent; production wires the system completion notifier.
+    private val completionAlert: (suspend (timerId: String) -> Boolean)? = null,
 ) : ViewModel() {
     val state = repository.state
     private var timerTickJob: Job? = null
@@ -88,7 +93,10 @@ class PomodoroughViewModel(
                 if (timerId == null) return@collectLatest
                 while (isActive) {
                     delay(500)
-                    if (repository.finishExpiredTimer()) return@collectLatest
+                    if (repository.finishExpiredTimer()) {
+                        deliverCompletionAlert(timerId)
+                        return@collectLatest
+                    }
                 }
             }
         }
@@ -104,10 +112,25 @@ class PomodoroughViewModel(
         viewModelScope.launch { block() }
     }
 
-    class Factory(private val repository: TimerRepositoryContract) : ViewModelProvider.Factory {
+    private suspend fun deliverCompletionAlert(timerId: String) {
+        val notify = completionAlert ?: return
+        try {
+            repository.consumeCompletionAlert(timerId, notify)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            // expected-silent: completion is durable; a failed alert
+            // must not crash the foreground ticker loop.
+        }
+    }
+
+    class Factory(
+        private val repository: TimerRepositoryContract,
+        private val completionAlert: (suspend (timerId: String) -> Boolean)? = null,
+    ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            return PomodoroughViewModel(repository) as T
+            return PomodoroughViewModel(repository, completionAlert) as T
         }
     }
 }

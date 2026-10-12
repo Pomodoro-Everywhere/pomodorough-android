@@ -36,6 +36,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -86,6 +87,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -189,13 +191,21 @@ private fun PhaseCards(
 
 @Composable
 private fun AutoStartBreaksCard(checked: Boolean, enabled: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    val name = stringResource(R.string.auto_start_breaks)
+    val state = stringResource(if (checked) R.string.switch_on else R.string.switch_off)
     Surface(
         color = Ink,
         contentColor = darkModeTextColor(Cloud),
         shape = MaterialTheme.shapes.large,
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
+            modifier = Modifier
+                .toggleable(value = checked, enabled = enabled, role = Role.Switch, onValueChange = onCheckedChange)
+                .semantics(mergeDescendants = true) {
+                    contentDescription = name
+                    stateDescription = state
+                }
+                .padding(horizontal = 18.dp, vertical = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
@@ -207,7 +217,7 @@ private fun AutoStartBreaksCard(checked: Boolean, enabled: Boolean, onCheckedCha
                 )
             }
             Spacer(Modifier.width(12.dp))
-            Switch(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
+            Switch(checked = checked, onCheckedChange = null, enabled = enabled)
         }
     }
 }
