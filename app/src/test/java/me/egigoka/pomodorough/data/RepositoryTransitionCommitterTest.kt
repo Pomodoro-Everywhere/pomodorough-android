@@ -152,6 +152,7 @@ private class RecordingTransitionPersistence : RepositoryTransitionPersistence {
             is RepositoryDurationTransition -> calls += "duration"
             is RepositoryAutoStartTransition -> calls += "auto-start"
             is RepositorySelectedTaskTransition -> calls += "selected-task"
+            is RepositorySelectedTaskRetargetTransition -> calls += "selected-task-retarget"
             is RepositoryTaskTransition -> calls += "task"
         }
     }

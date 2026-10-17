@@ -241,14 +241,14 @@ internal fun timerHeroState(state: AppState, mutationsEnabled: Boolean) = TimerH
 )
 
 @Composable
-private fun TimerScreenMessages(state: AppState, actions: TimerContentActions, modifier: Modifier = Modifier) {
+internal fun TimerScreenMessages(state: AppState, actions: TimerContentActions, modifier: Modifier = Modifier) {
     state.conflict?.let {
         MessageCard(
             title = stringResource(R.string.changes_resolved_on_another_device),
             message = it,
             containerColor = Lavender,
             onDismiss = actions.onDismissConflict,
-            modifier = modifier,
+            modifier = modifier.semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
         )
     }
     state.notice?.let { NoticeCard(it, actions.onDismissNotice, modifier) }

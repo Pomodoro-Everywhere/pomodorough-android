@@ -207,6 +207,21 @@ interface TimerWorkspaceDao {
         updateState(state)
     }
 
+    // R49-A02: selection plus retarget commit atomically. Both inserts
+    // and the cursor/local update succeed or roll back together, so a
+    // second-write failure cannot leave task B selected while the timer
+    // still accounts to A.
+    @Transaction
+    suspend fun persistSelectedTaskRetarget(
+        selectedOperation: PendingSelectedTaskOperationEntity,
+        command: PendingCommandEntity,
+        state: LocalStateEntity,
+    ) {
+        insertSelectedTaskOperation(selectedOperation)
+        insertCommand(command)
+        updateState(state)
+    }
+
     @Transaction
     suspend fun updateMutationState(
         state: LocalStateEntity,

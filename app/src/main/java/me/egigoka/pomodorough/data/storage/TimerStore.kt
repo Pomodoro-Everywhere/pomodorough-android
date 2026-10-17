@@ -202,6 +202,20 @@ internal class TimerStore(
         dao.persistSelectedTaskOperation(PendingSelectedTaskOperationEntity.from(operation), local)
     }
 
+    // R49-A02: single Room transaction for selection plus retarget.
+    suspend fun saveSelectedTaskRetarget(
+        local: LocalStateEntity,
+        selectionOperation: SelectedTaskOperation,
+        command: TimerCommand,
+        dependency: String?,
+    ) {
+        dao.persistSelectedTaskRetarget(
+            PendingSelectedTaskOperationEntity.from(selectionOperation),
+            PendingCommandEntity.from(command, dependency),
+            local,
+        )
+    }
+
     suspend fun discardBootstrapResolution() {
         dao.deleteBootstrapResolution()
     }

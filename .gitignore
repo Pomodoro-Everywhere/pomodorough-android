@@ -38,3 +38,5 @@ secrets.properties
 .vscode/
 *.orig
 *.swp
+/scratch/
+.pytest_cache/

@@ -35,11 +35,11 @@ class CIWorkflowTests(unittest.TestCase):
         workflow = CI_WORKFLOW.read_text(encoding="utf-8")
 
         self.assertIn(
-            'CORE_COMMIT: "3c609d4f2dd87a9d201f928772a466af7ab70581"',
+            'CORE_COMMIT: "2b66cfe1d83910ae085407d9fe7b76f2d485347d"',
             workflow,
         )
         self.assertIn(
-            'CORE_SHA256: "775d3d85cc4f6ced2243fd8b831e0057d6264e2202fdc2bf28d83b62e311e05a"',
+            'CORE_SHA256: "6605f844e7464d8f6f7e9f3be641ffc7dfbc8733ba78c93efd6bc0188799f8ba"',
             workflow,
         )
         self.assertIn("repository: Pomodoro-Everywhere/pomodorough-core", workflow)
@@ -263,11 +263,11 @@ class CIWorkflowTests(unittest.TestCase):
                 inventory.extend((path.relative_to(ROOT), method) for method in methods)
         self.assertTrue(inventory)
         self.assertEqual(len(inventory), len(set(inventory)))
-        self.assertEqual(361, len(inventory), "Source @Test method inventory")
+        self.assertEqual(387, len(inventory), "Source @Test method inventory")
         # Execution count, not source count: PortraitTimerScrollRegressionTest
         # contributes 3 methods x 6 params = 18 executions (+15 beyond source).
         execution_count = len(inventory) + 15
-        self.assertEqual(376, execution_count, "Update exact instrumentation inventory contract")
+        self.assertEqual(402, execution_count, "Update exact instrumentation inventory contract")
         self.assertEqual(int(default[1]), execution_count, "Update runner's explicit inventory guard")
 
     def test_instrumentation_count_guard_fails_closed(self) -> None:

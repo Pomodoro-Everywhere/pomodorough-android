@@ -5,9 +5,9 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -44,6 +44,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
@@ -53,11 +57,11 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.window.layout.FoldingFeature
 import kotlinx.coroutines.CancellationException
 import androidx.window.layout.WindowInfoTracker
-import androidx.window.layout.WindowMetricsCalculator
 import me.egigoka.pomodorough.R
 import me.egigoka.pomodorough.data.AccountSwitchState
 import me.egigoka.pomodorough.data.AppState
@@ -271,11 +275,10 @@ private fun LandscapeTimerScaffold(
     }
 }
 
-private data class FoldWindowState(
+internal data class FoldWindowState(
     val posture: FoldPosture = FoldPosture.Flat,
     val hinge: FoldHingeOrientation = FoldHingeOrientation.Unknown,
     val hingeBounds: HingeBoundsPx? = null,
-    val windowSize: WindowSizePx? = null,
     val isSeparating: Boolean = false,
     val occlusionFull: Boolean = false,
 )
@@ -290,15 +293,12 @@ private fun rememberFoldWindowState(): FoldWindowState {
             WindowInfoTracker.getOrCreate(context).windowLayoutInfo(activity).collect { info ->
                 val feature = info.displayFeatures.filterIsInstance<FoldingFeature>().firstOrNull()
                 val bounds = feature?.bounds
-                val windowBounds = WindowMetricsCalculator.getOrCreate()
-                    .computeCurrentWindowMetrics(activity).bounds
                 foldState = FoldWindowState(
                     posture = foldPostureForState(feature?.state == FoldingFeature.State.HALF_OPENED),
                     hinge = foldHingeOrientation(
                         feature?.orientation?.let { it == FoldingFeature.Orientation.VERTICAL },
                     ),
                     hingeBounds = bounds?.let { HingeBoundsPx(it.left, it.top, it.right, it.bottom) },
-                    windowSize = WindowSizePx(windowBounds.width(), windowBounds.height()),
                     isSeparating = feature?.isSeparating == true,
                     occlusionFull = feature?.occlusionType == FoldingFeature.OcclusionType.FULL,
                 )
@@ -318,13 +318,10 @@ private fun rememberFoldWindowState(): FoldWindowState {
     return foldState
 }
 
-// Fold split keeps navigation outside the hinge regions: the Scaffold
-// bottom bar and systemBarsPadding apply first, then the usable content
-// size converts window hinge bounds proportionally. Readout and controls
-// are complementary (one instance each), never duplicated across panes.
-// Posture transitions recompose from the current foldState, no caching.
+// Measure after system insets and Scaffold navigation padding. Translate
+// the original physical hinge rather than scaling its window fractions.
 @Composable
-private fun HalfOpenTimerScreen(
+internal fun HalfOpenTimerScreen(
     state: AppState,
     mutationsEnabled: Boolean,
     actions: TimerContentActions,
@@ -334,83 +331,109 @@ private fun HalfOpenTimerScreen(
 ) {
     Scaffold(
         modifier = Modifier.fillMaxSize().systemBarsPadding(),
-        bottomBar = { MainNavigationBar(activeTab, onSelectTab) },
+        bottomBar = {
+            Box(Modifier.testTag("timer_fold_navigation")) { MainNavigationBar(activeTab, onSelectTab) }
+        },
     ) { padding ->
-        BoxWithConstraints(Modifier.fillMaxSize().padding(padding)) {
-            val hingeInContent = windowHingeToContent(
-                foldState.hingeBounds, foldState.windowSize, maxWidth, maxHeight,
-            )
-            val fractions = hingeFractions(foldState.hingeBounds, foldState.windowSize)
-            when (foldState.hinge) {
-                FoldHingeOrientation.Vertical -> FoldSideBySide(
-                    state, mutationsEnabled, actions, fractions, hingeInContent,
-                )
-                FoldHingeOrientation.Horizontal -> FoldTabletop(
-                    state, mutationsEnabled, actions, fractions, hingeInContent,
-                )
-                FoldHingeOrientation.Unknown -> FoldSinglePane(state, mutationsEnabled, actions)
+        Box(Modifier.fillMaxSize().padding(padding)) {
+            MeasuredFoldContent(state, mutationsEnabled, actions, foldState)
+        }
+    }
+}
+
+@Composable
+private fun MeasuredFoldContent(
+    state: AppState,
+    mutationsEnabled: Boolean,
+    actions: TimerContentActions,
+    foldState: FoldWindowState,
+) {
+    var contentBounds by remember { mutableStateOf<ContentBoundsInWindow?>(null) }
+    Box(Modifier.fillMaxSize().testTag("timer_fold_content").onGloballyPositioned { coordinates ->
+        val origin = coordinates.positionInWindow()
+        contentBounds = ContentBoundsInWindow(
+            origin.x, origin.y, coordinates.size.width, coordinates.size.height,
+        )
+    }) {
+        val bounds = contentBounds ?: return@Box
+        val hinge = windowHingeToContent(foldState.hingeBounds, bounds)
+        val panes = hinge?.let { physicalFoldPanes(bounds, it, foldState.hinge) }
+        if (panes == null) {
+            FoldSinglePane(state, mutationsEnabled, actions)
+        } else {
+            FoldPhysicalPanes(state, mutationsEnabled, actions, foldContentLayout(panes))
+        }
+    }
+}
+
+@Composable
+private fun FoldPhysicalPanes(
+    state: AppState,
+    mutationsEnabled: Boolean,
+    actions: TimerContentActions,
+    contentLayout: FoldContentLayout,
+) {
+    val hero = timerHeroState(state, mutationsEnabled)
+    val regions = when (contentLayout) {
+        is FoldContentLayout.Split -> listOf(contentLayout.panes.first, contentLayout.panes.second)
+        is FoldContentLayout.Single -> listOf(contentLayout.region)
+        FoldContentLayout.Occluded -> emptyList()
+    }
+    Layout(
+        modifier = Modifier.fillMaxSize().testTag("timer_half_open"),
+        content = {
+            when (contentLayout) {
+                is FoldContentLayout.Split -> {
+                    FoldScrollablePane(Modifier.testTag("timer_fold_readout")) {
+                        TimerScreenMessages(state, actions)
+                        FoldReadoutPane(hero)
+                    }
+                    FoldScrollablePane(Modifier.testTag("timer_fold_controls")) { FoldControlsPane(hero, actions.hero) }
+                }
+                is FoldContentLayout.Single -> FoldAvailablePane(state, hero, actions)
+                FoldContentLayout.Occluded -> Unit
+            }
+        },
+    ) { measurables, constraints ->
+        val placeables = measurables.zip(regions).map { (measurable, region) ->
+            measurable.measure(Constraints.fixed(region.width, region.height))
+        }
+        layout(constraints.maxWidth, constraints.maxHeight) {
+            placeables.zip(regions).forEach { (placeable, region) ->
+                // Absolute placement keeps physical left/right panes in RTL;
+                // descendants still inherit the user's layout direction.
+                placeable.place(region.left, region.top)
             }
         }
     }
-}
-
-@Composable
-private fun FoldSideBySide(
-    state: AppState,
-    mutationsEnabled: Boolean,
-    actions: TimerContentActions,
-    fractions: HingeFractions?,
-    hingeInContent: HingeInContent?,
-) {
-    val weights = verticalSplitWeights(fractions)
-    if (weights == null || hingeInContent == null) {
-        FoldSinglePane(state, mutationsEnabled, actions)
-        return
-    }
-    val hero = timerHeroState(state, mutationsEnabled)
-    Row(Modifier.fillMaxSize().testTag("timer_half_open")) {
-        Box(Modifier.fillMaxHeight().weight(weights.first.coerceAtLeast(0.01f))) {
-            FoldReadoutPane(hero)
-        }
-        if (weights.hinge > 0.001f) {
-            Spacer(Modifier.fillMaxHeight().weight(weights.hinge))
-        }
-        Box(Modifier.fillMaxHeight().weight(weights.second.coerceAtLeast(0.01f))) {
-            FoldControlsPane(hero, actions.hero)
-        }
+    if (contentLayout == FoldContentLayout.Occluded) {
+        Box(Modifier.fillMaxSize().testTag("timer_fold_occluded"))
     }
 }
 
 @Composable
-private fun FoldTabletop(
-    state: AppState,
-    mutationsEnabled: Boolean,
-    actions: TimerContentActions,
-    fractions: HingeFractions?,
-    hingeInContent: HingeInContent?,
-) {
-    val weights = horizontalSplitWeights(fractions)
-    if (weights == null || hingeInContent == null) {
-        FoldSinglePane(state, mutationsEnabled, actions)
-        return
+private fun FoldAvailablePane(state: AppState, hero: TimerHeroState, actions: TimerContentActions) {
+    FoldScrollablePane(Modifier.fillMaxSize().testTag("timer_fold_available")) {
+        TimerScreenMessages(state, actions)
+        Box(Modifier.fillMaxWidth().testTag("timer_fold_readout")) { FoldReadoutPane(hero) }
+        Box(Modifier.fillMaxWidth().testTag("timer_fold_controls")) { FoldControlsPane(hero, actions.hero) }
     }
-    val hero = timerHeroState(state, mutationsEnabled)
-    Column(Modifier.fillMaxSize().testTag("timer_half_open")) {
-        Box(Modifier.fillMaxWidth().weight(weights.first.coerceAtLeast(0.01f))) {
-            FoldReadoutPane(hero)
-        }
-        if (weights.hinge > 0.001f) {
-            Spacer(Modifier.fillMaxWidth().weight(weights.hinge))
-        }
-        Box(Modifier.fillMaxWidth().weight(weights.second.coerceAtLeast(0.01f))) {
-            FoldControlsPane(hero, actions.hero)
-        }
+}
+
+@Composable
+private fun FoldScrollablePane(modifier: Modifier, content: @Composable ColumnScope.() -> Unit) {
+    BoxWithConstraints(modifier.clipToBounds()) {
+        val panePadding = minOf(maxWidth, maxHeight) * 0.04f
+        Column(
+            Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(panePadding),
+            content = content,
+        )
     }
 }
 
 @Composable
 private fun FoldReadoutPane(hero: TimerHeroState) {
-    Column(Modifier.fillMaxSize().padding(12.dp)) {
+    Column(Modifier.fillMaxWidth()) {
         LandscapeTimerReadout(hero, Modifier.fillMaxWidth())
         LongBreakProgress(hero.longBreakProgress, darkModeTextColor(Butter))
     }
@@ -418,7 +441,7 @@ private fun FoldReadoutPane(hero: TimerHeroState) {
 
 @Composable
 private fun FoldControlsPane(hero: TimerHeroState, actions: TimerHeroActions) {
-    Column(Modifier.fillMaxSize().padding(12.dp)) {
+    Column(Modifier.fillMaxWidth()) {
         LandscapeTaskSelector(hero.taskSelectorState, actions.onSelectTask)
         LandscapeTimerActions(hero, actions)
     }

@@ -267,9 +267,9 @@ if [[ -n "$test_class" ]]; then
     || runner_status=$?
 else
   shard_count="${TEST_SHARD_COUNT:-8}"
-  # Execution count, not source count: 361 @Test methods plus 15 extra
+  # Execution count, not source count: 387 @Test methods plus 15 extra
   # executions from PortraitTimerScrollRegressionTest (3 methods x 6 params = 18).
-  expected_test_count="${EXPECTED_TEST_COUNT:-376}"
+  expected_test_count="${EXPECTED_TEST_COUNT:-402}"
   if [[ ! "$shard_count" =~ ^[1-9][0-9]*$ ]]; then
     echo "TEST_SHARD_COUNT must be a positive integer" >&2
     exit 1

@@ -1390,14 +1390,31 @@ class TimerRepository(
         initialize()
         var saved = false
         actionMutex.withLock {
+            // R49-A01: TimerPhase.all mirrors Shared Core valid phases.
+            // Core owns phase policy; this adapter only persists the choice.
             if (mutationsBlocked() || phase !in TimerPhase.all ||
                 projection.timer?.status in activeStatuses
             ) return@withLock
             if (phase == settings.selectedPhase) return@withLock
+            val proposedSettings = settings.copy(selectedPhase = phase)
+            val proposedLocal = local.copy(settingsJson = json.encodeToString(proposedSettings))
+            try {
+                timerStore.saveState(proposedLocal)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                // CrashReporter via PhaseSelectionReporter (bounded, no payload).
+                handlePhaseSelectionFailure(error)
+                notice = appContext.getString(R.string.sync_stopped_after_a_local_failure)
+                publish()
+                return@withLock
+            }
+            settings = proposedSettings
+            local = proposedLocal
             selectedPhaseGeneration += 1L
-            settings = settings.copy(selectedPhase = phase)
-            local = local.copy(settingsJson = json.encodeToString(settings))
-            timerStore.saveState(local)
+            if (notice == appContext.getString(R.string.sync_stopped_after_a_local_failure)) {
+                notice = null
+            }
             publish()
             saved = true
         }
@@ -1466,10 +1483,12 @@ class TimerRepository(
                 ?.takeIf { it.status in activeStatuses && it.phase == TimerPhase.Focus }
             val retargetNeeded = runningFocusTimer != null && runningFocusTimer.taskId != taskId
             if (taskId == selectedTaskId && !retargetNeeded) return@withLock
-            if (taskId != selectedTaskId) {
+            val selectionNeeded = taskId != selectedTaskId
+            if (selectionNeeded && runningFocusTimer != null && retargetNeeded) {
+                if (!commitSelectedTaskWithRetarget(runningFocusTimer, taskId)) return@withLock
+            } else if (selectionNeeded) {
                 if (!commitSelectedTask(taskId)) return@withLock
-            }
-            if (runningFocusTimer != null && retargetNeeded) {
+            } else if (runningFocusTimer != null && retargetNeeded) {
                 if (!commitRetarget(runningFocusTimer, taskId)) return@withLock
             }
             publish()
@@ -1506,14 +1525,70 @@ class TimerRepository(
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
-            CrashReporter.report(error)
-            val message = projectionFailureMessage(error)
-            mutationFailure = message
-            notice = message
+            if (error is SharedCoreException) {
+                CrashReporter.report(error)
+                val message = projectionFailureMessage(error)
+                mutationFailure = message
+                notice = message
+            } else {
+                handleSelectedTaskRetargetFailure(error)
+                val message = appContext.getString(R.string.sync_stopped_after_a_local_failure)
+                mutationFailure = message
+                notice = message
+            }
             publish()
             return false
         }
         return true
+    }
+
+    // R49-A02: one reservation, one Room transaction, one projection.
+    // Selection consumes no device sequence; the retarget advances it by
+    // one, preserving contiguous command ordering with no gaps.
+    private suspend fun commitSelectedTaskWithRetarget(current: CanonicalTimer, taskId: String?): Boolean {
+        val state = timerMutationState()
+        val reservation = reserveSelectionRetarget() ?: return false
+        val mutation = plannedMutation {
+            mutationCoordinator.selectedTaskWithRetarget(state, taskId, current.id, reservation, currentTimeMillis())
+        } ?: return false
+        try {
+            val event = transitionCommitter.commit(RepositorySelectedTaskRetargetTransition(mutation))
+            installSelectedTaskRetargetMutation(event.plan)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            if (error is SharedCoreException) {
+                CrashReporter.report(error)
+                val message = projectionFailureMessage(error)
+                mutationFailure = message
+                notice = message
+            } else {
+                handleSelectedTaskRetargetFailure(error)
+                val message = appContext.getString(R.string.sync_stopped_after_a_local_failure)
+                mutationFailure = message
+                notice = message
+            }
+            publish()
+            return false
+        }
+        return true
+    }
+
+    private fun installSelectedTaskRetargetMutation(mutation: SelectedTaskRetargetMutationPlan) {
+        local = mutation.local
+        pendingSelectedTaskOperations = mutation.selectedTaskOperations
+        pending = pending + mutation.commands
+        commandDependencies = commandDependencies + mutation.dependencies
+        mutation.commands.forEach { command ->
+            if (command.type == CommandType.Retarget) {
+                neverSentProof = neverSentProof.copy(commands = neverSentProof.commands + command.id)
+            }
+        }
+        neverSentProof = neverSentProof.copy(
+            selectedTaskOperations = neverSentProof.selectedTaskOperations + mutation.selectionOperation.id,
+        )
+        installCoreProjection(mutation.projection)
+        scheduleAlarm()
     }
 
     private fun installRetargetMutation(mutation: TimerCommandMutationPlan) {
@@ -3338,6 +3413,52 @@ class TimerRepository(
             val uuids = UuidV7.reserve(
                 timestampMs = stamps.first().wallMs,
                 count = count,
+                previous = previous,
+                entropy = uuidEntropy,
+            )
+            TimerMutationReservation(stamps, uuids, uuids.last().toString())
+        } catch (error: IllegalArgumentException) {
+            // expected-silent: clock out of bounds surfaces as blocked mutation, not a crash.
+            mutationFailure = error.message ?: LocalClockRangeError
+            notice = mutationFailure
+            publish()
+            return null
+        }
+        if (notice == mutationFailure) notice = null
+        mutationFailure = null
+        return reservation
+    }
+
+    private fun reserveSelectionRetarget(): TimerMutationReservation? {
+        val reservation = try {
+            val retainedClock = retainedHlc()
+            val nowMs = trustedClock.now(local, retainedWallMs = retainedClock.first)
+            val maximumRetainedWallMs = minOf(
+                SyncWireBounds.MaxSafeInteger,
+                nowMs + SyncWireBounds.MaxClockSkewMs,
+            )
+            require(retainedClock.first <= maximumRetainedWallMs) {
+                "Retained hybrid clock is outside trusted-time bounds"
+            }
+            val clocks = coreHlc.reserve(
+                physicalNowMs = nowMs,
+                retained = CoreHlc(retainedClock.first, retainedClock.second),
+                count = 2,
+            )
+            val unsequenced = SyncWireBounds.mutationStamps(
+                nowMs = nowMs,
+                clocks = clocks,
+                retainedDeviceSequence = local.deviceSequence,
+                withDeviceSequences = false,
+            )
+            require(local.deviceSequence in 0 until SyncWireBounds.MaxSafeInteger) {
+                "Device sequence overflow"
+            }
+            val stamps = listOf(unsequenced[0], unsequenced[1].copy(deviceSequence = local.deviceSequence + 1))
+            val previous = previousUuidV7()
+            val uuids = UuidV7.reserve(
+                timestampMs = stamps.first().wallMs,
+                count = 2,
                 previous = previous,
                 entropy = uuidEntropy,
             )

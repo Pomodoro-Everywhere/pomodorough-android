@@ -122,6 +122,18 @@ internal data class SelectedTaskMutationPlan(
     val projection: CoreProjectionResult,
 )
 
+// R49-A02: combined selection plus retarget. Both operation identities,
+// Core projections, and dependencies are preserved; persistence commits
+// them in one Room transaction with one projection install.
+internal data class SelectedTaskRetargetMutationPlan(
+    val selectionOperation: SelectedTaskOperation,
+    val selectedTaskOperations: List<SelectedTaskOperation>,
+    val commands: List<TimerCommand>,
+    val dependencies: Map<String, String>,
+    val local: LocalStateEntity,
+    val projection: CoreProjectionResult,
+)
+
 internal data class TaskMutationPlan(
     val operation: TaskOperation,
     val selectedOperation: SelectedTaskOperation?,
@@ -463,6 +475,50 @@ internal class TimerMutationCoordinator(
         )
         return TimerMutationTransition.Planned(
             SelectedTaskMutationPlan(operation, nextLocal, operations, projected),
+        )
+    }
+
+    // R49-A02: reserve, plan, and persist selection plus retarget as one
+    // unit. Both Core decisions run; the combined queues project once.
+    fun selectedTaskWithRetarget(
+        state: TimerMutationState,
+        taskId: String?,
+        timerId: String,
+        reservation: TimerMutationReservation,
+        physicalNowMs: Long,
+    ): TimerMutationTransition<SelectedTaskRetargetMutationPlan> {
+        if (reservation.stamps.size != 2 || reservation.uuids.size != 2) {
+            return TimerMutationTransition.Ignored
+        }
+        val selectionReservation = reservation.copy(
+            stamps = listOf(reservation.stamps[0]),
+            uuids = listOf(reservation.uuids[0]),
+            lastUuidV7 = reservation.uuids[0].toString(),
+        )
+        val selection = selectedTask(SelectedTaskMutationInput(state, taskId, selectionReservation))
+        val selectionPlan = (selection as? TimerMutationTransition.Planned)?.plan
+            ?: return TimerMutationTransition.Ignored
+        val intermediate = state.copy(
+            local = selectionPlan.local,
+            queues = state.queues.copy(selectedTaskOperations = selectionPlan.operations),
+        )
+        val retargetReservation = reservation.copy(
+            stamps = listOf(reservation.stamps[1]),
+            uuids = listOf(reservation.uuids[1]),
+            lastUuidV7 = reservation.lastUuidV7,
+        )
+        val retarget = retarget(TimerRetargetMutationInput(intermediate, timerId, taskId, retargetReservation, physicalNowMs))
+        val retargetPlan = (retarget as? TimerMutationTransition.Planned)?.plan
+            ?: return TimerMutationTransition.Ignored
+        return TimerMutationTransition.Planned(
+            SelectedTaskRetargetMutationPlan(
+                selectionPlan.operation,
+                selectionPlan.operations,
+                retargetPlan.commands,
+                retargetPlan.dependencies,
+                retargetPlan.local,
+                retargetPlan.projection,
+            ),
         )
     }
 

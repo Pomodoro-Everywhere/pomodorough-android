@@ -85,6 +85,13 @@ internal data class RepositorySelectedTaskTransition(
     override fun event() = RepositoryTransitionEvent.SelectedTaskApplied(plan)
 }
 
+// R49-A02: single persistence event for selection plus retarget.
+internal data class RepositorySelectedTaskRetargetTransition(
+    val plan: SelectedTaskRetargetMutationPlan,
+) : RepositoryTransition<RepositoryTransitionEvent.SelectedTaskRetargetApplied> {
+    override fun event() = RepositoryTransitionEvent.SelectedTaskRetargetApplied(plan)
+}
+
 internal data class RepositoryTaskTransition(
     val plan: TaskMutationPlan,
 ) : RepositoryTransition<RepositoryTransitionEvent.TaskApplied> {
@@ -130,6 +137,8 @@ internal sealed interface RepositoryTransitionEvent {
     data class AutoStartApplied(val plan: AutoStartMutationPlan) : RepositoryTransitionEvent
 
     data class SelectedTaskApplied(val plan: SelectedTaskMutationPlan) : RepositoryTransitionEvent
+
+    data class SelectedTaskRetargetApplied(val plan: SelectedTaskRetargetMutationPlan) : RepositoryTransitionEvent
 
     data class TaskApplied(val plan: TaskMutationPlan) : RepositoryTransitionEvent
 }
@@ -182,6 +191,15 @@ private class TimerStoreTransitionPersistence(
                 transition.plan.local,
                 transition.plan.operation,
             )
+            is RepositorySelectedTaskRetargetTransition -> {
+                val command = transition.plan.commands.single()
+                timerStore.saveSelectedTaskRetarget(
+                    transition.plan.local,
+                    transition.plan.selectionOperation,
+                    command,
+                    transition.plan.dependencies[command.id],
+                )
+            }
             is RepositoryTaskTransition -> timerStore.saveTaskOperation(
                 transition.plan.local,
                 transition.plan.operation,

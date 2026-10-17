@@ -59,60 +59,31 @@ class R43A06HingeGeometryTest {
 
     @Test
     fun offCenterVerticalHingeSplitsProportionally() {
-        val fractions = hingeFractions(
-            HingeBoundsPx(300, 0, 300, 1000),
-            WindowSizePx(1000, 1000),
-        )
-        assertNotNull(fractions)
-        val weights = verticalSplitWeights(requireNotNull(fractions))
-        assertNotNull(weights)
-        assertEquals(0.3f, requireNotNull(weights).first, 0.001f)
-        assertEquals(0.7f, requireNotNull(weights).second, 0.001f)
-        assertFalse("off-center split must not be equal halves", requireNotNull(weights).first == 0.5f)
+        val bounds = ContentBoundsInWindow(0f, 0f, 1000, 1000)
+        val hinge = requireNotNull(windowHingeToContent(HingeBoundsPx(300, 0, 300, 1000), bounds))
+        val panes = requireNotNull(physicalFoldPanes(bounds, hinge, FoldHingeOrientation.Vertical))
+        assertEquals(300, panes.first.width)
+        assertEquals(700, panes.second.width)
     }
 
     @Test
     fun nonzeroHingeWidthExcludedFromBothPanes() {
-        val fractions = hingeFractions(
-            HingeBoundsPx(480, 0, 520, 1000),
-            WindowSizePx(1000, 1000),
-        )
-        val weights = verticalSplitWeights(requireNotNull(fractions))
-        assertNotNull(weights)
-        assertEquals(0.04f, requireNotNull(weights).hinge, 0.001f)
-        val content = windowHingeToContent(
-            HingeBoundsPx(480, 0, 520, 1000),
-            WindowSizePx(1000, 1000),
-            1000.dp, 1000.dp,
-        )
-        assertNotNull(content)
-        val (left, right) = verticalPaneWidths(1000.dp, requireNotNull(content))
-        assertEquals(480.dp, left)
-        assertEquals(480.dp, right)
-        assertFalse(controlBoundsIntersectHinge(0.dp, left, requireNotNull(content).left, requireNotNull(content).right))
-        assertFalse(controlBoundsIntersectHinge(requireNotNull(content).right, 1000.dp, requireNotNull(content).left, requireNotNull(content).right))
+        val bounds = ContentBoundsInWindow(0f, 0f, 1000, 1000)
+        val hinge = requireNotNull(windowHingeToContent(HingeBoundsPx(480, 0, 520, 1000), bounds))
+        val panes = requireNotNull(physicalFoldPanes(bounds, hinge, FoldHingeOrientation.Vertical))
+        assertEquals(480, panes.first.right)
+        assertEquals(520, panes.second.left)
+        assertEquals(480, panes.second.width)
     }
 
     @Test
     fun horizontalTabletopSplitsTopAndBottomAroundHinge() {
-        val fractions = hingeFractions(
-            HingeBoundsPx(0, 600, 1000, 640),
-            WindowSizePx(1000, 1000),
-        )
-        val weights = horizontalSplitWeights(requireNotNull(fractions))
-        assertNotNull(weights)
-        assertEquals(0.6f, requireNotNull(weights).first, 0.001f)
-        assertEquals(0.04f, requireNotNull(weights).hinge, 0.001f)
-        assertEquals(0.36f, requireNotNull(weights).second, 0.001f)
-        val content = windowHingeToContent(
-            HingeBoundsPx(0, 600, 1000, 640),
-            WindowSizePx(1000, 1000),
-            800.dp, 1000.dp,
-        )
-        assertNotNull(content)
-        val (top, bottom) = horizontalPaneHeights(1000.dp, requireNotNull(content))
-        assertFalse(controlBoundsIntersectHinge(0.dp, top, requireNotNull(content).top, requireNotNull(content).bottom))
-        assertFalse(controlBoundsIntersectHinge(requireNotNull(content).bottom, 1000.dp, requireNotNull(content).top, requireNotNull(content).bottom))
+        val bounds = ContentBoundsInWindow(0f, 0f, 800, 1000)
+        val hinge = requireNotNull(windowHingeToContent(HingeBoundsPx(0, 600, 1000, 640), bounds))
+        val panes = requireNotNull(physicalFoldPanes(bounds, hinge, FoldHingeOrientation.Horizontal))
+        assertEquals(600, panes.first.bottom)
+        assertEquals(640, panes.second.top)
+        assertEquals(360, panes.second.height)
     }
 
     @Test
@@ -152,46 +123,33 @@ class R43A06HingeGeometryTest {
 
     @Test
     fun occludingAndNonOccludingHingesBothAvoidControls() {
-        val occluding = windowHingeToContent(
-            HingeBoundsPx(490, 0, 510, 1000),
-            WindowSizePx(1000, 1000),
-            1000.dp, 1000.dp,
-        )
-        assertNotNull(occluding)
-        val (left, _) = verticalPaneWidths(1000.dp, requireNotNull(occluding))
-        assertFalse(controlBoundsIntersectHinge(0.dp, left, requireNotNull(occluding).left, requireNotNull(occluding).right))
-        val hairline = windowHingeToContent(
-            HingeBoundsPx(500, 0, 500, 1000),
-            WindowSizePx(1000, 1000),
-            1000.dp, 1000.dp,
-        )
-        assertNotNull(hairline)
-        val (lineLeft, _) = verticalPaneWidths(1000.dp, requireNotNull(hairline))
-        assertFalse(controlBoundsIntersectHinge(0.dp, lineLeft, requireNotNull(hairline).left, requireNotNull(hairline).right))
+        val bounds = ContentBoundsInWindow(0f, 0f, 1000, 1000)
+        listOf(HingeBoundsPx(490, 0, 510, 1000), HingeBoundsPx(500, 0, 500, 1000)).forEach { original ->
+            val hinge = requireNotNull(windowHingeToContent(original, bounds))
+            val panes = requireNotNull(physicalFoldPanes(bounds, hinge, FoldHingeOrientation.Vertical))
+            assertEquals(original.left, panes.first.right)
+            assertEquals(original.right, panes.second.left)
+        }
         val scaffold = productionText("me/egigoka/pomodorough/ui/TimerScreenScaffold.kt")
         assertTrue(scaffold.contains("occlusionFull"))
-        assertTrue(scaffold.contains("Spacer("))
     }
 
     @Test
-    fun windowToContentConversionPreservesFractionsAcrossInsets() {
-        val window = WindowSizePx(1000, 800)
+    fun windowToContentConversionSubtractsMeasuredOriginAcrossInsets() {
+        val bounds = ContentBoundsInWindow(24f, 30f, 900, 700)
         val hingePx = HingeBoundsPx(300, 0, 320, 800)
-        val content = windowHingeToContent(hingePx, window, 900.dp, 700.dp)
-        assertNotNull(content)
-        assertEquals(270.dp, requireNotNull(content).left)
-        assertEquals(288.dp, requireNotNull(content).right)
-        val (left, right) = verticalPaneWidths(900.dp, requireNotNull(content))
-        assertEquals(270.dp, left)
-        assertEquals(612.dp, right)
-        assertFalse(controlBoundsIntersectHinge(0.dp, left, requireNotNull(content).left, requireNotNull(content).right))
-        assertFalse(controlBoundsIntersectHinge(requireNotNull(content).right, 900.dp, requireNotNull(content).left, requireNotNull(content).right))
+        val hinge = requireNotNull(windowHingeToContent(hingePx, bounds))
+        assertEquals(276f, hinge.left, 0f)
+        assertEquals(296f, hinge.right, 0f)
+        val panes = requireNotNull(physicalFoldPanes(bounds, hinge, FoldHingeOrientation.Vertical))
+        assertEquals(hingePx.left.toFloat(), bounds.left + panes.first.right, 0f)
+        assertEquals(hingePx.right.toFloat(), bounds.left + panes.second.left, 0f)
     }
 
     @Test
     fun foldSplitDoesNotDuplicateTimerControls() {
         val scaffold = productionText("me/egigoka/pomodorough/ui/TimerScreenScaffold.kt")
-        val foldSection = scaffold.substringAfter("private fun HalfOpenTimerScreen")
+        val foldSection = scaffold.substringAfter("internal fun HalfOpenTimerScreen")
             .substringBefore("private fun timerContentActions")
         assertTrue(
             "fold panes must be complementary readout plus controls",
@@ -210,12 +168,12 @@ class R43A06HingeGeometryTest {
     @Test
     fun navigationAndInsetsStayOutsideHingeSplit() {
         val scaffold = productionText("me/egigoka/pomodorough/ui/TimerScreenScaffold.kt")
-        val foldSection = scaffold.substringAfter("private fun HalfOpenTimerScreen")
-            .substringBefore("private fun FoldSideBySide")
+        val foldSection = scaffold.substringAfter("internal fun HalfOpenTimerScreen")
+            .substringBefore("private fun FoldPhysicalPanes")
         assertTrue(foldSection.contains("MainNavigationBar("))
         assertTrue(foldSection.contains("systemBarsPadding()"))
         assertTrue(foldSection.contains(".padding(padding)"))
-        assertTrue(foldSection.contains("BoxWithConstraints"))
+        assertTrue(foldSection.contains("positionInWindow()"))
     }
 
     @Test
