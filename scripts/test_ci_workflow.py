@@ -265,9 +265,11 @@ class CIWorkflowTests(unittest.TestCase):
         self.assertEqual(len(inventory), len(set(inventory)))
         self.assertEqual(387, len(inventory), "Source @Test method inventory")
         # Execution count, not source count: PortraitTimerScrollRegressionTest
-        # contributes 3 methods x 6 params = 18 executions (+15 beyond source).
-        execution_count = len(inventory) + 15
-        self.assertEqual(402, execution_count, "Update exact instrumentation inventory contract")
+        # contributes 3 methods x 6 params = 18 executions (+15 beyond source);
+        # R49 parameterized suites contribute 2 x 12 + 1 x 12 + 1 x 12 = 48
+        # executions (+44 beyond source).
+        execution_count = len(inventory) + 15 + 44
+        self.assertEqual(446, execution_count, "Update exact instrumentation inventory contract")
         self.assertEqual(int(default[1]), execution_count, "Update runner's explicit inventory guard")
 
     def test_instrumentation_count_guard_fails_closed(self) -> None:
