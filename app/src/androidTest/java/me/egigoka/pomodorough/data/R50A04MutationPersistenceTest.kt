@@ -143,21 +143,21 @@ class R50A04MutationPersistenceTest {
         awaitSignedIn(repository)
         repository.addTask("Select A")
         repository.addTask("Select B")
-        val taskB = repository.state.value.tasks.first { it.title == "Select B" }
+        val taskA = repository.state.value.tasks.first { it.title == "Select A" }
         val before = snapshot(dao.delegate)
         dao.fail = "selection-first"
-        viewModel(repository).selectTask(taskB.id)
+        viewModel(repository).selectTask(taskA.id)
         awaitNotice(repository)
         assertDurableUnchanged(before, snapshot(dao.delegate))
         dao.fail = null
         dao.fail = "selection-final"
-        viewModel(repository).selectTask(taskB.id)
+        viewModel(repository).selectTask(taskA.id)
         awaitNotice(repository)
         assertDurableUnchanged(before, snapshot(dao.delegate))
         dao.fail = null
-        viewModel(repository).selectTask(taskB.id)
-        awaitSelection(repository, taskB.id)
-        assertEquals(taskB.id, snapshot(dao.delegate).local.selectedTaskId)
+        viewModel(repository).selectTask(taskA.id)
+        awaitSelection(repository, taskA.id)
+        assertEquals(taskA.id, snapshot(dao.delegate).local.selectedTaskId)
     }
 
     @Test

@@ -829,6 +829,10 @@ internal class TimerMutationCoordinator(
     // R50-A01: mutation planning projects safe retained queues plus the
     // new operations only. Issued operations stay persisted for exact retry
     // but cannot re-enter the display projection through another mutation.
+    // Commands keep full retained history when new commands exist: Pause,
+    // Finish, and retarget depend on the issued Start that safe filtering
+    // would otherwise drop, which stranded in-flight toggles and generated
+    // breaks in connected R50 jobs.
     private fun projectionQueuesFor(
         state: TimerMutationState,
         full: PendingSyncQueues,
@@ -838,8 +842,9 @@ internal class TimerMutationCoordinator(
             state.neverSentProof,
             SafeProjectionPolicy.headOrNull(state.local),
         )
+        val newCommands = added(full.commands, state.queues.commands, TimerCommand::id)
         return PendingSyncQueues(
-            commands = safe.commands + added(full.commands, state.queues.commands, TimerCommand::id),
+            commands = if (newCommands.isEmpty()) safe.commands else full.commands,
             taskOperations = safe.taskOperations +
                 added(full.taskOperations, state.queues.taskOperations, TaskOperation::id),
             durationOperations = safe.durationOperations +
