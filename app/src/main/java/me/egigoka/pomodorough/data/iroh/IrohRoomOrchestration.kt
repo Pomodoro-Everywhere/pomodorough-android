@@ -216,25 +216,22 @@ internal class IrohRoomOrchestration(
 
     suspend fun clearAccountData() = mutex.withLock {
         persistence.clearAccountData()
-        publish(
-            service.state.value.copy(
-                mode = ReplicationMode.OFFLINE,
-                operationCount = 0,
-                invite = null,
-            ),
-        )
+        // R50-A03: drop cached invite before publishing so the state
+        // collector cannot restore a scrubbed credential. Logout keeps
+        // device-local rows (see metadata persistence); only the
+        // published presentation is cleared here.
+        invite = null
+        publish(IrohNetworkState(mode = ReplicationMode.OFFLINE))
         initialized = true
     }
 
     suspend fun scrubDeletedAccount() = mutex.withLock {
         persistence.scrubDeletedAccount()
-        publish(
-            service.state.value.copy(
-                mode = ReplicationMode.OFFLINE,
-                operationCount = 0,
-                invite = null,
-            ),
-        )
+        // R50-A03: drop cached invite before publishing so the state
+        // collector cannot restore a deleted room credential. Deletion
+        // wipes rows and vault secrets; logout retains them.
+        invite = null
+        publish(IrohNetworkState(mode = ReplicationMode.OFFLINE))
         initialized = true
     }
 

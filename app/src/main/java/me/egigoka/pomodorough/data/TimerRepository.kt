@@ -676,7 +676,10 @@ class TimerRepository(
             // expected-silent: malformed profile surfaces as a sign-in notice, not a crash.
             failSignIn(identity, error.message, clearCredentials = true)
         } catch (error: Exception) {
+            // R50-L02: transport stays quiet with notice; credential/Core/commit
+            // gets one bounded stage+cause report.
             // expected-silent: network failure surfaces as a sign-in notice, not a crash.
+            reportAccountBootstrap(AccountBootstrapStage.SignIn, identity, error)
             failSignIn(
                 identity,
                 error.message ?: appContext.getString(R.string.google_sign_in_did_not_complete),
@@ -1340,8 +1343,16 @@ class TimerRepository(
                     ),
                 )
             } ?: return@withLock
-            val event = transitionCommitter.commit(RepositoryTimerCommandBatchTransition(mutation))
-            installTimerMutation(event.plan)
+            try {
+                val event = transitionCommitter.commit(RepositoryTimerCommandBatchTransition(mutation))
+                clearMutationStorageNotice()
+                installTimerMutation(event.plan)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                publishMutationCommitFailure(error) // CrashReporter via MutationPersistenceReporter
+                return@withLock
+            }
             saved = true
         }
         if (saved) afterLocalMutation()
@@ -1434,8 +1445,16 @@ class TimerRepository(
             val mutation = plannedMutation {
                 mutationCoordinator.duration(DurationMutationInput(state, phase, delta, reservation))
             } ?: return@withLock
-            val event = transitionCommitter.commit(RepositoryDurationTransition(mutation))
-            installDurationMutation(event.plan)
+            try {
+                val event = transitionCommitter.commit(RepositoryDurationTransition(mutation))
+                clearMutationStorageNotice()
+                installDurationMutation(event.plan)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                publishMutationCommitFailure(error) // CrashReporter via MutationPersistenceReporter
+                return@withLock
+            }
             saved = true
         }
         if (saved) afterLocalMutation()
@@ -1461,13 +1480,21 @@ class TimerRepository(
             val mutation = plannedMutation {
                 mutationCoordinator.autoStart(AutoStartMutationInput(state, enabled, reservation))
             } ?: return@withLock
-            val event = transitionCommitter.commit(RepositoryAutoStartTransition(mutation))
-            local = event.plan.local
-            settings = event.plan.settings
-            pendingAutoStartOperations = event.plan.operations
-            neverSentProof = neverSentProof.copy(autoStartOperations = neverSentProof.autoStartOperations + event.plan.operation.id)
-            installCoreProjection(event.plan.projection)
-            publish()
+            try {
+                val event = transitionCommitter.commit(RepositoryAutoStartTransition(mutation))
+                clearMutationStorageNotice()
+                local = event.plan.local
+                settings = event.plan.settings
+                pendingAutoStartOperations = event.plan.operations
+                neverSentProof = neverSentProof.copy(autoStartOperations = neverSentProof.autoStartOperations + event.plan.operation.id)
+                installCoreProjection(event.plan.projection)
+                publish()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                publishMutationCommitFailure(error) // CrashReporter via MutationPersistenceReporter
+                return@withLock
+            }
             saved = true
         }
         if (saved) afterLocalMutation()
@@ -1503,13 +1530,21 @@ class TimerRepository(
         val mutation = plannedMutation {
             mutationCoordinator.selectedTask(SelectedTaskMutationInput(state, taskId, reservation))
         } ?: return false
-        val event = transitionCommitter.commit(RepositorySelectedTaskTransition(mutation))
-        local = event.plan.local
-        pendingSelectedTaskOperations = event.plan.operations
-        neverSentProof = neverSentProof.copy(
-            selectedTaskOperations = neverSentProof.selectedTaskOperations + event.plan.operation.id,
-        )
-        installCoreProjection(event.plan.projection)
+        try {
+            val event = transitionCommitter.commit(RepositorySelectedTaskTransition(mutation))
+            clearMutationStorageNotice()
+            local = event.plan.local
+            pendingSelectedTaskOperations = event.plan.operations
+            neverSentProof = neverSentProof.copy(
+                selectedTaskOperations = neverSentProof.selectedTaskOperations + event.plan.operation.id,
+            )
+            installCoreProjection(event.plan.projection)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            publishMutationCommitFailure(error) // CrashReporter via MutationPersistenceReporter
+            return false
+        }
         return true
     }
 
@@ -1823,9 +1858,12 @@ class TimerRepository(
             )
             return false
         } catch (error: Exception) {
+            // R50-L02: transport stays quiet with retry; credential/Core/commit
+            // gets one bounded stage+cause report.
             // expected-silent: refresh failure surfaces as resolution error with retry, not a crash.
             actionMutex.withLock {
                 if (!isCurrent(identity)) return@withLock
+                handleAccountBootstrapFailure(AccountBootstrapStage.ResolutionRecovery, error)
                 historyResolution = historyResolution?.copy(
                     submitting = false,
                     error = error.message
@@ -1933,7 +1971,10 @@ class TimerRepository(
             // expected-silent: session expiry surfaces as corrupted recovery, not a crash.
             expireResolutionRecovery(identity)
         } catch (error: Exception) {
+            // R50-L02: transport stays quiet; credential/Core/commit gets one
+            // bounded stage+cause report.
             // expected-silent: recovery refresh failure surfaces as recovery error, not a crash.
+            reportAccountBootstrap(AccountBootstrapStage.ResolutionRecovery, identity, error)
             failResolutionRecovery(identity, error)
         }
     }
@@ -2130,14 +2171,25 @@ class TimerRepository(
                 ),
             )
         } catch (error: Exception) {
-            CrashReporter.report(error)
-            failBootstrapResolution(
-                identity,
-                error.message ?: appContext.getString(
-                    R.string.history_resolution_failed_without_changing_local_data,
-                ),
-            )
+            // R50-A06: bounded stage+cause taxonomy; transport stays quiet.
+            // expected-silent: bootstrap failure surfaces as resolution retry, not a crash.
+            failBootstrapResolutionBounded(identity, error)
         }
+    }
+
+    // R50-A06: generic bootstrap-resolution failures share the bounded
+    // ResolutionRecovery taxonomy instead of a raw CrashReporter report.
+    private suspend fun failBootstrapResolutionBounded(
+        identity: AccountAttemptIdentity,
+        error: Exception,
+    ) {
+        reportAccountBootstrap(AccountBootstrapStage.ResolutionRecovery, identity, error)
+        failBootstrapResolution(
+            identity,
+            error.message ?: appContext.getString(
+                R.string.history_resolution_failed_without_changing_local_data,
+            ),
+        )
     }
 
     private suspend fun applyBootstrapResponse(
@@ -2271,7 +2323,10 @@ class TimerRepository(
             // expected-silent: malformed profile surfaces as a bootstrap notice, not a crash.
             failProfileRestore(identity, error.message, clearCredentials = true)
         } catch (error: Exception) {
+            // R50-L02: transport stays quiet with notice; credential/Core/commit
+            // gets one bounded stage+cause report.
             // expected-silent: bootstrap failure surfaces as a notice with retry, not a crash.
+            reportAccountBootstrap(AccountBootstrapStage.Restore, identity, error)
             failProfileRestore(
                 identity,
                 error.message ?: appContext.getString(R.string.could_not_validate_account_bootstrap),
@@ -2287,6 +2342,16 @@ class TimerRepository(
         if (!isCurrent(identity)) return@withLock
         if (clearCredentials) auth.clear()
         resetSignedOutAuthentication(message)
+    }
+
+    // R50-L02: stale attempts stay quiet; infra gets one bounded report.
+    private fun reportAccountBootstrap(
+        stage: AccountBootstrapStage,
+        identity: AccountAttemptIdentity?,
+        error: Exception,
+    ) {
+        if (identity != null && !isCurrent(identity)) return
+        handleAccountBootstrapFailure(stage, error)
     }
 
     private suspend fun completeAuthentication(
@@ -2531,6 +2596,8 @@ class TimerRepository(
         installCoreProjection(application.projected.projection)
     }
 
+    // size-exception: atomic reserve-plan-commit-install transaction;
+    // splitting would hide a partial durable write across Room boundaries.
     private suspend fun finishLocalTimer(
         onlyIfExpired: Boolean,
         allowWhileLoading: Boolean,
@@ -2570,8 +2637,16 @@ class TimerRepository(
                     ),
                 )
             } ?: return@withLock
-            val event = transitionCommitter.commit(RepositoryTimerCommandBatchTransition(mutation))
-            installTimerMutation(event.plan)
+            try {
+                val event = transitionCommitter.commit(RepositoryTimerCommandBatchTransition(mutation))
+                clearMutationStorageNotice()
+                installTimerMutation(event.plan)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                publishMutationCommitFailure(error) // CrashReporter via MutationPersistenceReporter
+                return@withLock
+            }
             saved = true
         }
         if (saved) afterLocalMutation()
@@ -2608,8 +2683,16 @@ class TimerRepository(
                 ),
             )
         } ?: return false
-        val event = transitionCommitter.commit(RepositoryTimerCommandTransition(mutation))
-        installTimerMutation(event.plan)
+        try {
+            val event = transitionCommitter.commit(RepositoryTimerCommandTransition(mutation))
+            clearMutationStorageNotice()
+            installTimerMutation(event.plan)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            publishMutationCommitFailure(error) // CrashReporter via MutationPersistenceReporter
+            return false
+        }
         return true
     }
 
@@ -2647,8 +2730,16 @@ class TimerRepository(
                     TaskMutationInput(state, type, authoritativeTask, select, reservation),
                 )
             } ?: return@withLock
-            val event = transitionCommitter.commit(RepositoryTaskTransition(mutation))
-            installTaskMutation(event.plan)
+            try {
+                val event = transitionCommitter.commit(RepositoryTaskTransition(mutation))
+                clearMutationStorageNotice()
+                installTaskMutation(event.plan)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                publishMutationCommitFailure(error) // CrashReporter via MutationPersistenceReporter
+                return@withLock
+            }
             saved = true
         }
         if (saved) afterLocalMutation()
@@ -3119,6 +3210,7 @@ class TimerRepository(
         projection = projection,
         projectionBase = currentProjectionBase(),
         queues = pendingSyncQueues(),
+        neverSentProof = neverSentProof,
         dependencies = commandDependencies,
         knownTasks = knownTasks,
         visibleTasks = tasks,
@@ -3188,18 +3280,24 @@ class TimerRepository(
     }
 
     private fun sanitizedBaseSelectedTaskId(): String? {
-        val candidate = safeBaseSelectedTaskIdOrNull() ?: local.selectedTaskId
-        return candidate?.takeIf { id -> canonicalTasks.any { it.id == id } }
+        // R50-A02: covering head makes null authoritative (canonical No
+        // task). Only legacy rows without a head fall back to optimistic
+        // local, preserving full-Core equality for legacy provenance.
+        if (safeHeadOrNull() == null) {
+            return local.selectedTaskId?.takeIf { id -> canonicalTasks.any { it.id == id } }
+        }
+        return local.safeBaseSelectedTaskId?.takeIf { id -> canonicalTasks.any { it.id == id } }
     }
 
     private fun safeHeadOrNull(): Pair<Long, Long>? = SafeProjectionPolicy.headOrNull(local)
 
+    // R50-A06: corrupt safe-base JSON keeps the effective-durations
+    // fallback but gets one bounded decoding report, no payload.
     private fun safeBaseDurationsOrNull(): DurationsMs? = local.safeBaseDurationsJson?.let {
-        runCatching { strictJson.decodeFromString<DurationsMs>(it) }.getOrNull()
+        runCatching { strictJson.decodeFromString<DurationsMs>(it) }
+            .onFailure { CorruptStateReporter.report(CorruptStateCategory.Decoding) }
+            .getOrNull()
     }
-
-    private fun safeBaseSelectedTaskIdOrNull(): String? =
-        if (safeHeadOrNull() == null) null else local.safeBaseSelectedTaskId
 
     private fun localizedProjectedTimer(
         timer: CanonicalTimer?,
@@ -3253,6 +3351,9 @@ class TimerRepository(
             is TimerMutationTransition.Planned -> transition.plan
         }
 
+    // R50-A06: planning shares the A04 commit split. SharedCore keeps
+    // its invalid-output path; storage goes through the bounded
+    // persistence reporter instead of misclassifying as Core output.
     private fun <T> mutationProjection(block: () -> T): T? = try {
         block().also {
             if (notice == mutationFailure) notice = null
@@ -3261,11 +3362,7 @@ class TimerRepository(
     } catch (error: CancellationException) {
         throw error
     } catch (error: Exception) {
-        CrashReporter.report(error)
-        val message = projectionFailureMessage(error)
-        mutationFailure = message
-        notice = message
-        publish()
+        publishMutationCommitFailure(error) // CrashReporter via MutationPersistenceReporter
         null
     }
 
@@ -3273,6 +3370,29 @@ class TimerRepository(
         is SharedCoreException.Load, is SharedCoreException.Abi ->
             appContext.getString(R.string.shared_core_unavailable)
         else -> appContext.getString(R.string.shared_core_invalid_output)
+    }
+
+    // R50-A04: coherent recoverable persistence boundary. Commit stays
+    // before install; storage retains committed state, publishes a
+    // recoverable notice, and reports one bounded infrastructure event.
+    // Cancellation propagates. SharedCore keeps its invalid-output path.
+    private fun publishMutationCommitFailure(error: Exception) {
+        if (error is SharedCoreException) {
+            CrashReporter.report(error)
+            val message = projectionFailureMessage(error)
+            mutationFailure = message
+            notice = message
+        } else {
+            handleMutationPersistenceFailure(error)
+            notice = appContext.getString(R.string.sync_stopped_after_a_local_failure)
+        }
+        publish()
+    }
+
+    private fun clearMutationStorageNotice() {
+        if (notice == appContext.getString(R.string.sync_stopped_after_a_local_failure)) {
+            notice = null
+        }
     }
 
     private suspend fun fetchValidatedProfile(): User {

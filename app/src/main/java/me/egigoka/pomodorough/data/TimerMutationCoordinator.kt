@@ -21,6 +21,7 @@ internal data class TimerMutationState(
     val projection: TimerProjection,
     val projectionBase: CoreProjectionBase,
     val queues: PendingSyncQueues,
+    val neverSentProof: CoreNeverSentProof = CoreNeverSentProof(),
     val dependencies: Map<String, String>,
     val knownTasks: Map<String, FocusTask>,
     val visibleTasks: List<FocusTask>,
@@ -501,6 +502,10 @@ internal class TimerMutationCoordinator(
         val intermediate = state.copy(
             local = selectionPlan.local,
             queues = state.queues.copy(selectedTaskOperations = selectionPlan.operations),
+            neverSentProof = state.neverSentProof.copy(
+                selectedTaskOperations = state.neverSentProof.selectedTaskOperations +
+                    selectionPlan.operation.id,
+            ),
         )
         val retargetReservation = reservation.copy(
             stamps = listOf(reservation.stamps[1]),
@@ -764,12 +769,22 @@ internal class TimerMutationCoordinator(
         starting: Boolean,
         phase: String,
     ): String? = if (starting && phase == TimerPhase.Focus) {
-        state.local.selectedTaskId?.takeIf { selected ->
+        safeSelectedTaskForStart(state)?.takeIf { selected ->
             state.visibleTasks.any { it.id == selected }
         }
     } else {
         null
     }
+
+    // R50-A02: covering head makes canonical null authoritative; Start
+    // reads the safe projected selection. Legacy rows without a head keep
+    // the optimistic local for full-Core equality.
+    private fun safeSelectedTaskForStart(state: TimerMutationState): String? =
+        if (SafeProjectionPolicy.headOrNull(state.local) == null) {
+            state.local.selectedTaskId
+        } else {
+            state.selectedTaskId
+        }
 
     private fun dependencyForTimer(state: TimerMutationState, timerId: String): String? =
         state.queues.commands.firstNotNullOfOrNull { command ->
@@ -791,17 +806,58 @@ internal class TimerMutationCoordinator(
         now: Instant,
     ): CoreProjectionResult = projectionDispatcher.apply(
         base = state.projectionBase,
-        pending = CoreProjectionPending(
-            commands = queues.commands.map { DeviceOperation(state.local.deviceId, it) },
-            taskOperations = queues.taskOperations.map { DeviceOperation(state.local.deviceId, it) },
-            durationOperations = queues.durationOperations.map { DeviceOperation(state.local.deviceId, it) },
-            autoStartOperations = queues.autoStartOperations.map { DeviceOperation(it.deviceId, it) },
-            selectedTaskOperations = queues.selectedTaskOperations.map {
-                DeviceOperation(state.local.deviceId, it)
-            },
-        ),
+        pending = projectionPending(state, queues),
         now = now,
     )
+
+    private fun projectionPending(
+        state: TimerMutationState,
+        queues: PendingSyncQueues,
+    ): CoreProjectionPending {
+        val safe = projectionQueuesFor(state, queues)
+        return CoreProjectionPending(
+            commands = safe.commands.map { DeviceOperation(state.local.deviceId, it) },
+            taskOperations = safe.taskOperations.map { DeviceOperation(state.local.deviceId, it) },
+            durationOperations = safe.durationOperations.map { DeviceOperation(state.local.deviceId, it) },
+            autoStartOperations = safe.autoStartOperations.map { DeviceOperation(it.deviceId, it) },
+            selectedTaskOperations = safe.selectedTaskOperations.map {
+                DeviceOperation(state.local.deviceId, it)
+            },
+        )
+    }
+
+    // R50-A01: mutation planning projects safe retained queues plus the
+    // new operations only. Issued operations stay persisted for exact retry
+    // but cannot re-enter the display projection through another mutation.
+    private fun projectionQueuesFor(
+        state: TimerMutationState,
+        full: PendingSyncQueues,
+    ): PendingSyncQueues {
+        val safe = SafeProjectionPolicy.safeQueues(
+            state.queues,
+            state.neverSentProof,
+            SafeProjectionPolicy.headOrNull(state.local),
+        )
+        return PendingSyncQueues(
+            commands = safe.commands + added(full.commands, state.queues.commands, TimerCommand::id),
+            taskOperations = safe.taskOperations +
+                added(full.taskOperations, state.queues.taskOperations, TaskOperation::id),
+            durationOperations = safe.durationOperations +
+                added(full.durationOperations, state.queues.durationOperations, DurationOperation::id),
+            autoStartOperations = safe.autoStartOperations +
+                added(full.autoStartOperations, state.queues.autoStartOperations, AutoStartOperation::id),
+            selectedTaskOperations = safe.selectedTaskOperations + added(
+                full.selectedTaskOperations,
+                state.queues.selectedTaskOperations,
+                SelectedTaskOperation::id,
+            ),
+        )
+    }
+
+    private fun <T> added(full: List<T>, retained: List<T>, id: (T) -> String): List<T> {
+        val retainedIds = retained.map(id).toSet()
+        return full.filter { id(it) !in retainedIds }
+    }
 
     private companion object {
         val ActiveStatuses = setOf(TimerStatus.Running, TimerStatus.Paused)

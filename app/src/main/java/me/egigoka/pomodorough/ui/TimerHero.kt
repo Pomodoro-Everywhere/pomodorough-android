@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -361,41 +362,67 @@ internal fun landscapeReadoutLetterSpacing(fontScale: Float): androidx.compose.u
 @Composable
 internal fun LandscapeTimerActions(state: TimerHeroState, actions: TimerHeroActions) {
     val controls = timerControlState(state)
-    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        Button(
-            onClick = actions.onToggleTimer,
-            enabled = state.ready,
-            modifier = Modifier.weight(1f).height(54.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.tertiaryContainer,
-                contentColor = darkModeTextColor(Ink),
-            ),
-        ) { Text(timerToggleLabel(controls.status, state.settings.selectedPhase), maxLines = 1) }
+    // R50-A05: intrinsic wrap keeps full translated glyphs at large
+    // font scale. FlowRow places actions side by side when the pane
+    // measures wide and wraps to the next line when narrow. Minimum
+    // touch targets let buttons grow with wrapped text. The outer
+    // landscape column already scrolls, so growth never clips.
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        LandscapePrimaryTimerAction(state, actions.onToggleTimer, controls.status)
         if (controls.active) {
-            FilledTonalButton(
-                onClick = actions.onFinishTimer,
-                enabled = state.ready,
-                modifier = Modifier.weight(1f).height(54.dp),
-            ) { Text(stringResource(R.string.finish)) }
-            OutlinedButton(
-                onClick = actions.onCancelTimer,
-                enabled = state.ready,
-                modifier = Modifier.weight(1f).height(54.dp),
-                border = BorderStroke(1.5.dp, Cloud.copy(alpha = 0.65f)),
-            ) { Text(stringResource(R.string.cancel), color = darkModeTextColor(Cloud)) }
+            LandscapeFinishAction(actions.onFinishTimer, state.ready)
+            LandscapeCancelAction(actions.onCancelTimer, state.ready)
         } else if (controls.hasActiveCompletionAlert) {
-            OutlinedButton(
-                onClick = actions.onStopSound,
-                enabled = state.ready,
-                modifier = Modifier.weight(1f).height(54.dp),
-                border = BorderStroke(1.5.dp, Cloud.copy(alpha = 0.65f)),
-            ) {
-                Text(
-                    stringResource(R.string.stop_sound),
-                    color = darkModeTextColor(Cloud),
-                )
-            }
+            LandscapeStopSoundAction(actions.onStopSound, state.ready)
         }
+    }
+}
+
+@Composable
+private fun LandscapePrimaryTimerAction(state: TimerHeroState, onClick: () -> Unit, status: String) {
+    Button(
+        onClick = onClick,
+        enabled = state.ready,
+        modifier = Modifier.heightIn(min = 48.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+            contentColor = darkModeTextColor(Ink),
+        ),
+    ) { Text(timerToggleLabel(status, state.settings.selectedPhase)) }
+}
+
+@Composable
+private fun LandscapeFinishAction(onClick: () -> Unit, enabled: Boolean) {
+    FilledTonalButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.heightIn(min = 48.dp),
+    ) { Text(stringResource(R.string.finish)) }
+}
+
+@Composable
+private fun LandscapeCancelAction(onClick: () -> Unit, enabled: Boolean) {
+    OutlinedButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.heightIn(min = 48.dp),
+        border = BorderStroke(1.5.dp, Cloud.copy(alpha = 0.65f)),
+    ) { Text(stringResource(R.string.cancel), color = darkModeTextColor(Cloud)) }
+}
+
+@Composable
+private fun LandscapeStopSoundAction(onClick: () -> Unit, enabled: Boolean) {
+    OutlinedButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.heightIn(min = 48.dp),
+        border = BorderStroke(1.5.dp, Cloud.copy(alpha = 0.65f)),
+    ) {
+        Text(stringResource(R.string.stop_sound), color = darkModeTextColor(Cloud))
     }
 }
 
