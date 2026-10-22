@@ -58,17 +58,21 @@ object CrashReportingConsent {
             signature.contains("genymotion")
     }
 
-    private fun isRunningInstrumentedTest(): Boolean =
-        // androidTest uses AndroidJUnitRunner + InstrumentationRegistry
-        // (compose/espresso tests); none ship in the app APK.
-        hasTestClass("androidx.test.platform.app.InstrumentationRegistry") ||
-            hasTestClass("androidx.test.espresso.Espresso")
-
-    private fun hasTestClass(name: String): Boolean = try {
-        Class.forName(name)
-        true
-        // expected-silent: test-class probe defaults to non-test when absent
+    private fun isRunningInstrumentedTest(): Boolean = try {
+        // R51-A04: JVM unit tests (Robolectric + compose ui-test) carry
+        // androidx.test classes without live instrumentation, so presence
+        // alone must not disable reporting. Only a registered
+        // instrumentation counts as an instrumented run.
+        val registry = Class.forName("androidx.test.platform.app.InstrumentationRegistry")
+        try {
+            registry.getMethod("getInstrumentation").invoke(null)
+            true
+            // expected-silent: no live instrumentation means JVM unit test, treated as non-instrumented
+        } catch (_: Throwable) {
+            false
+        }
     } catch (_: Throwable) {
+        // expected-silent: missing test registry means production device, treated as non-instrumented
         false
     }
 

@@ -254,10 +254,13 @@ private fun PortraitTimerHero(
 
 @Composable
 private fun PrimaryTimerButton(state: TimerHeroState, onClick: () -> Unit) {
+    // R51-A04: minimum touch target only. The outer portrait column
+    // scrolls, so the button grows with wrapped labels instead of
+    // clipping them inside a fixed height.
     Button(
         onClick = onClick,
         enabled = state.ready,
-        modifier = Modifier.fillMaxWidth().height(54.dp),
+        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
         colors = ButtonDefaults.buttonColors(containerColor = Ink, contentColor = darkModeTextColor(Cloud)),
     ) {
         Text(timerToggleLabel(state.timer?.status ?: "idle", state.settings.selectedPhase))
@@ -274,30 +277,55 @@ private fun timerToggleLabel(status: String, selectedPhase: String): String = wh
 @Composable
 private fun PortraitTimerActions(state: TimerHeroState, actions: TimerHeroActions, palette: PhasePalette) {
     val controls = timerControlState(state)
+    // R51-A04: portrait actions derive from content like the R50
+    // landscape repair. FlowRow keeps actions side by side when the
+    // pane measures wide and wraps them when narrow. Minimum touch
+    // targets let buttons grow with wrapped text. The outer portrait
+    // column in PortraitTimerScreen already scrolls, so growth
+    // scrolls instead of clipping.
     // Finished terminal timers show the primary action only: the next
     // Start replaces them, so no Dismiss control is needed.
     if (controls.active) {
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            FilledTonalButton(
-                onClick = actions.onFinishTimer,
-                enabled = state.ready && controls.active,
-                modifier = Modifier.weight(1f).height(48.dp),
-            ) { Text(stringResource(R.string.finish)) }
-            OutlinedButton(
-                onClick = actions.onCancelTimer,
-                enabled = state.ready,
-                modifier = Modifier.weight(1f).height(48.dp),
-                border = BorderStroke(1.5.dp, palette.onContainer.copy(alpha = 0.55f)),
-            ) { Text(stringResource(R.string.cancel)) }
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            PortraitFinishAction(actions.onFinishTimer, state.ready)
+            PortraitCancelAction(actions.onCancelTimer, state.ready, palette)
         }
     } else if (controls.hasActiveCompletionAlert) {
-        OutlinedButton(
-            onClick = actions.onStopSound,
-            enabled = state.ready,
-            modifier = Modifier.fillMaxWidth().height(48.dp),
-            border = BorderStroke(1.5.dp, palette.onContainer.copy(alpha = 0.55f)),
-        ) { Text(stringResource(R.string.stop_sound)) }
+        PortraitStopSoundAction(actions.onStopSound, state.ready, palette)
     }
+}
+
+@Composable
+private fun PortraitFinishAction(onClick: () -> Unit, enabled: Boolean) {
+    FilledTonalButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.heightIn(min = 48.dp),
+    ) { Text(stringResource(R.string.finish)) }
+}
+
+@Composable
+private fun PortraitCancelAction(onClick: () -> Unit, enabled: Boolean, palette: PhasePalette) {
+    OutlinedButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.heightIn(min = 48.dp),
+        border = BorderStroke(1.5.dp, palette.onContainer.copy(alpha = 0.55f)),
+    ) { Text(stringResource(R.string.cancel)) }
+}
+
+@Composable
+private fun PortraitStopSoundAction(onClick: () -> Unit, enabled: Boolean, palette: PhasePalette) {
+    OutlinedButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+        border = BorderStroke(1.5.dp, palette.onContainer.copy(alpha = 0.55f)),
+    ) { Text(stringResource(R.string.stop_sound)) }
 }
 
 @Composable

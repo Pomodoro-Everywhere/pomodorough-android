@@ -769,6 +769,9 @@ class TimerRepository(
         val attemptIdentity = identity ?: return@withLock
         if (!isCurrent(attemptIdentity)) return@withLock
         if (clearCredentials) auth.clear()
+        // R51-A06: bootstrap failure re-arms restore so an explicit
+        // initialize() retries instead of stranding the account.
+        networkInitializationStarted.set(false)
         resetSignedOutAuthentication(message)
     }
 
@@ -1114,41 +1117,64 @@ class TimerRepository(
     override suspend fun deleteAccount(confirmation: String) =
         accountWorkspaceController.serialize { deleteAccountInternal(confirmation) }
 
+    private suspend fun prepareAccountDeletion(): Long? {
+        try {
+            return actionMutex.withLock {
+                val transition = accountWorkspaceController.beginDeletionAdmission()
+                syncing = false
+                retrying = false
+                persistAccountDeletionMarker(AccountDeletionPrepared)
+                alarmCoordinator.cancelForAccountClear()
+                authStatus = AuthStatus.SignedOut
+                user = null
+                accountAdmissionResolved = false
+                publish()
+                transition.generation
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            handleAccountDeletionFailure(error)
+            actionMutex.withLock {
+                notice = appContext.getString(R.string.account_deletion_failed_no_local_data_was_removed)
+                publish()
+            }
+            return null
+        }
+    }
+
     private suspend fun deleteAccountInternal(confirmation: String) {
         initialize()
         require(confirmation == "DELETE") { "Type DELETE exactly" }
-        val deletionGeneration = actionMutex.withLock {
-            val transition = accountWorkspaceController.beginDeletionAdmission()
-            syncing = false
-            retrying = false
-            persistAccountDeletionMarker(AccountDeletionPrepared)
-            alarmCoordinator.cancelForAccountClear()
-            authStatus = AuthStatus.SignedOut
-            user = null
-            accountAdmissionResolved = false
-            publish()
-            transition.generation
-        }
+        val deletionGeneration = prepareAccountDeletion() ?: return
         closeRevisionStream()
+        var executionStage = AccountDeletionExecutionStage.RemoteDelete
         try {
             replication?.quarantineAccount()
             auth.deleteAccount(confirmation)
+            executionStage = AccountDeletionExecutionStage.Marker
             actionMutex.withLock {
                 if (accountWorkspaceController.generation != deletionGeneration) return@withLock
                 persistAccountDeletionMarker(AccountDeletionRemoteCommitted)
             }
+            executionStage = AccountDeletionExecutionStage.CredentialClear
             auth.clear()
+            executionStage = AccountDeletionExecutionStage.RoomScrub
             scrubDeletedAccount(deletionGeneration)
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
-            CrashReporter.report(error)
+            val category = handleAccountDeletionExecutionFailure(executionStage, error)
             if (local.accountDeletionState == AccountDeletionRemoteCommitted) {
                 retryCommittedAccountScrub({ scrubDeletedAccount(deletionGeneration) })
                 return
             }
             actionMutex.withLock {
-                notice = error.message ?: appContext.getString(R.string.account_deletion_failed_no_local_data_was_removed)
+                notice = if (category == null) {
+                    appContext.getString(R.string.account_deletion_outcome_unknown)
+                } else {
+                    appContext.getString(R.string.account_deletion_failed_no_local_data_was_removed)
+                }
                 publish()
             }
         }
@@ -1157,13 +1183,15 @@ class TimerRepository(
     private suspend fun recoverCommittedAccountDeletion() {
         runCatching(auth::clear).onFailure { error ->
             if (error is CancellationException) throw error
+            handleAccountDeletionExecutionFailure(AccountDeletionExecutionStage.CredentialClear, error)
         }
         val deletionGeneration = accountWorkspaceController.beginDeletionAdmission().generation
         runCatching { scrubDeletedAccount(deletionGeneration) }
             .onFailure { error ->
                 if (error is CancellationException) throw error
+                handleAccountDeletionExecutionFailure(AccountDeletionExecutionStage.RoomScrub, error)
                 actionMutex.withLock {
-                    notice = error.message ?: appContext.getString(R.string.account_deletion_recovery_failed)
+                    notice = appContext.getString(R.string.account_deletion_recovery_failed)
                     publish()
                 }
             }
@@ -2309,6 +2337,7 @@ class TimerRepository(
             val bootstrap = fetchTimedBootstrap()
             completeAuthentication(profile, bootstrap.response, identity, bootstrap.clockSample)
         } catch (error: CancellationException) {
+            networkInitializationStarted.set(false) // R51-A06: re-arm restore retry.
             throw error
         } catch (error: IOException) {
             // expected-silent: offline failure surfaces as a bootstrap notice, not a crash.
@@ -2341,6 +2370,9 @@ class TimerRepository(
     ) = actionMutex.withLock {
         if (!isCurrent(identity)) return@withLock
         if (clearCredentials) auth.clear()
+        // R51-A06: bootstrap failure re-arms restore so an explicit
+        // initialize() retries instead of stranding the account.
+        networkInitializationStarted.set(false)
         resetSignedOutAuthentication(message)
     }
 
@@ -2409,7 +2441,9 @@ class TimerRepository(
             boundOwnerId,
             repreviewResolution,
         )
-        installAuthenticatedProfile(profile, bootstrap, clockSample)
+        // R51-A06: durable bootstrap commit precedes generation fencing,
+        // so a commit failure keeps the attempt identity current and its
+        // handlers can publish, report, and re-arm retry.
         val attempt = applyAuthenticationPlan(
             profile,
             bootstrap,
@@ -2417,10 +2451,22 @@ class TimerRepository(
             storedResolution,
             plan,
         )
+        installAuthenticatedProfile(profile, bootstrap, clockSample)
         authStatus = AuthStatus.SignedIn
         publish()
         scheduleAlarm()
-        return attempt?.let(AuthenticationCompletion::Resolve)
+        return resolveAuthenticationAttempt(attempt)
+    }
+
+    // R51-A06: preparation captured the attempt before fencing, so
+    // re-stamp it with the fenced generation for resolution ownership.
+    private fun resolveAuthenticationAttempt(
+        attempt: BootstrapResolutionAttempt?,
+    ): AuthenticationCompletion {
+        val resolved = attempt?.copy(
+            accountGeneration = accountWorkspaceController.generation,
+        )
+        return resolved?.let(AuthenticationCompletion::Resolve)
             ?: AuthenticationCompletion.Complete
     }
 

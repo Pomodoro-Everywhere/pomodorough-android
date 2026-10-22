@@ -100,6 +100,26 @@ android {
         buildConfig = true
     }
 
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+        }
+    }
+
+    // Robolectric sandbox jars resolve from the network by default. Local
+    // runs without Maven access forward gradle.properties overrides
+    // (robolectric.offline + robolectric.dependency.dir) to the test JVM.
+    tasks.withType<Test> {
+        systemProperty(
+            "robolectric.offline",
+            providers.gradleProperty("robolectric.offline").getOrElse("false"),
+        )
+        val robolectricDepDir = providers.gradleProperty("robolectric.dependency.dir")
+        if (robolectricDepDir.isPresent) {
+            systemProperty("robolectric.dependency.dir", robolectricDepDir.get())
+        }
+    }
+
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
@@ -153,6 +173,11 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.1")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    // R51-A04: permanent portrait glyph-measurement regression tests run on
+    // the JVM through Robolectric native graphics, no emulator needed.
+    testImplementation("org.robolectric:robolectric:4.14.1")
+    testImplementation("androidx.test:core:1.6.1")
+    testImplementation("androidx.compose.ui:ui-test-junit4")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
     androidTestImplementation("androidx.room:room-testing:2.7.2")

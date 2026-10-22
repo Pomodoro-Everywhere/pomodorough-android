@@ -239,9 +239,19 @@ class CrashReportingSilenceTest {
     private fun isAuditedCatch(lines: List<String>, catchIndex: Int): Boolean {
         val body = catchBody(lines, catchIndex)
         if (body.any { it.contains("CrashReporter") }) return true
+        // R51-A03/A05: deletion preparation/execution delegate to bounded
+        // reporters (one fixed-message report per category per process via
+        // CrashReporter, no payload; quiet offline transport stays silent
+        // with an outcome-unknown notice by design).
+        if (body.any { isBoundedDelegatedReport(it) }) return true
         if (body.drop(1).any { it.contains("throw ") }) return true
         return hasSilenceJustification(lines, catchIndex)
     }
+
+    private fun isBoundedDelegatedReport(line: String): Boolean =
+        line.contains("handleAccountDeletionFailure") ||
+            line.contains("handleAccountDeletionExecutionFailure") ||
+            line.contains("AccountDeletionReporter")
 
     private fun hasSilenceJustification(lines: List<String>, catchIndex: Int): Boolean {
         val from = maxOf(0, catchIndex - 5)

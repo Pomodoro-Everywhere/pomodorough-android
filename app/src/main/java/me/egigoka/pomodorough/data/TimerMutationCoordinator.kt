@@ -212,6 +212,7 @@ internal class TimerMutationCoordinator(
 
     fun retarget(
         input: TimerRetargetMutationInput,
+        pinnedSelectedTaskOperations: List<SelectedTaskOperation> = emptyList(),
     ): TimerMutationTransition<TimerCommandMutationPlan> {
         val state = input.state
         val current = state.projection.timer ?: return TimerMutationTransition.Ignored
@@ -223,7 +224,12 @@ internal class TimerMutationCoordinator(
         val dependency = dependencyForTimer(state, command.timerId)
         val dependencies = dependency?.let { mapOf(command.id to it) }.orEmpty()
         val queues = state.queues.copy(commands = state.queues.commands + command)
-        val projected = project(state, queues, Instant.parse(command.occurredAt)).requireApplied(command)
+        val projected = project(
+            state,
+            queues,
+            Instant.parse(command.occurredAt),
+            pinnedSelectedTaskOperations,
+        ).requireApplied(command)
         val stamp = input.reservation.stamps.single()
         val nextLocal = state.local.copy(
             deviceSequence = command.deviceSequence,
@@ -481,6 +487,9 @@ internal class TimerMutationCoordinator(
 
     // R49-A02: reserve, plan, and persist selection plus retarget as one
     // unit. Both Core decisions run; the combined queues project once.
+    // R51-A02: the second stage pins the newly planned selection. Issued
+    // selections poison whole-domain safe filtering, so without pinning the
+    // retarget projection drops the new winner and publishes null.
     fun selectedTaskWithRetarget(
         state: TimerMutationState,
         taskId: String?,
@@ -512,7 +521,7 @@ internal class TimerMutationCoordinator(
             uuids = listOf(reservation.uuids[1]),
             lastUuidV7 = reservation.lastUuidV7,
         )
-        val retarget = retarget(TimerRetargetMutationInput(intermediate, timerId, taskId, retargetReservation, physicalNowMs))
+        val retarget = retarget(TimerRetargetMutationInput(intermediate, timerId, taskId, retargetReservation, physicalNowMs), listOf(selectionPlan.operation))
         val retargetPlan = (retarget as? TimerMutationTransition.Planned)?.plan
             ?: return TimerMutationTransition.Ignored
         return TimerMutationTransition.Planned(
@@ -804,17 +813,19 @@ internal class TimerMutationCoordinator(
         state: TimerMutationState,
         queues: PendingSyncQueues,
         now: Instant,
+        pinnedSelectedTaskOperations: List<SelectedTaskOperation> = emptyList(),
     ): CoreProjectionResult = projectionDispatcher.apply(
         base = state.projectionBase,
-        pending = projectionPending(state, queues),
+        pending = projectionPending(state, queues, pinnedSelectedTaskOperations),
         now = now,
     )
 
     private fun projectionPending(
         state: TimerMutationState,
         queues: PendingSyncQueues,
+        pinnedSelectedTaskOperations: List<SelectedTaskOperation> = emptyList(),
     ): CoreProjectionPending {
-        val safe = projectionQueuesFor(state, queues)
+        val safe = projectionQueuesFor(state, queues, pinnedSelectedTaskOperations)
         return CoreProjectionPending(
             commands = safe.commands.map { DeviceOperation(state.local.deviceId, it) },
             taskOperations = safe.taskOperations.map { DeviceOperation(state.local.deviceId, it) },
@@ -826,16 +837,19 @@ internal class TimerMutationCoordinator(
         )
     }
 
-    // R50-A01: mutation planning projects safe retained queues plus the
+    // R51-A01: mutation planning projects safe retained queues plus the
     // new operations only. Issued operations stay persisted for exact retry
     // but cannot re-enter the display projection through another mutation.
-    // Commands keep full retained history when new commands exist: Pause,
-    // Finish, and retarget depend on the issued Start that safe filtering
-    // would otherwise drop, which stranded in-flight toggles and generated
-    // breaks in connected R50 jobs.
+    // Commands keep only the retained lineage required by the new commands:
+    // same-timer retained commands plus transitive dependency parents.
+    // Pause, Finish, and retarget depend on the issued Start with the same
+    // timerId, so lineage preserves those in-flight toggles and generated
+    // breaks. An unrelated new Start has a fresh timerId, so lineage is
+    // empty and retired Start+Finish cannot restore completed history.
     private fun projectionQueuesFor(
         state: TimerMutationState,
         full: PendingSyncQueues,
+        pinnedSelectedTaskOperations: List<SelectedTaskOperation> = emptyList(),
     ): PendingSyncQueues {
         val safe = SafeProjectionPolicy.safeQueues(
             state.queues,
@@ -844,19 +858,63 @@ internal class TimerMutationCoordinator(
         )
         val newCommands = added(full.commands, state.queues.commands, TimerCommand::id)
         return PendingSyncQueues(
-            commands = if (newCommands.isEmpty()) safe.commands else full.commands,
+            commands = commandsFor(state, safe, full, newCommands),
             taskOperations = safe.taskOperations +
                 added(full.taskOperations, state.queues.taskOperations, TaskOperation::id),
             durationOperations = safe.durationOperations +
                 added(full.durationOperations, state.queues.durationOperations, DurationOperation::id),
             autoStartOperations = safe.autoStartOperations +
                 added(full.autoStartOperations, state.queues.autoStartOperations, AutoStartOperation::id),
-            selectedTaskOperations = safe.selectedTaskOperations + added(
-                full.selectedTaskOperations,
-                state.queues.selectedTaskOperations,
-                SelectedTaskOperation::id,
-            ),
+            selectedTaskOperations = selectedFor(state, safe, full, pinnedSelectedTaskOperations),
         )
+    }
+
+    private fun selectedFor(
+        state: TimerMutationState,
+        safe: PendingSyncQueues,
+        full: PendingSyncQueues,
+        pinned: List<SelectedTaskOperation>,
+    ): List<SelectedTaskOperation> {
+        val fresh = safe.selectedTaskOperations + added(
+            full.selectedTaskOperations,
+            state.queues.selectedTaskOperations,
+            SelectedTaskOperation::id,
+        )
+        return (fresh + pinned).distinctBy(SelectedTaskOperation::id)
+    }
+
+    private fun commandsFor(
+        state: TimerMutationState,
+        safe: PendingSyncQueues,
+        full: PendingSyncQueues,
+        newCommands: List<TimerCommand>,
+    ): List<TimerCommand> {
+        if (newCommands.isEmpty()) return safe.commands
+        val safeIds = safe.commands.map(TimerCommand::id).toSet()
+        val lineageIds = lineageIdsFor(state, newCommands)
+        val newIds = newCommands.map(TimerCommand::id).toSet()
+        return full.commands.filter { it.id in safeIds || it.id in lineageIds || it.id in newIds }
+    }
+
+    private fun lineageIdsFor(
+        state: TimerMutationState,
+        newCommands: List<TimerCommand>,
+    ): Set<String> {
+        if (newCommands.isEmpty()) return emptySet()
+        val newTimerIds = newCommands.map(TimerCommand::timerId).toSet()
+        val retainedById = state.queues.commands.associateBy(TimerCommand::id)
+        val lineage = mutableSetOf<String>()
+        state.queues.commands
+            .filter { it.timerId in newTimerIds }
+            .forEach { lineage.add(it.id) }
+        val pendingParents = ArrayDeque(lineage.toList())
+        while (pendingParents.isNotEmpty()) {
+            val parent = state.dependencies[pendingParents.removeFirst()]
+            if (parent != null && parent in retainedById && lineage.add(parent)) {
+                pendingParents.add(parent)
+            }
+        }
+        return lineage
     }
 
     private fun <T> added(full: List<T>, retained: List<T>, id: (T) -> String): List<T> {
