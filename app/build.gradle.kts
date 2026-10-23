@@ -186,6 +186,12 @@ dependencies {
     androidTestImplementation("androidx.compose.ui:ui-test-junit4-accessibility")
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+    // R51-A04: releaseUnitTest runs Robolectric createComposeRule, which
+    // launches ComponentActivity resolved from the release merged manifest.
+    // debugImplementation covers debugUnitTest only; without this,
+    // releaseUnitTest fails 12/12 with "Unable to resolve activity
+    // ComponentActivity". Mirrors debug; same empty test activity.
+    releaseImplementation("androidx.compose.ui:ui-test-manifest")
 }
 
 ksp {
