@@ -200,14 +200,20 @@ internal fun AutoDismissNotice(notice: String?, onDismiss: () -> Unit) {
 }
 
 @Composable
-internal fun BrandMark(compact: Boolean = false) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
+internal fun BrandMark(
+    compact: Boolean = false,
+    modifier: Modifier = Modifier,
+    labelMaxLines: Int = Int.MAX_VALUE,
+) {
+    Row(modifier, verticalAlignment = Alignment.CenterVertically) {
         BrandOrb(if (compact) 38.dp else 52.dp)
         Spacer(Modifier.width(if (compact) 10.dp else 14.dp))
         Text(
             stringResource(R.string.pomodorough),
             color = darkModeTextColor(Cloud),
             style = if (compact) MaterialTheme.typography.titleLarge else MaterialTheme.typography.headlineMedium,
+            maxLines = labelMaxLines,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }

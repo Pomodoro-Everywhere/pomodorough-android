@@ -200,6 +200,45 @@ class R51A03AccountDeletionPreparationTest {
     }
 
     @Test
+    fun logoutCommitsScrubMarkerBeforeCredentialRetirement() = runBlocking {
+        quietDeletion()
+        val probe = OrderingProbeDao(database.timerDao())
+        val auth = OrderingLogoutAuth(probe)
+        val repo = repository(probe, auth)
+        repo.initialize()
+        awaitSignedIn(repo)
+        repo.logout()
+        assertEquals(1, auth.retirements)
+        assertTrue("marker must commit before credential retirement", auth.markerCommittedAtRetirement)
+        assertNull(probe.delegate.localState()?.ownerUserId)
+        assertNull(probe.delegate.localState()?.accountDeletionState)
+    }
+
+    @Test
+    fun healthyLogoutReopenStaysScrubbed() = runBlocking {
+        quietDeletion()
+        val dao = failingDao()
+        val repo = repository(dao, FakeDeleteAuth())
+        repo.initialize()
+        awaitSignedIn(repo)
+        repo.addTask("Scrub me")
+        awaitTask(repo, "Scrub me")
+        repo.logout()
+        assertNull(dao.delegate.localState()?.ownerUserId)
+        assertNull(dao.delegate.localState()?.accountDeletionState)
+        repo.shutdownForTest()
+        repositories.remove(repo)
+        val reopened = repository(dao.delegate)
+        reopened.initialize()
+        assertNull(reopened.state.value.user)
+        assertEquals(AuthStatus.SignedOut, reopened.state.value.authStatus)
+        assertNull(dao.delegate.localState()?.ownerUserId)
+        assertNull(dao.delegate.localState()?.accountDeletionState)
+        assertTrue(reopened.state.value.tasks.isEmpty())
+        assertEquals(0, reopened.state.value.pendingCount)
+    }
+
+    @Test
     fun logoutFinalTxViaViewModelHasNoUncaught() = runBlocking {
         quietDeletion()
         val dao = failingDao()
@@ -471,6 +510,25 @@ class R51A03AccountDeletionPreparationTest {
         return File(checkNotNull(root) { "production source root" }, "me/egigoka/pomodorough/data/AccountDeletionFailures.kt").readText()
     }
 
+    private class OrderingProbeDao(val delegate: TimerDao) : TimerDao by delegate {
+        var markerCommitted = false
+
+        override suspend fun updateState(state: LocalStateEntity) {
+            delegate.updateState(state)
+            if (state.accountDeletionState == "local_scrub_required") markerCommitted = true
+        }
+    }
+
+    private class OrderingLogoutAuth(val probe: OrderingProbeDao) : FakeDeleteAuth() {
+        var retirements = 0
+        var markerCommittedAtRetirement = false
+
+        override fun prepareLogout() {
+            retirements += 1
+            markerCommittedAtRetirement = probe.markerCommitted
+        }
+    }
+
     private class FailingDeletionDao(val db: PomodoroughDatabase, val delegate: TimerDao) : TimerDao by delegate {
         var fail: String? = null
 
@@ -511,7 +569,7 @@ class R51A03AccountDeletionPreparationTest {
         }
     }
 
-    private class FakeDeleteAuth : AuthSession {
+    private open class FakeDeleteAuth : AuthSession {
         var deleteCalls = 0
         override suspend fun signIn(credentialProvider: GoogleCredentialProvider, deviceId: String) = error("unused")
         override fun hasTokens() = true

@@ -1,5 +1,9 @@
 package me.egigoka.pomodorough.data
 
+import androidx.credentials.exceptions.GetCredentialCancellationException
+import androidx.credentials.exceptions.GetCredentialException
+import androidx.credentials.exceptions.GetCredentialInterruptedException
+import androidx.credentials.exceptions.GetCredentialProviderConfigurationException
 import java.io.IOException
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.SerializationException
@@ -8,13 +12,17 @@ import me.egigoka.pomodorough.crash.CrashReporter
 import me.egigoka.pomodorough.data.api.ApiException
 import me.egigoka.pomodorough.data.api.BootstrapConflictException
 import me.egigoka.pomodorough.data.auth.AuthenticationRequired
+import me.egigoka.pomodorough.data.auth.CredentialPersistenceException
 
 /**
- * R50-L02 account bootstrap classification.
+ * R50-L02 account bootstrap classification, R52-L01 provider split.
  * Sign-in, restore, and corrupted-resolution recovery share one
  * bounded stage+cause taxonomy. Transport, auth expiry, conflict,
- * malformed, cancellation, and dismissal stay quiet. Credential,
- * Core, and commit infrastructure each get one fixed report.
+ * malformed, coroutine cancellation, and typed credential
+ * dismissal/interruption stay quiet. Credential persistence (typed at
+ * the owning AuthRepository boundary), provider infrastructure, Core,
+ * and commit each get one fixed report. No class-name or stack-frame
+ * sniffing: GetCredential subtypes classify by type.
  */
 internal enum class AccountBootstrapStage(val key: String) {
     SignIn("sign_in"),
@@ -24,6 +32,7 @@ internal enum class AccountBootstrapStage(val key: String) {
 
 internal enum class AccountBootstrapCause(val key: String) {
     CredentialWrite("credential_write"),
+    CredentialProvider("credential_provider"),
     CoreLoad("core_load"),
     CoreAbi("core_abi"),
     CoreInvalidOutput("core_invalid_output"),
@@ -76,8 +85,14 @@ internal fun classifyAccountBootstrapFailure(
     if (error is SharedCoreException) {
         return AccountBootstrapFailure(stage, AccountBootstrapCause.CoreInvalidOutput)
     }
-    if (isCredentialWrite(error)) {
+    if (error is CredentialPersistenceException) {
         return AccountBootstrapFailure(stage, AccountBootstrapCause.CredentialWrite)
+    }
+    if (error is GetCredentialProviderConfigurationException) {
+        return AccountBootstrapFailure(stage, AccountBootstrapCause.CredentialProvider)
+    }
+    if (error is GetCredentialException) {
+        return AccountBootstrapFailure(stage, AccountBootstrapCause.CredentialProvider)
     }
     return AccountBootstrapFailure(stage, AccountBootstrapCause.BootstrapCommit)
 }
@@ -100,32 +115,7 @@ private fun isQuietAccountBootstrap(error: Throwable): Boolean {
     if (error is ProfileProtocolException) return true
     if (error is SyncProtocolException) return true
     if (error is SerializationException) return true
-    if (isCredentialDismissal(error)) return true
+    if (error is GetCredentialCancellationException) return true
+    if (error is GetCredentialInterruptedException) return true
     return false
-}
-
-private fun isCredentialDismissal(error: Throwable): Boolean {
-    val name = error.javaClass.name
-    if (name.contains("Credential") || name.contains("GetCredential")) return true
-    return error.stackTrace.any {
-        it.className.contains("CredentialManager") ||
-            it.className.contains("GoogleCredentialProvider")
-    }
-}
-
-private fun isCredentialWrite(error: Throwable): Boolean {
-    if (error is IllegalStateException || error is SecurityException) {
-        if (hasCredentialFrame(error)) return true
-    }
-    if (error.javaClass.name.contains("KeyStore")) return true
-    return hasCredentialFrame(error)
-}
-
-private fun hasCredentialFrame(error: Throwable): Boolean {
-    val frames = error.stackTrace + (error.cause?.stackTrace ?: emptyArray())
-    return frames.any {
-        it.className.contains("TokenVault") ||
-            it.className.contains("TokenStore") ||
-            it.className.contains("AuthRepository")
-    }
 }

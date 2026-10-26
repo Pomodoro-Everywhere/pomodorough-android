@@ -594,7 +594,10 @@ private fun LandscapeTaskSelectorButton(state: TaskSelectorPresentation, onClick
     OutlinedButton(
         onClick = onClick,
         enabled = state.enabled,
-        modifier = Modifier.fillMaxWidth().height(48.dp),
+        // R52-A05: minimum touch target only, same as the portrait
+        // selector. The button grows with enlarged text instead of
+        // clipping it inside a fixed height.
+        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
         border = BorderStroke(1.dp, Cloud.copy(alpha = 0.5f)),
     ) {
         Text(

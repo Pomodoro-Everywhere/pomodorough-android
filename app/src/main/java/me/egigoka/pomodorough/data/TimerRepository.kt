@@ -18,6 +18,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -928,11 +930,12 @@ class TimerRepository(
     private suspend fun logoutInternal() {
         initialize()
         if (localMutationCorrupted) return
-        if (!prepareRemoteLogout()) return
-        val hasOwnedAccount = beginLocalLogout()
-        logoutRevocations.startPreparedLogout()
+        if (local.accountDeletionState != null && local.accountDeletionState != AccountLocalScrubRequired) return
         try {
-            persistLogoutScrubMarker(hasOwnedAccount)
+            beginLocalLogout()
+            currentCoroutineContext().ensureActive()
+            if (!prepareRemoteLogout()) return
+            logoutRevocations.startPreparedLogout()
             closeRevisionStream()
             replication?.quarantineAccount()
             replication?.clearAccountData()
@@ -963,7 +966,12 @@ class TimerRepository(
         }
     }
 
-    private suspend fun beginLocalLogout(): Boolean = actionMutex.withLock {
+    private suspend fun beginLocalLogout() = actionMutex.withLock {
+        if (local.ownerUserId != null) {
+            // Retiring credentials is irreversible here; Room must retain the cleanup obligation first.
+            if (local.accountDeletionState == null) persistAccountDeletionMarker(AccountLocalScrubRequired)
+            alarmCoordinator.cancelForAccountClear()
+        }
         accountWorkspaceController.advanceGeneration(AccountWorkspaceReason.LogoutStarted)
         syncing = false
         retrying = false
@@ -971,15 +979,6 @@ class TimerRepository(
         user = null
         accountAdmissionResolved = false
         publish()
-        local.ownerUserId != null
-    }
-
-    private suspend fun persistLogoutScrubMarker(hasOwnedAccount: Boolean) {
-        if (!hasOwnedAccount) return
-        actionMutex.withLock {
-            persistAccountDeletionMarker(AccountLocalScrubRequired)
-            alarmCoordinator.cancelForAccountClear()
-        }
     }
 
     private suspend fun prepareRemoteLogout(): Boolean {
@@ -2865,7 +2864,8 @@ class TimerRepository(
         return FocusTask(id, normalizedTitle)
     }
 
-    private fun centralizedSyncRuntimeHost() = object : CentralizedSyncRuntimeHost {
+    // R52-A03: internal so the repo-boundary claim-persistence leg drives the real host.
+    internal fun centralizedSyncRuntimeHost() = object : CentralizedSyncRuntimeHost {
         override fun snapshot(): CentralizedSyncRuntimeSnapshot = centralizedAccountSync.runtimeSnapshot(
             centralized = replicationMode() == ReplicationMode.CENTRALIZED,
             pendingQueuesEmpty = pendingQueuesEmpty(),
@@ -3083,10 +3083,10 @@ class TimerRepository(
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
+            // Claim proof must commit before send. A refused commit is a
+            // sync failure with backoff, never successful empty work.
             CrashReporter.report(error)
-            notice = error.message ?: appContext.getString(me.egigoka.pomodorough.R.string.sync_stopped_after_a_local_failure)
-            publish()
-            return null
+            throw error
         }
         neverSentProof = neverSentProof.retiredFor(attempt.request)
         syncing = true
@@ -3329,6 +3329,11 @@ class TimerRepository(
         // R50-A02: covering head makes null authoritative (canonical No
         // task). Only legacy rows without a head fall back to optimistic
         // local, preserving full-Core equality for legacy provenance.
+        // R52-A02: room selection comes from room state, never the
+        // centralized safe base.
+        if (!useCentralizedSafeBase()) {
+            return local.selectedTaskId?.takeIf { id -> canonicalTasks.any { it.id == id } }
+        }
         if (safeHeadOrNull() == null) {
             return local.selectedTaskId?.takeIf { id -> canonicalTasks.any { it.id == id } }
         }
@@ -3337,12 +3342,19 @@ class TimerRepository(
 
     private fun safeHeadOrNull(): Pair<Long, Long>? = SafeProjectionPolicy.headOrNull(local)
 
+    // R52-A02: centralized safe-base metadata belongs to the centralized
+    // route. Room workspaces project room settings instead.
+    private fun useCentralizedSafeBase(): Boolean = replicationMode() == ReplicationMode.CENTRALIZED
+
     // R50-A06: corrupt safe-base JSON keeps the effective-durations
     // fallback but gets one bounded decoding report, no payload.
-    private fun safeBaseDurationsOrNull(): DurationsMs? = local.safeBaseDurationsJson?.let {
-        runCatching { strictJson.decodeFromString<DurationsMs>(it) }
-            .onFailure { CorruptStateReporter.report(CorruptStateCategory.Decoding) }
-            .getOrNull()
+    private fun safeBaseDurationsOrNull(): DurationsMs? {
+        if (!useCentralizedSafeBase()) return null
+        return local.safeBaseDurationsJson?.let {
+            runCatching { strictJson.decodeFromString<DurationsMs>(it) }
+                .onFailure { CorruptStateReporter.report(CorruptStateCategory.Decoding) }
+                .getOrNull()
+        }
     }
 
     private fun localizedProjectedTimer(

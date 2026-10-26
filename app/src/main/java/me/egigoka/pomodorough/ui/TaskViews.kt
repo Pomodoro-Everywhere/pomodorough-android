@@ -173,7 +173,9 @@ private fun TaskSelectorButton(state: TaskSelectorPresentation, onClick: () -> U
     OutlinedButton(
         onClick = onClick,
         enabled = state.enabled,
-        modifier = Modifier.fillMaxWidth().height(48.dp),
+        // R52-A05: minimum touch target only. The button grows with
+        // enlarged text instead of clipping it inside a fixed height.
+        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
         border = BorderStroke(1.dp, Ink.copy(alpha = 0.35f)),
     ) {
         Text(stringResource(R.string.focus_task), style = MaterialTheme.typography.labelMedium)
@@ -287,7 +289,10 @@ private fun TaskDraftCard(
             Button(
                 onClick = onSubmit,
                 enabled = enabled && valid,
-                modifier = Modifier.fillMaxWidth().height(52.dp),
+                // R52-A05: minimum touch target only. The button grows
+                // with enlarged text instead of clipping it inside a
+                // fixed height.
+                modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Ink),
             ) { Text(stringResource(R.string.add_task)) }
         }

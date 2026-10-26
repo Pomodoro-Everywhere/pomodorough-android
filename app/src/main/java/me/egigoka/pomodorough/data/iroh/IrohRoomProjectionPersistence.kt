@@ -189,6 +189,12 @@ internal class IrohRoomProjectionPersistence(
             serverClockSamplePhysicalMs = null,
             serverClockSampleElapsedRealtimeMs = null,
             serverClockBootId = null,
+            // R52-A02: room workspaces own canonical settings metadata.
+            // Centralized safe-base inputs stay on the centralized route.
+            safeBaseDurationsJson = null,
+            safeBaseSelectedTaskId = null,
+            safeCanonicalHeadWallMs = null,
+            safeCanonicalHeadCounter = null,
         )
     }
 
@@ -319,6 +325,12 @@ internal class IrohRoomProjectionPersistence(
             serverClockSamplePhysicalMs = null,
             serverClockSampleElapsedRealtimeMs = null,
             serverClockBootId = null,
+            // R52-A02: room device state owns canonical settings metadata.
+            // Centralized safe-base inputs stay on the centralized route.
+            safeBaseDurationsJson = null,
+            safeBaseSelectedTaskId = null,
+            safeCanonicalHeadWallMs = null,
+            safeCanonicalHeadCounter = null,
         ),
         commands = emptyList(),
         taskOperations = emptyList(),

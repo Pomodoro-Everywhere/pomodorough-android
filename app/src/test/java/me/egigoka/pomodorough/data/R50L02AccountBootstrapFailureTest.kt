@@ -1,5 +1,9 @@
 package me.egigoka.pomodorough.data
 
+import androidx.credentials.exceptions.GetCredentialCancellationException
+import androidx.credentials.exceptions.GetCredentialInterruptedException
+import androidx.credentials.exceptions.GetCredentialProviderConfigurationException
+import androidx.credentials.exceptions.GetCredentialUnknownException
 import java.io.File
 import java.io.IOException
 import kotlinx.coroutines.CancellationException
@@ -11,6 +15,7 @@ import me.egigoka.pomodorough.data.api.ApiException
 import me.egigoka.pomodorough.data.api.BootstrapConflictException
 import me.egigoka.pomodorough.data.api.BootstrapConflictKind
 import me.egigoka.pomodorough.data.auth.AuthenticationRequired
+import me.egigoka.pomodorough.data.auth.CredentialPersistenceException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -64,36 +69,25 @@ class R50L02AccountBootstrapFailureTest {
         assertEquals(AccountBootstrapCause.CoreInvalidOutput, invalid?.cause)
     }
 
-    // Credential fallback rule: any frame-bearing throwable falls to
-    // CredentialWrite via final hasCredentialFrame fallback (TokenVault,
-    // TokenStore, AuthRepository frames), plus KeyStore name match.
-    // Otherwise BootstrapCommit. Breadth acceptable for five causes;
-    // narrow if taxonomy grows to avoid mislabeling new infra errors.
+    // R52-L01 credential rule: only the typed owning-boundary
+    // failure (AuthRepository wrapping a refused TokenStore write)
+    // reads as CredentialWrite. Untyped persistence errors fall to
+    // BootstrapCommit; provider infrastructure reads as
+    // CredentialProvider. No stack-frame sniffing.
     @Test
-    fun credentialWriteNeedsCredentialFrame() {
-        val credential = IllegalStateException("persist-canary")
-        credential.stackTrace = arrayOf(
-            StackTraceElement(
-                "me.egigoka.pomodorough.data.auth.TokenVault",
-                "persist",
-                "TokenVault.kt",
-                193,
-            ),
+    fun credentialWriteNeedsOwningBoundaryType() {
+        val credential = CredentialPersistenceException(
+            "Could not persist authentication tokens",
+            IOException("persist-canary"),
         )
         val classified = classifyAccountBootstrapFailure(
             AccountBootstrapStage.SignIn,
             credential,
         )
         assertEquals(AccountBootstrapCause.CredentialWrite, classified?.cause)
+        // Untyped Room failure falls to BootstrapCommit even with a
+        // storage frame: R52-L01 removed stack-frame sniffing.
         val room = RuntimeException("room-canary")
-        room.stackTrace = arrayOf(
-            StackTraceElement(
-                "me.egigoka.pomodorough.data.storage.TimerStore",
-                "saveMutationState",
-                "TimerStore.kt",
-                120,
-            ),
-        )
         val commit = classifyAccountBootstrapFailure(
             AccountBootstrapStage.Restore,
             room,
@@ -104,14 +98,9 @@ class R50L02AccountBootstrapFailureTest {
     @Test
     fun signInCredentialWriteReportsBoundedCredentialWrite() {
         val canary = "R50L02-SENTINEL-credential-canary"
-        val error = IllegalStateException("vault persist failed: $canary")
-        error.stackTrace = arrayOf(
-            StackTraceElement(
-                "me.egigoka.pomodorough.data.auth.TokenVault",
-                "persist",
-                "TokenVault.kt",
-                193,
-            ),
+        val error = CredentialPersistenceException(
+            "Could not persist authentication tokens",
+            IllegalStateException("vault persist failed: $canary"),
         )
         assertEquals(
             AccountBootstrapCause.CredentialWrite,
@@ -143,12 +132,40 @@ class R50L02AccountBootstrapFailureTest {
             SyncProtocolException("malformed"),
             SerializationException("malformed"),
             CoreProjectionException.InvalidInput("bad input"),
-            FakeCredentialDismissal(),
+            GetCredentialCancellationException("dismissed"),
+            GetCredentialInterruptedException("interrupted"),
         )
         quiet.forEach { error ->
             val stage = AccountBootstrapStage.SignIn
             assertNull("$error should stay quiet", classifyAccountBootstrapFailure(stage, error))
         }
+    }
+
+    @Test
+    fun providerInfrastructureReportsCredentialProvider() {
+        val provider = listOf(
+            GetCredentialProviderConfigurationException("no provider"),
+            GetCredentialUnknownException("unknown provider failure"),
+        )
+        provider.forEach { error ->
+            val classified = classifyAccountBootstrapFailure(
+                AccountBootstrapStage.SignIn,
+                error,
+            )
+            assertEquals(AccountBootstrapCause.CredentialProvider, classified?.cause)
+        }
+        val reported = captureReports {
+            val result = handleAccountBootstrapFailure(
+                AccountBootstrapStage.SignIn,
+                GetCredentialProviderConfigurationException("no provider"),
+            )
+            assertEquals(AccountBootstrapCause.CredentialProvider, result?.cause)
+        }
+        assertEquals(1, reported.size)
+        assertEquals(
+            "Account bootstrap sign_in failed: credential_provider",
+            reported.single().message,
+        )
     }
 
     @Test
@@ -311,13 +328,12 @@ class R50L02AccountBootstrapFailureTest {
         assertTrue(!text.contains("bootstrap.response"))
         assertTrue(!text.contains("PendingSyncQueues"))
         assertTrue(text.contains("credential_write"))
+        assertTrue(text.contains("credential_provider"))
         assertTrue(text.contains("core_load"))
         assertTrue(text.contains("core_abi"))
         assertTrue(text.contains("core_invalid_output"))
         assertTrue(text.contains("bootstrap_commit"))
     }
-
-    private class FakeCredentialDismissal : Exception("dismissed")
 
     private fun captureReports(block: () -> Unit): List<Throwable> {
         val previousEnabled = CrashReportingRuntime.reportingEnabled

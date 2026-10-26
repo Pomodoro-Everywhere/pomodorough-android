@@ -177,12 +177,30 @@ internal class IrohRoomOrchestration(
     }
 
     suspend fun refreshInvite() = runIrohAction {
-        val room = checkNotNull(persistence.activeRoom()) { "No Iroh room is active" }
-        val ticket = startIfNeeded()
-        val secret = checkNotNull(persistence.activeRoomSecret())
-        invite = IrohRoomInvite(room.roomId, room.roomName, ticket, secret).encode()
-        secret.fill(0)
-        publish(service.state.value.copy(invite = invite, message = null))
+        try {
+            val room = checkNotNull(persistence.activeRoom()) { "No Iroh room is active" }
+            val ticket = startIfNeeded()
+            val secret = checkNotNull(persistence.activeRoomSecret())
+            invite = IrohRoomInvite(room.roomId, room.roomName, ticket, secret).encode()
+            secret.fill(0)
+            publish(service.state.value.copy(invite = invite, message = null))
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: IrohSecretVaultException) {
+            // expected-silent: vault recovery is reported through the recovery UI, not a crash.
+            quarantineRecovery(error.recoveryKind)
+        } catch (error: Exception) {
+            // R52-A04: explicit refresh stays inside the recoverable
+            // room-action boundary. The room row is untouched, so publish
+            // the failure on current state without restarting the endpoint
+            // a second time; retry re-enters through this same action.
+            CrashReporter.report(error)
+            publish(service.state.value.copy(
+                status = IrohConnectionStatus.UNAVAILABLE,
+                message = error.message ?: "Iroh invite could not be refreshed",
+                transitioning = false,
+            ))
+        }
     }
 
     suspend fun syncNow() = runIrohAction {

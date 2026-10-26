@@ -286,13 +286,28 @@ internal fun AppHeader(
 
 @Composable
 private fun HeaderTopRow(state: AppState, actions: AppHeaderActions) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        BrandMark(compact = true)
-        HeaderAuthAction(state, actions)
+    // R52-A06: the unweighted wordmark starved Sign in to one pixel at
+    // 320dp/font scale 2. Enlarged-text headers stack so the wordmark
+    // and the auth action each keep full measured width; the default
+    // row weights the wordmark with a single-line ellipsis so the
+    // action always keeps its intrinsic width and 48dp touch target.
+    // End alignment stays RTL-aware, as does the row.
+    if (LocalConfiguration.current.fontScale >= 1.3f) {
+        Column(Modifier.fillMaxWidth()) {
+            BrandMark(compact = true, labelMaxLines = 1)
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
+                HeaderAuthAction(state, actions)
+            }
+        }
+    } else {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            BrandMark(compact = true, modifier = Modifier.weight(1f), labelMaxLines = 1)
+            HeaderAuthAction(state, actions)
+        }
     }
 }
 

@@ -35,6 +35,8 @@ keystore.properties
 secrets.properties
 *.p12
 *.pem
+*.key
+*.p8
 .vscode/
 *.orig
 *.swp

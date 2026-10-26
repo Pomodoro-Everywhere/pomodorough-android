@@ -8,6 +8,7 @@ import androidx.credentials.GetCredentialRequest
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import java.time.Instant
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import me.egigoka.pomodorough.data.NativeExchangeRequest
@@ -16,6 +17,13 @@ import me.egigoka.pomodorough.data.api.ApiException
 import me.egigoka.pomodorough.data.api.PomodoroughService
 
 class AuthenticationRequired(message: String = "Sign in required") : Exception(message)
+
+/**
+ * R52-L01: local credential persistence refused the write.
+ * Thrown at the owning AuthRepository boundary so bootstrap
+ * classification reports credential_write before IO reads as transport.
+ */
+class CredentialPersistenceException(message: String, cause: Throwable) : Exception(message, cause)
 
 enum class AuthCredentialState { Empty, Active, LogoutPending, Unreadable }
 
@@ -264,7 +272,7 @@ class AuthRepository(
 
     private fun replaceSession(tokens: TokenPair): SessionSnapshot = synchronized(sessionLock) {
         sessionGeneration += 1
-        tokenVault.write(tokens)
+        persistSession(tokens)
         SessionSnapshot(tokens, sessionGeneration)
     }
 
@@ -275,8 +283,18 @@ class AuthRepository(
         if (sessionGeneration != current.generation || tokenVault.read() != current.tokens) {
             return@synchronized null
         }
-        tokenVault.write(replacement)
+        persistSession(replacement)
         current.copy(tokens = replacement)
+    }
+
+    private fun persistSession(tokens: TokenPair) {
+        try {
+            tokenVault.write(tokens)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            throw CredentialPersistenceException("Could not persist authentication tokens", error)
+        }
     }
 
     private fun clearSession(): SessionSnapshot? = synchronized(sessionLock) {
