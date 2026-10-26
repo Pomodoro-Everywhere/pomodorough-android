@@ -938,7 +938,12 @@ class TimerRepositoryTest {
         val account = user("account-1")
         database.timerDao().insertState(state(account, timer("timer-1")))
         val tokenVault = TokenVault(context, json).apply { write(FakeCredentialStore().tokens!!) }
-        val service = FakeService(account).apply { logoutFailuresRemaining = 1 }
+        val service = FakeService(account).apply {
+            logoutFailuresRemaining = 1
+            // Bootstrap must not regress the seeded local revision, or initialize
+            // signs out before logout runs and the assertions below test nothing.
+            syncResponse = syncResponse.copy(revision = 4)
+        }
         val auth = AuthRepository(service, tokenVault, "unused")
         val dao = FailingLogoutMarkerDao(database.timerDao())
         val repository = repository(service, auth, dao = dao)
