@@ -934,7 +934,7 @@ class TimerRepositoryTest {
     }
 
     @Test
-    fun logoutMarkerFailureStillDrainsRevocationWithoutRestart() = runBlocking {
+    fun logoutMarkerFailureRetainsCredentialsUntilRetryDrainsRevocation() = runBlocking {
         val account = user("account-1")
         database.timerDao().insertState(state(account, timer("timer-1")))
         val tokenVault = TokenVault(context, json).apply { write(FakeCredentialStore().tokens!!) }
@@ -947,12 +947,15 @@ class TimerRepositoryTest {
         repository.logout()
 
         assertEquals(1, dao.failureCount)
-        assertEquals(1, service.logoutCalls)
-        assertTrue(TokenVault(context, json).state() is TokenStoreState.LogoutPending)
-        assertEquals(AuthStatus.SignedOut, repository.state.value.authStatus)
-        assertNull(repository.state.value.user)
+        assertEquals(0, service.logoutCalls)
+        assertTrue(TokenVault(context, json).state() is TokenStoreState.Active)
+        assertEquals(AuthStatus.SignedIn, repository.state.value.authStatus)
+        assertEquals(account, repository.state.value.user)
         assertEquals(account.id, database.timerDao().localState()?.ownerUserId)
         assertNull(database.timerDao().localState()?.accountDeletionState)
+        assertEquals("marker write failed", repository.state.value.notice)
+
+        repository.logout()
 
         withTimeout(10_000) {
             while (tokenVault.state() != TokenStoreState.Empty) delay(25)
@@ -1408,10 +1411,12 @@ class TimerRepositoryTest {
         private val delegate: TimerDao,
     ) : TimerDao by delegate {
         var failureCount = 0
+        var failuresRemaining = 1
 
         override suspend fun updateState(state: LocalStateEntity) {
-            if (state.accountDeletionState == "local_scrub_required") {
+            if (state.accountDeletionState == "local_scrub_required" && failuresRemaining > 0) {
                 failureCount += 1
+                failuresRemaining -= 1
                 throw IOException("marker write failed")
             }
             delegate.updateState(state)
