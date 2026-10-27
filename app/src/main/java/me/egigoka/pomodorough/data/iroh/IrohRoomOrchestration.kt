@@ -207,8 +207,23 @@ internal class IrohRoomOrchestration(
         if (service.state.value.mode != ReplicationMode.IROH || !isForeground()) {
             return@runIrohAction
         }
-        startIfNeeded()
-        service.syncNow()
+        try {
+            startIfNeeded()
+            service.syncNow()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: IrohSecretVaultException) {
+            // expected-silent: vault recovery is reported through the recovery UI, not a crash.
+            quarantineRecovery(error.recoveryKind)
+        } catch (_: Exception) {
+            // expected-silent: explicit retry failures use recovery UI; native endpoint diagnostics
+            // belong to the lifecycle. Do not duplicate them or expose exception text and secrets.
+            publish(service.state.value.copy(
+                status = IrohConnectionStatus.UNAVAILABLE,
+                message = "Iroh sync could not be completed. Try again.",
+                transitioning = false,
+            ))
+        }
     }
 
     suspend fun afterLocalMutation() = runIrohAction {

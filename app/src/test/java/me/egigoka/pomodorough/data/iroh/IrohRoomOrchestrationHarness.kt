@@ -34,6 +34,7 @@ internal class IrohRoomOrchestrationHarness(
     var capturedProjection = IrohRoomProjection(workspace, 5)
     var preparedRoom: Pair<IrohRoomEntity, Boolean>? = null
     var startFailure: Exception? = null
+    var syncFailure: Exception? = null
     var setModeFailure: Exception? = null
     var createRoomFailure: Exception? = null
     var prepareJoinedRoomFailure: Exception? = null
@@ -72,7 +73,11 @@ internal class IrohRoomOrchestrationHarness(
                 capturedProjection
             },
             endpointIdForTicket = { "endpoint-test0001" },
-            syncNow = { syncCount += 1 },
+            syncNow = {
+                syncCount += 1
+                syncFailure?.let { throw it }
+                state.value = state.value.copy(status = IrohConnectionStatus.LISTENING, message = null)
+            },
         ),
         persistence = IrohRoomPersistencePort(
             localState = { local },

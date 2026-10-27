@@ -426,7 +426,7 @@ private fun CreateRoomCard(
             Button(
                 onClick = onCreate,
                 enabled = enabled && roomName.codePointCount(0, roomName.length) <= 64,
-                modifier = Modifier.fillMaxWidth().height(54.dp),
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Violet),
             ) { Text(stringResource(R.string.create_iroh_room)) }
         }

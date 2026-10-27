@@ -19,6 +19,14 @@ release-test/
 __pycache__/
 *.pyc
 .ruff_cache/
+.complexipy_cache/
+/.release-gates/
+/.coverage
+/.coverage.*
+/coverage.json
+/coverage.lcov
+/coverage.xml
+/htmlcov/
 /.audit/*
 !/.audit/android-remediation.tsv
 .cxx/
