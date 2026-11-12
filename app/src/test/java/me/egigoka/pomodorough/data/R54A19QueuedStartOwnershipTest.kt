@@ -8,13 +8,16 @@ import me.egigoka.pomodorough.core.SharedCore
 import me.egigoka.pomodorough.data.local.LocalStateEntity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
  * R54-A19: a sync response that lands while the local Start is still queued
  * projects without that Start (the safe display omits it). Ownership the
  * Start recorded must survive until the Start leaves the retained queue, or
- * the manual finish later loses its automatic break.
+ * the manual finish later loses its automatic break. An applied
+ * acknowledgement hands the decision back to the canonical timer, and an
+ * ignored Start gives ownership up.
  */
 class R54A19QueuedStartOwnershipTest {
     private val json = Json { explicitNulls = false }
@@ -60,6 +63,32 @@ class R54A19QueuedStartOwnershipTest {
         assertNull(result.local.ownedTimerId)
     }
 
+    @Test
+    fun acknowledgedStartKeepsOwnershipOfItsCanonicalTimer() {
+        val result = applySentStart(Acknowledgement(StartId, "applied"), runningTimer(StartTimerId))
+
+        assertTrue(result.pending.queues.commands.isEmpty())
+        assertEquals(StartTimerId, result.local.ownedTimerId)
+    }
+
+    @Test
+    fun acknowledgedStartYieldsOwnershipToAnotherCanonicalTimer() {
+        val result = applySentStart(Acknowledgement(StartId, "applied"), runningTimer(RemoteTimerId))
+
+        assertTrue(result.pending.queues.commands.isEmpty())
+        assertNull(result.local.ownedTimerId)
+    }
+
+    @Test
+    fun ignoredStartClearsOwnership() {
+        val ignored = Acknowledgement(StartId, "ignored", "timer already active")
+
+        val result = applySentStart(ignored, runningTimer(RemoteTimerId))
+
+        assertTrue(result.pending.queues.commands.isEmpty())
+        assertNull(result.local.ownedTimerId)
+    }
+
     // The attempt carries only the duration operation. The command is queued
     // after the request left, so the response neither sends nor acknowledges it.
     private fun applyWithQueued(owned: String, queued: TimerCommand): CentralizedSyncApplication {
@@ -73,8 +102,33 @@ class R54A19QueuedStartOwnershipTest {
                 neverSent = CoreNeverSentProof(commands = listOf(queued.id)),
             )
         }
-        val response = response()
-        return coordinator.applySync(
+        val durationAcknowledgement = DurationAcknowledgement(DurationId, "applied", "")
+        return applyResponse(current, attempt, response(durationAcknowledgements = listOf(durationAcknowledgement)))
+    }
+
+    // The attempt sends the Start itself, so it has no never-sent proof. Sync
+    // rejects a response without its acknowledgement, so the sent and
+    // unacknowledged case is a restart (R54A19QueuedStartRestartTest).
+    private fun applySentStart(
+        acknowledgement: Acknowledgement,
+        canonical: CanonicalTimer,
+    ): CentralizedSyncApplication {
+        val queues = PendingSyncQueues(listOf(command(CommandType.Start)), emptyList(), emptyList(), emptyList(), emptyList())
+        val sending = snapshot(queues).let {
+            it.copy(local = it.local.copy(ownedTimerId = StartTimerId, deviceSequence = 1))
+        }
+        val attempt = coordinator.prepareSyncAttempt(
+            CentralizedSyncAttemptInput(SyncAttemptIdentity(9, "a19-start-attempt"), sending, ServerWallMs, 10_000),
+        )
+        return applyResponse(sending, attempt, response(listOf(acknowledgement), canonical))
+    }
+
+    private fun applyResponse(
+        current: CentralizedSyncSnapshot,
+        attempt: SyncAttempt,
+        response: SyncResponse,
+    ): CentralizedSyncApplication =
+        coordinator.applySync(
             CentralizedSyncApplicationInput(
                 snapshot = current,
                 attempt = attempt,
@@ -85,7 +139,6 @@ class R54A19QueuedStartOwnershipTest {
                 projectionNow = Instant.parse(response.serverTime),
             ),
         )
-    }
 
     private fun snapshot(queues: PendingSyncQueues): CentralizedSyncSnapshot {
         val settings = TimerSettings()
@@ -137,15 +190,29 @@ class R54A19QueuedStartOwnershipTest {
         physicalOccurredAt = StartTime,
     )
 
-    private fun response() = SyncResponse(
-        acknowledgements = emptyList(),
+    private fun runningTimer(id: String) = CanonicalTimer(
+        id = id,
+        phase = TimerPhase.Focus,
+        status = TimerStatus.Running,
+        plannedDurationMs = 1_800_000,
+        elapsedAtAnchorMs = 0,
+        anchorAt = StartTime,
+        startedByDeviceId = DeviceId,
+    )
+
+    private fun response(
+        acknowledgements: List<Acknowledgement> = emptyList(),
+        canonical: CanonicalTimer? = null,
+        durationAcknowledgements: List<DurationAcknowledgement> = emptyList(),
+    ) = SyncResponse(
+        acknowledgements = acknowledgements,
         revision = 4,
-        canonicalTimer = null,
+        canonicalTimer = canonical,
         history = emptyList(),
         serverTime = ServerTime,
         serverHlcWallMs = ServerWallMs,
         serverHlcCounter = 2,
-        durationAcknowledgements = listOf(DurationAcknowledgement(DurationId, "applied", "")),
+        durationAcknowledgements = durationAcknowledgements,
         durationsMs = DurationsMs(focus = 1_800_000),
         taskAcknowledgements = emptyList(),
         tasks = emptyList(),
@@ -158,6 +225,7 @@ class R54A19QueuedStartOwnershipTest {
         const val StartId = "start-queued"
         const val StartTimerId = "focus-queued"
         const val OtherTimerId = "focus-retired"
+        const val RemoteTimerId = "focus-remote"
         const val DurationTime = "2026-07-20T00:01:00Z"
         const val StartTime = "2026-07-20T00:02:00Z"
         const val ServerTime = "2026-07-20T00:06:00Z"

@@ -70,6 +70,9 @@ class R50A02CanonicalNullSelectionTest {
     @Test
     fun legacyWithoutHeadFallsBackToLocal() {
         val task = requireNotNull(TaskReducer.taskFromTitle("Deep work"))
+        // The base selects a different task, so only the legacy local
+        // branch can start with the device's own selection.
+        val baseTask = requireNotNull(TaskReducer.taskFromTitle("Inbox"))
         val settings = TimerSettings()
         val local = LocalStateEntity(
             deviceId = DeviceId,
@@ -83,12 +86,12 @@ class R50A02CanonicalNullSelectionTest {
             local = local,
             settings = settings,
             projection = TimerProjection(null, emptyList()),
-            projectionBase = CoreProjectionBase(tasks = listOf(task), selectedTaskId = task.id),
+            projectionBase = CoreProjectionBase(tasks = listOf(task, baseTask), selectedTaskId = baseTask.id),
             queues = PendingSyncQueues(emptyList(), emptyList(), emptyList(), emptyList(), emptyList()),
             dependencies = emptyMap(),
-            knownTasks = mapOf(task.id to task),
-            visibleTasks = listOf(task),
-            selectedTaskId = null,
+            knownTasks = mapOf(task.id to task, baseTask.id to baseTask),
+            visibleTasks = listOf(task, baseTask),
+            selectedTaskId = baseTask.id,
         )
         assertEquals(task.id, startTaskId(state))
     }

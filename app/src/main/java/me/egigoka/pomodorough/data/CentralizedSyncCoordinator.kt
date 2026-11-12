@@ -691,7 +691,7 @@ internal class CentralizedSyncCoordinator(
             safeCanonicalHeadCounter = response.serverHlcCounter,
             ownedTimerId = when {
                 clearOwnedTimer -> null
-                ownStartQueued(snapshot.local.ownedTimerId, projected.queues) -> snapshot.local.ownedTimerId
+                ownStartQueued(snapshot.local.ownedTimerId, projected.queues.commands) -> snapshot.local.ownedTimerId
                 profile != null && generated === EmptyGeneratedResolution -> snapshot.local.ownedTimerId
                     ?.takeIf {
                         projection.timer?.status in ActiveStatuses && projection.timer?.id == it
@@ -735,16 +735,6 @@ internal class CentralizedSyncCoordinator(
         }
         return GeneratedTimerResolution(promoted, discarded, sourceTimerIds)
     }
-
-    // R54-A19: the delivery-safe projection omits a Start that is still
-    // retained (unsent, or sent and unacknowledged), so the projected timer
-    // cannot decide ownership yet. Keep the ownership that Start recorded
-    // while it stays queued. Once it is acknowledged or dropped, the
-    // canonical timer decides again.
-    private fun ownStartQueued(ownedTimerId: String?, retained: PendingSyncQueues): Boolean =
-        ownedTimerId != null && retained.commands.any {
-            it.type == CommandType.Start && it.timerId == ownedTimerId
-        }
 
     private fun resolvedOwnedTimerId(
         currentOwnedTimerId: String?,

@@ -60,16 +60,45 @@ class R54A19StartRetainedIntentTest {
     }
 
     @Test
-    fun startHonorsInFlightClearOverCanonicalSelection() {
-        val queues = queues(selected = listOf(issuedSelection(null)))
-        val base = CoreProjectionBase(tasks = listOf(task), selectedTaskId = task.id)
-        val state = issuedState(queues).copy(
-            projectionBase = base,
-            visibleTasks = listOf(task),
-            selectedTaskId = task.id,
+    fun startHonorsLatestInFlightClearOverCanonicalSelection() {
+        val queues = queues(selected = listOf(issuedSelection(task.id, 3L), issuedSelection(null, 4L)))
+
+        assertNull(startPlan(canonicalSelectionState(queues)).commands.single().taskId)
+    }
+
+    @Test
+    fun startDropsSelectionOfInFlightDeletedTaskWithCanonicalHead() {
+        val queues = queues(tasks = listOf(issuedDelete()))
+
+        assertNull(startPlan(canonicalSelectionState(queues)).commands.single().taskId)
+    }
+
+    @Test
+    fun startDropsSelectionOfRetainedDeletedTaskWithoutHead() {
+        val queues = queues(tasks = listOf(issuedDelete()))
+
+        assertNull(startPlan(canonicalSelectionState(queues, head = false)).commands.single().taskId)
+    }
+
+    @Test
+    fun retiredStartFinishPairStaysOutOfPlanWhileIntentStillApplies() {
+        val queues = queues(
+            commands = listOf(
+                retiredCommand("retired-start", CommandType.Start, 1L),
+                retiredCommand("retired-finish", CommandType.Finish, 2L),
+            ),
+            tasks = listOf(issuedUpsert()),
+            durations = listOf(issuedFocusDuration()),
+            selected = listOf(issuedSelection(task.id)),
         )
 
-        assertNull(startPlan(state).commands.single().taskId)
+        val plan = startPlan(issuedState(queues))
+
+        val start = plan.commands.single()
+        assertEquals(FocusIntentMs, start.plannedDurationMs)
+        assertEquals(task.id, start.taskId)
+        assertTrue(plan.projection.history.isEmpty())
+        assertEquals(StartTimerId, plan.projection.canonicalTimer?.id)
     }
 
     @Test
@@ -83,16 +112,16 @@ class R54A19StartRetainedIntentTest {
         assertEquals(DurationsMs().shortBreak, command.plannedDurationMs)
     }
 
-    private fun issuedState(queues: PendingSyncQueues): TimerMutationState {
+    private fun issuedState(queues: PendingSyncQueues, head: Boolean = true): TimerMutationState {
         val settings = TimerSettings()
         val local = LocalStateEntity(
             deviceId = DeviceId,
             deviceSequence = 9,
             hlcWallMs = HeadWallMs,
-            hlcCounter = 4L,
+            hlcCounter = 8L,
             settingsJson = json.encodeToString(settings),
-            safeCanonicalHeadWallMs = HeadWallMs,
-            safeCanonicalHeadCounter = 0L,
+            safeCanonicalHeadWallMs = HeadWallMs.takeIf { head },
+            safeCanonicalHeadCounter = 0L.takeIf { head },
         )
         return TimerMutationState(
             local = local,
@@ -108,6 +137,19 @@ class R54A19StartRetainedIntentTest {
         )
     }
 
+    // The canonical base and the device both select the task, so only the
+    // retained queue can clear or invalidate that selection.
+    private fun canonicalSelectionState(queues: PendingSyncQueues, head: Boolean = true): TimerMutationState {
+        val state = issuedState(queues, head)
+        return state.copy(
+            local = state.local.copy(selectedTaskId = task.id, safeBaseSelectedTaskId = task.id),
+            projectionBase = state.projectionBase.copy(tasks = listOf(task), selectedTaskId = task.id),
+            knownTasks = mapOf(task.id to task),
+            visibleTasks = listOf(task),
+            selectedTaskId = task.id,
+        )
+    }
+
     private fun startPlan(
         state: TimerMutationState,
         phase: String? = null,
@@ -117,7 +159,7 @@ class R54A19StartRetainedIntentTest {
                 SyncWireBounds.MutationStamp(
                     deviceSequence = 10L,
                     wallMs = HeadWallMs,
-                    counter = 5L,
+                    counter = 9L,
                     occurredAt = StartAt,
                 ),
             ),
@@ -129,10 +171,11 @@ class R54A19StartRetainedIntentTest {
     }
 
     private fun queues(
+        commands: List<TimerCommand> = emptyList(),
         tasks: List<TaskOperation> = emptyList(),
         durations: List<DurationOperation> = emptyList(),
         selected: List<SelectedTaskOperation> = emptyList(),
-    ) = PendingSyncQueues(emptyList(), tasks, durations, emptyList(), selected)
+    ) = PendingSyncQueues(commands, tasks, durations, emptyList(), selected)
 
     // Issued operations: sent and unacknowledged, so they lack never-sent
     // proof and the safe display drops each whole domain to its canonical base.
@@ -142,12 +185,32 @@ class R54A19StartRetainedIntentTest {
     private fun issuedUpsert() =
         TaskOperation("task-operation-issued", task.id, TaskOperationType.Upsert, task.title, IssuedAt, HeadWallMs, 2L)
 
-    private fun issuedSelection(taskId: String?) =
-        SelectedTaskOperation("selection-issued", taskId, IssuedAt, HeadWallMs, 3L)
+    private fun issuedDelete() =
+        TaskOperation("task-delete-issued", task.id, TaskOperationType.Delete, null, IssuedAt, HeadWallMs, 2L)
+
+    private fun issuedSelection(taskId: String?, counter: Long = 3L) =
+        SelectedTaskOperation("selection-issued-$counter", taskId, IssuedAt, HeadWallMs, counter)
+
+    // A Start+Finish pair for an earlier timer that is still queued, stamped
+    // after the issued operations. Mutation planning must not replay that
+    // retired history (R51-A01).
+    private fun retiredCommand(id: String, type: String, sequence: Long) = TimerCommand(
+        id = id,
+        deviceSequence = sequence,
+        timerId = RetiredTimerId,
+        type = type,
+        phase = TimerPhase.Focus,
+        plannedDurationMs = CanonicalFocusMs,
+        occurredAt = IssuedAt,
+        hlcWallMs = HeadWallMs,
+        hlcCounter = sequence + 4L,
+        observedElapsedMs = 0,
+    )
 
     private companion object {
         const val DeviceId = "device-a"
         const val StartTimerId = "start-timer-a19"
+        const val RetiredTimerId = "retired-timer-a19"
         const val StartCommandId = "00000000-0000-7000-8000-000000000a19"
         const val IssuedAt = "2026-01-01T00:00:00Z"
         const val StartAt = "2026-01-01T00:00:01Z"

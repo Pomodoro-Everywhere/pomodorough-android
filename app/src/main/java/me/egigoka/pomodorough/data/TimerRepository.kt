@@ -914,8 +914,11 @@ class TimerRepository(
         accountAdmissionResolved = false
     }
 
+    // R54-A19: a restart between sending the own Start and its acknowledgement
+    // projects without that Start, so a queued own Start keeps the ownership.
     private suspend fun clearStaleOwnedTimer() {
         if (local.ownedTimerId == null || awaitingDurableLocalCompletion() ||
+            ownStartQueued(local.ownedTimerId, pending) ||
             projection.timer?.takeIf { it.status in activeStatuses }?.id == local.ownedTimerId
         ) return
         local = local.copy(ownedTimerId = null)
