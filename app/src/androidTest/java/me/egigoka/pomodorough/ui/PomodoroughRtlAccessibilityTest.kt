@@ -380,7 +380,7 @@ class PomodoroughRtlAccessibilityTest {
             assertEquals(value, semantics[SemanticsProperties.EditableText].text)
             assertTrue(semantics.contains(SemanticsActions.SetText))
             assertPlatformAccessibility()
-            assertAccessibleEditableValue(context.getString(label), value)
+            assertAccessibleEditableValue(composeRule, context.getString(label), value)
         }
     }
 
