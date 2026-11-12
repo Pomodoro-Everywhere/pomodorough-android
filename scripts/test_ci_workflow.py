@@ -124,7 +124,7 @@ class CIWorkflowTests(unittest.TestCase):
         self.assertIn('test_locale="${TEST_LOCALE:-en-US}"', script)
         self.assertIn('test_class="${TEST_CLASS:-}"', script)
         self.assertIn(
-            'instrumentation_timeout_seconds="${INSTRUMENTATION_TIMEOUT_SECONDS:-600}"',
+            'instrumentation_timeout_seconds="${INSTRUMENTATION_TIMEOUT_SECONDS:-900}"',
             script,
         )
         self.assertIn(
