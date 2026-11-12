@@ -1,12 +1,17 @@
 package me.egigoka.pomodorough.ui
 
 import android.content.res.Configuration
+import android.view.View
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.SoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
@@ -33,6 +38,8 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.test.platform.app.InstrumentationRegistry
 import me.egigoka.pomodorough.R
 import me.egigoka.pomodorough.data.AppState
@@ -59,6 +66,8 @@ class P24SignedOutNetworkNavigationTest {
     private val joinedInvites = mutableListOf<String>()
     private val accountCalls = mutableListOf<String>()
     private var signInCalls = 0
+    private var hostView: View? = null
+    private var keyboard: SoftwareKeyboardController? = null
 
     @Test
     fun signedOutCreatesRoomAtNormalFont() {
@@ -95,6 +104,7 @@ class P24SignedOutNetworkNavigationTest {
         val roomName = "Independent focus room"
         composeRule.onNodeWithContentDescription(label(R.string.room_name_optional))
             .performScrollTo().assertIsDisplayed().performTextInput(roomName)
+        closeIme()
         action(R.string.create_iroh_room).performScrollTo()
             .assertIsDisplayed().assertIsEnabled().performClick()
         assertSignedOutAccountRestrictions()
@@ -111,10 +121,12 @@ class P24SignedOutNetworkNavigationTest {
         action(R.string.join_room).performScrollTo().assertIsNotEnabled().performClick()
         val inviteField = composeRule.onNodeWithContentDescription(label(R.string.room_invite))
         inviteField.performScrollTo().assertIsDisplayed().performTextInput("   ")
+        closeIme()
         action(R.string.join_room).performScrollTo().assertIsNotEnabled().performClick()
         composeRule.runOnIdle { assertEquals(emptyList<String>(), joinedInvites) }
         val invite = "pomodorough1:p24-signed-out-callback-witness"
         inviteField.performScrollTo().performTextReplacement(invite)
+        closeIme()
         action(R.string.join_room).performScrollTo()
             .assertIsDisplayed().assertIsEnabled().performClick()
         assertSignedOutAccountRestrictions()
@@ -157,6 +169,22 @@ class P24SignedOutNetworkNavigationTest {
             assertEquals(emptyList<String>(), createdRooms)
             assertEquals(emptyList<String>(), joinedInvites)
         }
+    }
+
+    // Text input opens the IME, and its inset can land after the last Compose sync. The test host pans
+    // its window for the IME, so a node scrolled into view before the inset can leave the visible area
+    // (R54-A21). Close the IME and wait for its inset to clear so the next scroll sees settled layout.
+    // An emulator without a soft keyboard never shows the IME, so that first wait may time out.
+    private fun closeIme() {
+        runCatching { composeRule.waitUntil(timeoutMillis = 5_000) { imeVisible() } }
+        composeRule.runOnUiThread { checkNotNull(keyboard).hide() }
+        composeRule.waitUntil(timeoutMillis = 5_000) { !imeVisible() }
+        composeRule.waitForIdle()
+    }
+
+    private fun imeVisible(): Boolean = composeRule.runOnUiThread {
+        val insets = checkNotNull(hostView).let(ViewCompat::getRootWindowInsets)
+        insets?.isVisible(WindowInsetsCompat.Type.ime()) == true
     }
 
     private fun openSignedOutNetwork(fontScale: Float) {
@@ -202,6 +230,12 @@ class P24SignedOutNetworkNavigationTest {
         composeRule.setContent {
             val configuration = Configuration(LocalConfiguration.current).apply { this.fontScale = fontScale }
             val density = Density(LocalDensity.current.density, fontScale)
+            val view = LocalView.current
+            val keyboardController = LocalSoftwareKeyboardController.current
+            SideEffect {
+                hostView = view
+                keyboard = keyboardController
+            }
             CompositionLocalProvider(LocalConfiguration provides configuration, LocalDensity provides density) {
                 PomodoroughTheme {
                     PomodoroughScreen(
