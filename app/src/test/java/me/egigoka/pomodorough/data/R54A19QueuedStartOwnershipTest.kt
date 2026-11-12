@@ -49,6 +49,21 @@ class R54A19QueuedStartOwnershipTest {
         assertEquals(StartTimerId, result.local.ownedTimerId)
     }
 
+    // An earlier attempt sent the Start and failed before its response, so the
+    // Start lost its never-sent proof. This attempt carries another domain.
+    @Test
+    fun issuedStartFromEarlierAttemptKeepsOwnership() {
+        val result = applyWithQueued(
+            owned = StartTimerId,
+            queued = command(CommandType.Start),
+            proof = CoreNeverSentProof(),
+        )
+
+        assertEquals(listOf(StartId), result.pending.queues.commands.map(TimerCommand::id))
+        assertNull(result.projected.projection.canonicalTimer)
+        assertEquals(StartTimerId, result.local.ownedTimerId)
+    }
+
     @Test
     fun queuedStartForAnotherTimerDoesNotKeepStaleOwnership() {
         val result = applyWithQueued(owned = OtherTimerId, queued = command(CommandType.Start))
@@ -89,9 +104,14 @@ class R54A19QueuedStartOwnershipTest {
         assertNull(result.local.ownedTimerId)
     }
 
-    // The attempt carries only the duration operation. The command is queued
-    // after the request left, so the response neither sends nor acknowledges it.
-    private fun applyWithQueued(owned: String, queued: TimerCommand): CentralizedSyncApplication {
+    // The attempt carries only the duration operation. By default the command
+    // is queued after the request left (never sent), so the response neither
+    // sends nor acknowledges it.
+    private fun applyWithQueued(
+        owned: String,
+        queued: TimerCommand,
+        proof: CoreNeverSentProof = CoreNeverSentProof(commands = listOf(queued.id)),
+    ): CentralizedSyncApplication {
         val sending = snapshot(PendingSyncQueues(emptyList(), emptyList(), listOf(durationOperation()), emptyList(), emptyList()))
         val attempt = coordinator.prepareSyncAttempt(
             CentralizedSyncAttemptInput(SyncAttemptIdentity(9, "a19-attempt"), sending, ServerWallMs, 10_000),
@@ -99,7 +119,7 @@ class R54A19QueuedStartOwnershipTest {
         val current = snapshot(sending.queues.copy(commands = listOf(queued))).let {
             it.copy(
                 local = it.local.copy(ownedTimerId = owned, deviceSequence = 1),
-                neverSent = CoreNeverSentProof(commands = listOf(queued.id)),
+                neverSent = proof,
             )
         }
         val durationAcknowledgement = DurationAcknowledgement(DurationId, "applied", "")
