@@ -1,6 +1,7 @@
 package me.egigoka.pomodorough.crash
 
 import io.sentry.Breadcrumb
+import io.sentry.JsonSerializable
 import io.sentry.SentryEvent
 import io.sentry.protocol.App
 import io.sentry.protocol.Device
@@ -41,49 +42,61 @@ object SentryScrubber {
     const val MAX_ID_VISIBLE_PREFIX = 4
     const val MAX_ID_VISIBLE_SUFFIX = 2
     const val MIN_ID_LENGTH_TO_TRUNCATE = 20
+    // R54-L03: matches desktop `_SCRUB_DEPTH_LIMIT`. A cyclic or very deep
+    // value would overflow the stack or multiply work, and the SDK drops an
+    // event whose beforeSend throws, so such values are redacted instead.
+    private const val SCRUB_DEPTH_LIMIT = 20
+    // R54-L03: the query parts desktop `_URL_PART_SEPARATORS` names. A list
+    // under one of these keys holds `[key, value]` pairs.
+    private val queryPartKeys = setOf("http.query", "http.fragment", "query_string")
+    // R54-L06: desktop `_CANONICAL_QUERY_KEY_RE`. Only a key in this charset
+    // names its query value; any other key can be stripped or rejoined by a
+    // parser (`to\tken=`) or decode to a secret name.
+    private val canonicalQueryKey = Regex("[A-Za-z0-9_.~-]+")
 
-    private val email = Regex("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")
+    // R54-L14: the address part is optional, so each local-part run matches
+    // once, whole, and scrubText keeps a run that has no address. The old form
+    // retried every later start inside a run without `@`, which took seconds
+    // on long text. The run is possessive, as in desktop `_EMAIL_RE`. Only a
+    // match with the address part redacts, and the redacted addresses are the
+    // same: `@` is outside the run class, so it can only follow a whole run.
+    // R54-L16: stop the local run before an encoded @, including nested %25.
+    // The lookahead scans beyond one character only at %, preserving linear work.
+    private val literalEmail = Regex("[A-Za-z0-9._%+-]++(@[A-Za-z0-9.-]+\\.[A-Za-z]{2,})?")
+    private val email = Regex(
+        "(?:(?!%(?:25)*+40)[A-Za-z0-9._%+-])++((?:@|%(?:25)*+40)[A-Za-z0-9.-]+\\.[A-Za-z]{2,})?",
+    )
     private val authScheme = Regex("(?i)\\b(Bearer|Basic)\\s+[A-Za-z0-9\\-._~+/=]+")
-    // A31: `;` joins matrix-style params (`;token=…;other=1`); the value
-    // class already stops at `;`, so only the prefix needs it. Key list
-    // mirrors isSensitiveKey (plus `code`, which stays query/JSON-only so
-    // numeric `code: 7` diagnostics survive key filtering).
-    // A40: `nonce`/`challenge` are OIDC exchange secrets (NativeChallenge,
-    // NativeExchangeRequest); camelCase `idToken`/`accessToken`/
-    // `refreshToken`/`csrfToken`/`deviceId` appear in raw JSON/query text
-    // where isSensitiveKey substring matching cannot see them. `id_?token`
-    // style covers snake + camel via (?i); bare `csrf` covers the prefix.
-    // A43: `verifier`/`code_verifier` are PKCE exchange secrets and `state`
-    // is the OIDC CSRF token; all three are exact query/JSON keys so
-    // `statement`/`stateFlow` diagnostics survive key filtering.
-    // A46: compound keys miss exact matching (`codeVerifier` !=
-    // `code_verifier`, `clientSecret` != `secret`, `sessionId` !=
-    // `session`, `authToken` != `auth`/`token`, `roomId`/`roomSecret`
-    // != `room`/`secret`, `endpointTicket` != `endpoint`/`ticket`,
-    // `codeChallenge` != `challenge`). `x_?y` covers snake + camel via
-    // (?i) like `refresh_?token`. `state` stays exact-only and `code`
-    // stays query/JSON-only per A43.
-    // A50: `endpointId`/`peerId` (snake + camel via `x_?y`) are Iroh peer
-    // identities; bare `endpoint`/`peer` never match them in free text
-    // because the value class requires `=` right after the key.
-    // A59: bare `sid`/`ssid` are session identifiers (mirror desktop D51);
-    // `session`/`session_?id` never match them in free text for the same
-    // reason. Exact-key in query/JSON regexes, so no lookalike risk there.
-    // A64: compound keys (`clientSid`, `deviceSsid`) leaked in free text
-    // while structured paths covered them via substring. The `[a-z0-9_]*`
-    // prefix is a suffix-wildcard: `=`/`":` anchors keep mid-word lookalikes
-    // (`reside`, `consider`) safe, since the key must end at the anchor.
-    // A66: hyphenated compounds (`client-sid`, `device-ssid`) missed the
-    // same free-text paths because the prefix class excluded `-`.
-    // `[a-z0-9_-]*` closes the gap; anchors still keep `reside`-class
-    // lookalikes safe, pinned by SentryScrubberAdversarialTest.
-    // A74: kebab-case compounds (`client-secret`, `code-verifier`,
-    // `auth-token`, `device-id`, `room-id`) missed the same free-text
-    // paths because compound keys used `_?` (underscore-only).
-    // `[-_]?` closes the gap across tokenQuery/tokenJson/tokenJsonSingle;
-    // `=`/`":` anchors still keep `client-side`-class lookalikes safe,
-    // pinned by SentryScrubberAdversarialTest.
-    private val tokenQuery = Regex("(?i)([?&#;](token|id[-_]?token|access[-_]?token|refresh[-_]?token|csrf[-_]?token|csrf|nonce|challenge|code[-_]?challenge|verifier|code[-_]?verifier|client[-_]?secret|session[-_]?id|[a-z0-9_-]*ssid|[a-z0-9_-]*sid|auth[-_]?token|room[-_]?id|room[-_]?secret|endpoint[-_]?ticket|endpoint[-_]?id|peer[-_]?id|state|device[-_]?id|invite|code|secret|cookie|session|api_key|apikey|auth|authorization|password|passwd|credential|private_key|privatekey|bearer|ticket|dsn|device|peer|endpoint|room)=)[^&\\s\"';]+")
+    // A27 through A74 kept fixed key lists for free-text `?key=` values and
+    // `"key": "…"` or `'key': '…'` JSON strings, and every compound form
+    // (`clientSecret`, `client-sid`, `auth_token`) needed its own entry.
+    // R54-L11: free text now asks the key rule that maps use, through
+    // namesSecretValue, so a compound key such as `clientToken` redacts as
+    // its map key does and the two cannot drift apart. Each regex below
+    // matches only a key position; a value is read only once the key names
+    // a secret. A query value ends at `&`, a quote, `;` or whitespace, as
+    // before, so it still covers a `?` or `#` inside the value.
+    private val textQueryKey = Regex("[?&#;]([A-Za-z0-9_.~-]+)=")
+    private val textQueryValue = Regex("[^&\\s\"';]+")
+    // R54-L11 rework: a JSON key holds no quote of either style, as no key in
+    // the A27 lists did. A pair of one style written inside a key of the
+    // other style (`"'sid':'…":"'"`) is then read as its own pair, and the
+    // outer key cannot take its value.
+    private val textJsonKey = Regex("\"([^\"']+)\"\\s*:\\s*\"")
+    private val textJsonValue = Regex("[^\"]+(?=\")")
+    // A31: single-quoted JSON (`{'token': 'abc'}`) from loose loggers.
+    private val textJsonSingleKey = Regex("'([^\"']+)'\\s*:\\s*'")
+    private val textJsonSingleValue = Regex("[^']+(?=')")
+    private val textJsonRules = listOf(
+        KeyedValueRule(textJsonKey, textJsonValue),
+        KeyedValueRule(textJsonSingleKey, textJsonSingleValue),
+    )
+    // R54-L11 rework: the L06 JSON rules stay unchanged and run before the
+    // key rule. With both quote styles in one text, the key rule can read a
+    // pair inside a value of the other style, or read a value as a key, and
+    // then stop at a different quote than these rules do. Running these first
+    // keeps every value L06 hid hidden, and the key rule only adds
+    // redactions. Do not extend these lists; a new key goes to isSensitiveKey.
     private val tokenJson = Regex(
         "(?i)(\"(token|id[-_]?token|access[-_]?token|refresh[-_]?token|csrf[-_]?token|csrf|nonce|challenge|code[-_]?challenge|verifier|code[-_]?verifier|client[-_]?secret|session[-_]?id|[a-z0-9_-]*ssid|[a-z0-9_-]*sid|auth[-_]?token|room[-_]?id|room[-_]?secret|endpoint[-_]?ticket|endpoint[-_]?id|peer[-_]?id|state|device[-_]?id|authorization|password|passwd|credential|secret|cookie|invite|session|api_key|apikey|auth|private_key|privatekey|bearer|ticket|dsn|device|peer|endpoint|room|code)\"\\s*:\\s*\")[^\"]+\"",
     )
@@ -92,6 +105,7 @@ object SentryScrubber {
     private val tokenJsonSingle = Regex(
         "(?i)('(token|id[-_]?token|access[-_]?token|refresh[-_]?token|csrf[-_]?token|csrf|nonce|challenge|code[-_]?challenge|verifier|code[-_]?verifier|client[-_]?secret|session[-_]?id|[a-z0-9_-]*ssid|[a-z0-9_-]*sid|auth[-_]?token|room[-_]?id|room[-_]?secret|endpoint[-_]?ticket|endpoint[-_]?id|peer[-_]?id|state|device[-_]?id|authorization|password|passwd|credential|secret|cookie|invite|session|api_key|apikey|auth|private_key|privatekey|bearer|ticket|dsn|device|peer|endpoint|room|code)'\\s*:\\s*')[^']+'",
     )
+    private val textQueryRules = listOf(KeyedValueRule(textQueryKey, textQueryValue))
     // A31: invites are `pomodorough1.` + base64url (`A-Za-z0-9_-`); the dot
     // is optional so pre-dot payloads still match. Strictly broader than
     // the old `[A-Za-z0-9]+` tail.
@@ -107,15 +121,32 @@ object SentryScrubber {
     private val dateLike = Regex("^\\d{4}-\\d{2}-\\d{2}$")
     private val longId = Regex("(?<!\\[)\\b[A-Za-z0-9_-]{20,}\\b(?!\\])")
     private val requestParameter = Regex("(^[?#]?|[&#;])([^&#;]*)")
+    // R54-L10: desktop `_scrub_urls` applies the query key rule after every
+    // `?`, `&`, `#` or `;` in free text, up to the next separator.
+    private val textQueryParameter = Regex("[?&#;]([^?&#;]*)")
 
     fun scrubText(value: String?): String? {
         if (value == null) return null
-        var scrubbed = value
-        scrubbed = email.replace(scrubbed, REDACTED_EMAIL)
-        scrubbed = authScheme.replace(scrubbed, REDACTED_AUTHORIZATION)
-        scrubbed = tokenQuery.replace(scrubbed, "$1$REDACTED_TOKEN")
-        scrubbed = tokenJson.replace(scrubbed, "$1$REDACTED_TOKEN\"")
+        // R54-L10: JSON strings go first. A quote ends a JSON value but not a
+        // query parameter, so the key rule would otherwise take the closing
+        // quote into a redacted parameter, and the JSON rule could no longer
+        // find the value it hides.
+        var scrubbed = tokenJson.replace(value, "$1$REDACTED_TOKEN\"")
         scrubbed = tokenJsonSingle.replace(scrubbed, "$1$REDACTED_TOKEN'")
+        scrubbed = scrubKeyedValues(scrubbed, textJsonRules)
+        // Literal addresses may contain %40 in their local part. Hide the whole
+        // literal address first, before interpreting an encoded delimiter.
+        scrubbed = literalEmail.replace(scrubbed) { if (it.groups[1] == null) it.value else REDACTED_EMAIL }
+        scrubbed = email.replace(scrubbed) { if (it.groups[1] == null) it.value else REDACTED_EMAIL }
+        scrubbed = authScheme.replace(scrubbed, REDACTED_AUTHORIZATION)
+        // R54-L10: the key rule runs before the value rule, which would
+        // otherwise take a later parameter into a value and hide its key.
+        // Email and auth matches never cross a separator, and a key they
+        // rewrite was already outside the canonical charset, so running them
+        // first redacts the same parameters. Both rules then read a value as
+        // the value rule did before L10.
+        scrubbed = scrubTextQueryKeys(scrubbed)
+        scrubbed = scrubKeyedValues(scrubbed, textQueryRules)
         scrubbed = invite.replace(scrubbed, REDACTED_INVITE)
         // Truncation before phone/IP: UUID tails are long digit runs that
         // would otherwise match the phone candidate pattern.
@@ -125,6 +156,75 @@ object SentryScrubber {
         scrubbed = ipv4.replace(scrubbed, REDACTED_IP)
         return scrubbed
     }
+
+    // R54-L10: free text never decodes, so the raw key takes the request key
+    // rule. An escape or `+` in a raw key is outside the canonical charset and
+    // redacts the parameter, as desktop filters every escape in free text.
+    // R54-L10 rework: the redaction also covers a secret value as far as the
+    // value rule reads it, past `#` and `?`. The parameter alone stops there,
+    // so its key would be gone while the value's tail stayed in the text.
+    private fun scrubTextQueryKeys(value: String): String {
+        val scrubbed = StringBuilder()
+        var copied = 0
+        var parameter = textQueryParameter.find(value)
+        while (parameter != null) {
+            val rawKey = parameter.groupValues[1].substringBefore('=')
+            if (isPrivateRequestKey(parameter.groupValues[1], rawKey)) {
+                scrubbed.append(value, copied, parameter.range.first + 1).append(REDACTED)
+                copied = maxOf(parameter.range.last + 1, secretValueEnd(value, parameter, rawKey))
+                parameter = textQueryParameter.find(value, copied)
+            } else {
+                parameter = parameter.next()
+            }
+        }
+        return scrubbed.append(value, copied, value.length).toString()
+    }
+
+    // The end of the value that the value rule would redact after this
+    // parameter's key, or 0 when it redacts none: the key is outside the
+    // canonical charset, names no secret, or has an empty value.
+    private fun secretValueEnd(text: String, parameter: MatchResult, rawKey: String): Int {
+        if (!canonicalQueryKey.matches(rawKey) || !namesSecretValue(rawKey)) return 0
+        val valueStart = parameter.range.first + rawKey.length + 2
+        return textQueryValue.matchAt(text, valueStart)?.let { it.range.last + 1 } ?: 0
+    }
+
+    // R54-L11: a declined key resumes the search one character later, as a
+    // key alternation would, so a key that starts inside it is still found.
+    // The value is read only after the key names a secret: a query value can
+    // run to the end of the text, so reading it for every declined key would
+    // make the scan quadratic. A redacted value is consumed whole, as the
+    // replaced regex consumed it.
+    // R54-L11 rework: the rules share one left-to-right scan, and the
+    // earliest key of any rule is read first. A value of one quote style
+    // then cannot take the closing quote of an earlier value of the other
+    // style, as it could when each style had its own pass.
+    private fun scrubKeyedValues(text: String, rules: List<KeyedValueRule>): String {
+        val scrubbed = StringBuilder()
+        var copied = 0
+        val keys = rules.mapTo(mutableListOf()) { it.key.find(text) }
+        while (true) {
+            val index = keys.indices.minByOrNull { keys[it]?.range?.first ?: Int.MAX_VALUE } ?: break
+            val keyMatch = keys[index] ?: break
+            val rule = rules[index]
+            val secret = keyMatch.takeIf { namesSecretValue(it.groupValues[1]) }
+                ?.let { rule.value.matchAt(text, it.range.last + 1) }
+            if (secret == null) {
+                keys[index] = rule.key.find(text, keyMatch.range.first + 1)
+                continue
+            }
+            scrubbed.append(text, copied, secret.range.first).append(REDACTED_TOKEN)
+            copied = secret.range.last + 1
+            for (next in keys.indices) {
+                val start = keys[next]?.range?.first ?: continue
+                if (start < copied) keys[next] = rules[next].key.find(text, copied)
+            }
+        }
+        return scrubbed.append(text, copied, text.length).toString()
+    }
+
+    /** A key position, and the value that follows it when the key names a secret. */
+    private class KeyedValueRule(val key: Regex, val value: Regex)
 
     private fun scrubPhones(value: String): String = phoneCandidate.replace(value) { match ->
         val candidate = match.value
@@ -139,11 +239,12 @@ object SentryScrubber {
 
     fun scrubBreadcrumb(crumb: Breadcrumb): Breadcrumb {
         crumb.message = scrubText(crumb.message)
-        val data = crumb.data.toMap()
-        data.forEach { (key, value) ->
-            if (value == null) return@forEach
-            crumb.setData(key, scrubAny(key, value))
-        }
+        // R54-L03: `data` is the breadcrumb's live map, which holds no null
+        // values. Clearing it drops every raw key, whatever its type, before
+        // the scrubbed entries return under policy-safe names.
+        val cleaned = scrubObjectMap(crumb.data.toMap())
+        crumb.data.clear()
+        cleaned.forEach { (key, value) -> if (value != null) crumb.setData(key, value) }
         return crumb
     }
 
@@ -175,27 +276,96 @@ object SentryScrubber {
         val normalized = key.lowercase()
         if (normalized == "email") return REDACTED_EMAIL
         if (isSensitiveKey(key)) return REDACTED
+        // R54-L06: breadcrumb and extras query parts are recorded without
+        // `?` or `#`, so they take the decoding request rule instead of free
+        // text, which only sees a `[?&#;]token=` prefix.
+        if (key in queryPartKeys) return scrubRequestParameters(value)
         return scrubText(value)
     }
 
-    private fun scrubAny(parentKey: String, value: Any?): Any? {
+    // R54-L03: every map the scrubber keeps applies the shared key policy,
+    // so an unsafe name becomes a numbered placeholder with a redacted value.
+    private fun scrubObjectMap(entries: Map<*, Any?>): Map<String, Any?> =
+        SentryKeyPolicy.scrubKeys(entries, REDACTED) { key, value -> scrubAny(key, value) }
+
+    private fun scrubTextMap(entries: Map<*, String?>): Map<String, String?> =
+        SentryKeyPolicy.scrubKeys(entries, REDACTED) { key, value ->
+            value?.let { scrubDataValue(key, it) ?: REDACTED }
+        }
+
+    // `User.data` declares its values @NotNull, so this variant never yields null.
+    private fun scrubUserData(entries: Map<*, String>): Map<String, String> =
+        SentryKeyPolicy.scrubKeys(entries, REDACTED) { key, value -> scrubDataValue(key, value) ?: REDACTED }
+
+    // R54-L03: `ancestors` holds the containers above `value` by identity,
+    // so a cycle is redacted where it closes instead of being walked again.
+    private fun scrubAny(parentKey: String, value: Any?, ancestors: List<Any> = emptyList()): Any? {
         if (value == null) return null
-        // A31: typed contexts survive key filtering; `device` is sensitive
-        // as a data key but the typed `device`/`app`/`os` objects must reach
-        // their dedicated scrubbers below, not become REDACTED here.
-        if (value is Device || value is App || value is OperatingSystem) return value
         if (isSensitiveKey(parentKey)) return REDACTED
-        return when (value) {
-            is String -> scrubDataValue(parentKey, value) ?: REDACTED
-            is Map<*, *> -> value.entries.associate { (childKey, childValue) ->
-                val key = childKey.toString()
-                key to scrubAny(key, childValue)
-            }
-            is Iterable<*> -> value.map { scrubAny(parentKey, it) }
-            is Array<*> -> value.map { scrubAny(parentKey, it) }
-            else -> value
+        if (ancestors.size > SCRUB_DEPTH_LIMIT || ancestors.any { it === value }) return REDACTED
+        return scrubValueShape(parentKey, value, ancestors + value)
+    }
+
+    private fun scrubValueShape(parentKey: String, value: Any, path: List<Any>): Any? = when (value) {
+        is String -> scrubDataValue(parentKey, value) ?: REDACTED
+        is Number, is Boolean -> value
+        is Enum<*> -> value.name
+        is Map<*, *> -> scrubEntries(parentKey, value, path)
+        is Iterable<*> -> scrubItems(parentKey, value.toList(), path)
+        is Array<*> -> scrubItems(parentKey, value.asList(), path)
+        // R54-L03: any other object would reach the SDK reflection
+        // serializer, which writes its field names and map keys verbatim.
+        // Typed contexts are kept only at the top level of `contexts`.
+        else -> REDACTED
+    }
+
+    // R54-L06: a query map's values follow the pair rule, as desktop
+    // `_scrub_mapping(value, depth, _scrub_query_parameter_value)` does.
+    private fun scrubEntries(parentKey: String, entries: Map<*, *>, path: List<Any>): Map<String, Any?> {
+        val queryPart = parentKey in queryPartKeys
+        return SentryKeyPolicy.scrubKeys(entries, REDACTED) { key, child ->
+            if (queryPart) scrubQueryParameterValue(key, child, path) else scrubAny(key, child, path)
         }
     }
+
+    // R54-L06: desktop `_scrub_query_parameter_value`. The empty key passes
+    // the key policy but names no parameter, so its value stays redacted.
+    private fun scrubQueryParameterValue(key: String, value: Any?, path: List<Any>): Any? =
+        if (canonicalQueryKey.matches(key)) scrubAny(key, value, path) else REDACTED
+
+    // R54-L03: a query pair key follows the map key rule, with placeholders
+    // numbered within its list (desktop `_scrub_query_entry`). Any other
+    // entry can be one half of a flattened pair (`["token", secret]`), so it
+    // stays redacted.
+    private fun scrubItems(parentKey: String, items: List<*>, path: List<Any>): List<Any?> {
+        if (parentKey !in queryPartKeys) return items.map { scrubAny(parentKey, it, path) }
+        var redactedKeys = 0
+        return items.map { entry ->
+            val pair = ((entry as? List<*>) ?: (entry as? Array<*>)?.asList())?.takeIf { it.size == 2 }
+            val key = pair?.first()
+            when {
+                pair == null -> REDACTED
+                key is String && SentryKeyPolicy.isDiagnosticName(key) ->
+                    listOf(key, scrubQueryParameterValue(key, pair[1], path.plusElement(pair)))
+                else -> listOf(SentryKeyPolicy.redactedKey(++redactedKeys), REDACTED)
+            }
+        }
+    }
+
+    // The substring hits of isSensitiveKey; see the A30 through A43 notes
+    // there. `session`/`ssid`/`sid` are in isSessionIdentifierKey.
+    private val sensitiveKeyParts = listOf(
+        "token", "nonce", "challenge", "verifier", "csrf", "authorization", "auth", "bearer", "invite",
+        "ticket", "dsn", "cookie", "secret", "private_key", "privatekey", "api_key", "apikey", "password",
+        "passwd", "credential", "device", "peer", "endpoint", "room",
+    )
+
+    // R54-L11: desktop `_CODE_SUFFIX_ALLOWLIST` and `_KEY_SUFFIX_ALLOWLIST`
+    // (singular forms; plurals match too). `keyboard` never ends with `key`.
+    // `status_code` is Android-only: the SDK HTTP breadcrumb field keeps its
+    // value, as R54L03KeyPrivacyTest pins. Desktop filters it.
+    private val codeSuffixAllowlist = setOf("errorcode", "statuscode", "exitcode", "status_code")
+    private val keySuffixAllowlist = listOf("monkey", "donkey", "turkey", "jockey", "whiskey", "hockey")
 
     private fun isSensitiveKey(key: String): Boolean {
         val normalized = key.lowercase()
@@ -217,39 +387,54 @@ object SentryScrubber {
         // A43: `verifier` is a PKCE exchange secret (substring covers
         // `code_verifier`/`codeVerifier`); `state` is exact-only so
         // `statement`/`stateFlow` diagnostics survive key filtering.
-        return normalized.contains("token") ||
-            normalized.contains("nonce") ||
-            normalized.contains("challenge") ||
-            normalized.contains("verifier") ||
-            normalized.contains("csrf") ||
-            normalized.contains("authorization") ||
-            normalized.contains("auth") ||
-            normalized.contains("bearer") ||
-            normalized.contains("invite") ||
-            normalized.contains("ticket") ||
-            normalized.contains("dsn") ||
-            normalized.contains("cookie") ||
-            normalized.contains("secret") ||
-            normalized.contains("private_key") ||
-            normalized.contains("privatekey") ||
+        // R54-L11: desktop `_sensitive_key` also names `*code`, `*key`,
+        // bare `value`, and signature keys.
+        return sensitiveKeyParts.any(normalized::contains) ||
             isSessionIdentifierKey(normalized) ||
-            normalized.contains("api_key") ||
-            normalized.contains("apikey") ||
-            normalized.contains("password") ||
-            normalized.contains("passwd") ||
-            normalized.contains("credential") ||
-            normalized.contains("device") ||
-            normalized.contains("peer") ||
-            normalized.contains("endpoint") ||
-            normalized.contains("room") ||
+            isCodeSuffixKey(normalized) ||
+            isKeySuffixKey(normalized) ||
+            isSignatureKey(normalized) ||
             normalized == "state" ||
-            normalized == "email"
+            normalized == "email" ||
+            normalized == "value"
     }
+
+    // R54-L11: desktop `_is_code_key` without its exact `code`, which stays
+    // out of map keys (A30).
+    private fun isCodeSuffixKey(normalized: String): Boolean {
+        if (normalized == "code" || !normalized.endsWith("code")) return false
+        if (normalized in codeSuffixAllowlist) return false
+        // Codec operations share the suffix but carry no secret.
+        return !normalized.endsWith("encode") && !normalized.endsWith("decode") && "codec" !in normalized
+    }
+
+    // R54-L11: desktop `_is_key_suffix` (D39). Exact or suffix `key` and
+    // `keys` cover `clientKey`, `signingKey`, and `private_key` in one rule;
+    // `monkey`-class words carry no secret. `publicKey` stays filtered
+    // fail-closed, as on desktop.
+    private fun isKeySuffixKey(normalized: String): Boolean {
+        if (normalized == "key" || normalized == "keys") return true
+        if (!normalized.endsWith("key") && !normalized.endsWith("keys")) return false
+        return keySuffixAllowlist.none { normalized.endsWith(it) || normalized.endsWith(it + "s") }
+    }
+
+    // R54-L11: desktop `_is_signature_key`. Signed URLs carry their
+    // credential in `sig` (Azure SAS), `Signature` (GCS, CloudFront), or
+    // `X-Amz-Signature` (S3 SigV4). Exact `sig` keeps `signal` and `design`.
+    private fun isSignatureKey(normalized: String): Boolean =
+        normalized == "sig" || normalized.endsWith("signature") || normalized.endsWith("signatures")
+
+    // R54-L11: free text and request queries name a secret by the map key
+    // rule, or by exact `code`. `code` stays out of map keys so mechanism
+    // `code: 7` diagnostics survive key filtering.
+    private fun namesSecretValue(key: String): Boolean =
+        isSensitiveKey(key) || key.equals("code", ignoreCase = true)
 
     // A59: `session`/`ssid`/`sid` are session identifiers (mirror desktop
     // D51). Substring on purpose (`ssid` contains `sid`); over-filtering a
     // display string (`reside`, `consider`) beats leaking a session, the
-    // same tradeoff desktop accepts. Query/JSON regexes stay exact-key.
+    // same tradeoff desktop accepts. R54-L11: free-text query and JSON keys
+    // now take the same rule, as desktop free text does.
     private fun isSessionIdentifierKey(normalized: String): Boolean =
         normalized.contains("session") ||
             normalized.contains("ssid") ||
@@ -271,16 +456,11 @@ object SentryScrubber {
         // scrubDataValue so sensitive keys stay opaque. No production file
         // outside `crash/` calls `setTag`/`configureScope` (pinned by
         // SentryNoUserOrContextAuditTest); the SDK never adds tags itself.
-        event.tags?.toMap()?.forEach { (key, value) ->
-            event.setTag(key, scrubDataValue(key, value) ?: REDACTED)
-        }
+        event.tags?.let { tags -> event.tags = scrubTextMap(tags) }
     }
 
     private fun scrubEventExtras(event: SentryEvent) {
-        event.extras?.toMap()?.forEach { (key, value) ->
-            if (value == null) return@forEach
-            event.setExtra(key, scrubAny(key, value))
-        }
+        event.extras?.let { extras -> event.extras = scrubObjectMap(extras) }
     }
 
     private fun scrubEventExceptions(event: SentryEvent) {
@@ -294,10 +474,8 @@ object SentryScrubber {
 
     private fun scrubStackTrace(trace: SentryStackTrace) {
         trace.frames?.forEach(::scrubFrame)
-        trace.registers?.toMap()?.forEach { (key, value) ->
-            trace.registers = trace.registers?.toMutableMap()?.also {
-                it[key] = scrubText(value) ?: REDACTED
-            }
+        trace.registers = trace.registers?.let { registers ->
+            SentryKeyPolicy.scrubKeys(registers, REDACTED) { _, value -> scrubText(value) ?: REDACTED }
         }
     }
 
@@ -310,37 +488,35 @@ object SentryScrubber {
         frame.`package` = scrubText(frame.`package`)
         frame.preContext = frame.preContext?.map { scrubText(it) ?: REDACTED }
         frame.postContext = frame.postContext?.map { scrubText(it) ?: REDACTED }
-        frame.vars?.toMap()?.forEach { (key, value) ->
-            if (value == null) return@forEach
-            frame.vars = frame.vars?.toMutableMap()?.also {
-                it[key] = scrubAny(key, value) ?: REDACTED
-            }
-        }
+        frame.vars = frame.vars?.let(::scrubObjectMap)
     }
 
     private fun scrubMechanism(mechanism: Mechanism) {
         mechanism.description = scrubText(mechanism.description)
         mechanism.helpLink = scrubText(mechanism.helpLink)
-        mechanism.data?.toMap()?.forEach { (key, value) ->
-            if (value == null) return@forEach
-            mechanism.data = mechanism.data?.toMutableMap()?.also {
-                it[key] = scrubAny(key, value) ?: REDACTED
-            }
-        }
+        mechanism.data = mechanism.data?.let(::scrubObjectMap)
     }
 
     private fun scrubEventContexts(event: SentryEvent) {
         val contexts = event.contexts ?: return
-        contexts.entrySet().toList().forEach { entry ->
-            val key = entry.key
-            val value = entry.value ?: return@forEach
-            val scrubbed = scrubAny(key, value)
-            if (scrubbed !== value) contexts.put(key, scrubbed)
-        }
+        // R54-L03: contexts hold no null values, so every raw name is removed
+        // before the scrubbed entries return under policy-safe names.
+        val raw = contexts.entrySet().associate { it.key to it.value }
+        val cleaned = SentryKeyPolicy.scrubKeys(raw, REDACTED, ::scrubContextValue)
+        raw.keys.forEach { contexts.remove(it) }
+        cleaned.forEach { (name, value) -> if (value != null) contexts.put(name, value) }
         contexts.device?.let(::scrubDevice)
         contexts.app?.let(::scrubApp)
         contexts.operatingSystem?.let(::scrubOperatingSystem)
     }
+
+    // A31: typed contexts survive key filtering; `device` is sensitive as a
+    // data key, but the typed `device`/`app`/`os` objects must reach their
+    // dedicated scrubbers below, not become REDACTED here.
+    // R54-L03: every typed SDK context (trace, runtime, gpu, device, app,
+    // os) keeps its own serializer; untyped context values are scrubbed.
+    private fun scrubContextValue(name: String, value: Any?): Any? =
+        if (value is JsonSerializable) value else scrubAny(name, value)
 
     private fun scrubDevice(device: Device) {
         device.name = scrubText(device.name)
@@ -358,22 +534,12 @@ object SentryScrubber {
         device.model = scrubText(device.model)
         device.modelId = scrubText(device.modelId)
         device.archs = device.archs?.map { scrubText(it) ?: REDACTED }?.toTypedArray()
-        device.unknown?.toMap()?.forEach { (key, value) ->
-            if (value == null) return@forEach
-            device.unknown = device.unknown?.toMutableMap()?.also {
-                it[key] = scrubAny(key, value) ?: REDACTED
-            }
-        }
+        device.unknown = device.unknown?.let(::scrubObjectMap)
     }
 
     private fun scrubApp(app: App) {
         app.viewNames = app.viewNames?.map { scrubText(it) ?: REDACTED }
-        app.unknown?.toMap()?.forEach { (key, value) ->
-            if (value == null) return@forEach
-            app.unknown = app.unknown?.toMutableMap()?.also {
-                it[key] = scrubAny(key, value) ?: REDACTED
-            }
-        }
+        app.unknown = app.unknown?.let(::scrubObjectMap)
     }
 
     private fun scrubOperatingSystem(os: OperatingSystem) {
@@ -382,12 +548,7 @@ object SentryScrubber {
         os.build = scrubText(os.build)
         os.kernelVersion = scrubText(os.kernelVersion)
         os.rawDescription = scrubText(os.rawDescription)
-        os.unknown?.toMap()?.forEach { (key, value) ->
-            if (value == null) return@forEach
-            os.unknown = os.unknown?.toMutableMap()?.also {
-                it[key] = scrubAny(key, value) ?: REDACTED
-            }
-        }
+        os.unknown = os.unknown?.let(::scrubObjectMap)
     }
 
     private fun scrubEventThreads(event: SentryEvent) {
@@ -408,19 +569,13 @@ object SentryScrubber {
         request.cookies = null
         request.fragment = scrubRequestParameters(request.fragment)
         request.data = scrubAny("data", request.data)
-        request.headers = request.headers?.filterKeys {
+        // R54-L03: the key policy runs first, so the cookie filter below only
+        // ever reads String names.
+        request.headers = request.headers?.let(::scrubTextMap)?.filterKeys {
             !it.equals("Cookie", ignoreCase = true) && !it.equals("Set-Cookie", ignoreCase = true)
-        }?.mapValues { (key, value) -> scrubDataValue(key, value) ?: REDACTED }
-        request.envs?.toMap()?.forEach { (key, value) ->
-            request.envs = request.envs?.toMutableMap()?.also {
-                it[key] = scrubDataValue(key, value) ?: REDACTED
-            }
         }
-        request.others?.toMap()?.forEach { (key, value) ->
-            request.others = request.others?.toMutableMap()?.also {
-                it[key] = scrubDataValue(key, value) ?: REDACTED
-            }
-        }
+        request.envs = request.envs?.let(::scrubTextMap)
+        request.others = request.others?.let(::scrubTextMap)
     }
 
     private fun scrubRequestUrl(value: String?): String? {
@@ -442,7 +597,8 @@ object SentryScrubber {
             val rawKey = parameter.substringBefore('=')
             val decodedKey = fullyDecodeRequestComponent(rawKey)
             if (isAmbiguousRequestKey(decodedKey)) return REDACTED
-            if (isSensitiveKey(decodedKey) || decodedKey.equals("code", ignoreCase = true)) {
+            if (isPrivateRequestKey(parameter, decodedKey)) return REDACTED
+            if (namesSecretValue(decodedKey)) {
                 if (rawKey.contains("%25", ignoreCase = true)) return REDACTED
                 return "$rawKey=$REDACTED_TOKEN"
             }
@@ -465,6 +621,18 @@ object SentryScrubber {
         return decodedKey.any { it == '=' || it == '&' || it == '#' || it == ';' || it == '?' } ||
             decodedKey.contains(' ') ||
             decodedKey.contains('%')
+    }
+
+    // R54-L06: desktop keeps a decoded key only in the canonical charset. A
+    // tab, control, quote, bracket, `@`, or non-ASCII letter before `=` hides
+    // the real name. A key that free text would rewrite (an invite, phone,
+    // or long id) is a private name. Either way the whole keyed parameter is
+    // redacted, which also keeps a second scrub pass from changing it again.
+    // A valueless part (`#/settings`) and the empty key (`=v`) keep the text
+    // rule, as on desktop.
+    private fun isPrivateRequestKey(parameter: String, decodedKey: String): Boolean {
+        if ('=' !in parameter || decodedKey.isEmpty()) return false
+        return !canonicalQueryKey.matches(decodedKey) || scrubText(decodedKey) != decodedKey
     }
 
     private fun fullyDecodeRequestComponent(value: String): String {
@@ -533,17 +701,8 @@ object SentryScrubber {
         user.ipAddress = REDACTED
         user.name = user.name?.let { scrubText(it) }
         user.geo?.let(::scrubGeo)
-        user.data?.toMap()?.forEach { (key, value) ->
-            user.data = user.data?.toMutableMap()?.also {
-                it[key] = scrubDataValue(key, value) ?: REDACTED
-            }
-        }
-        user.unknown?.toMap()?.forEach { (key, value) ->
-            if (value == null) return@forEach
-            user.unknown = user.unknown?.toMutableMap()?.also {
-                it[key] = scrubAny(key, value) ?: REDACTED
-            }
-        }
+        user.data = user.data?.let(::scrubUserData)
+        user.unknown = user.unknown?.let(::scrubObjectMap)
     }
 
     private fun scrubGeo(geo: Geo) {
@@ -552,11 +711,6 @@ object SentryScrubber {
         if (geo.city != null) geo.city = REDACTED
         if (geo.region != null) geo.region = REDACTED
         geo.countryCode = scrubText(geo.countryCode)
-        geo.unknown?.toMap()?.forEach { (key, value) ->
-            if (value == null) return@forEach
-            geo.unknown = geo.unknown?.toMutableMap()?.also {
-                it[key] = scrubAny(key, value) ?: REDACTED
-            }
-        }
+        geo.unknown = geo.unknown?.let(::scrubObjectMap)
     }
 }

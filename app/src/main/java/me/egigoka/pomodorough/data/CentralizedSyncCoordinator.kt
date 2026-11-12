@@ -18,6 +18,11 @@ internal data class CentralizedSyncSnapshot(
     val knownTasks: Map<String, FocusTask>,
     val settings: TimerSettings,
     val selectedPhaseGeneration: Long,
+    // UX round 2, item 2: TimerRepository.currentProjectionBase() is the only
+    // owner of the base selection and duration rule. Core rejects a base
+    // selection that is absent from the base tasks, so the coordinator must
+    // never rebuild the base from the optimistic local selection.
+    val projectionBase: CoreProjectionBase,
 )
 
 internal data class CentralizedCanonicalState(
@@ -248,7 +253,7 @@ internal class CentralizedSyncCoordinator(
             sampledLocal = input.sampledLocal,
         )
         val projection = projectionDispatcher.apply(
-            snapshot.projectionBase(),
+            snapshot.projectionBase,
             reconciled.projectionQueues.toCorePending(snapshot.local.deviceId),
             input.projectionNow,
         )
@@ -1119,15 +1124,6 @@ internal class CentralizedSyncCoordinator(
         durationOperations.map(DurationOperation::id),
         autoStartOperations.orEmpty().map(AutoStartOperation::id),
         selectedTaskOperations.orEmpty().map(SelectedTaskOperation::id),
-    )
-
-    private fun CentralizedSyncSnapshot.projectionBase() = CoreProjectionBase(
-        canonicalTimer = canonicalTimer,
-        history = canonicalHistory,
-        tasks = canonicalTasks,
-        durationsMs = settings.effectiveDurationsMs(),
-        autoStartBreaks = canonicalAutoStartBreaks,
-        selectedTaskId = local.selectedTaskId,
     )
 
     private companion object {

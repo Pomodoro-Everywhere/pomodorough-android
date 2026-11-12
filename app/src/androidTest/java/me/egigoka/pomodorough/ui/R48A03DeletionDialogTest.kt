@@ -237,6 +237,7 @@ class R48A03DeletionDialogTest {
             onSetReplicationMode = {}, onCreateIrohRoom = {}, onJoinIrohRoom = {},
             onLeaveIrohRoom = {}, onRefreshIrohInvite = {}, onSyncIrohNow = {},
             onShareIrohInvite = {},
+            onRetryStartup = {},
             onDeleteAccount = { calls += it },
         )
     }

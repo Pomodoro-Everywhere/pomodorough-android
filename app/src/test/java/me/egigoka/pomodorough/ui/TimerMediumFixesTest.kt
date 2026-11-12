@@ -23,27 +23,28 @@ class TimerMediumFixesTest {
 
     @Test
     fun orbitDeductionGrowsWithFontAndMessages() {
-        val base = portraitOrbitDeduction(1f, false)
+        val base = portraitOrbitDeduction(1f, 0.dp)
         assertEquals(230.dp, base)
-        assertTrue(portraitOrbitDeduction(1.3f, false) > base)
-        assertTrue(portraitOrbitDeduction(2f, false) > portraitOrbitDeduction(1.3f, false))
-        assertTrue(portraitOrbitDeduction(1f, true) > base)
+        assertTrue(portraitOrbitDeduction(1.3f, 0.dp) > base)
+        assertTrue(portraitOrbitDeduction(2f, 0.dp) > portraitOrbitDeduction(1.3f, 0.dp))
+        // UX round 2, M2: the deduction is the measured height of the message cards.
+        assertEquals(base + 118.dp, portraitOrbitDeduction(1f, 118.dp))
     }
 
     @Test
     fun orbitSizeShrinksWithHeaderPressure() {
-        val roomy = portraitOrbitSize(500.dp, 600.dp, 1f, false)
-        val largeFont = portraitOrbitSize(500.dp, 600.dp, 1.3f, false)
-        val withMessages = portraitOrbitSize(500.dp, 600.dp, 1f, true)
+        val roomy = portraitOrbitSize(500.dp, 600.dp, 1f, 0.dp)
+        val largeFont = portraitOrbitSize(500.dp, 600.dp, 1.3f, 0.dp)
+        val withMessages = portraitOrbitSize(500.dp, 600.dp, 1f, 64.dp)
         assertTrue(largeFont < roomy)
         assertTrue(withMessages < roomy)
     }
 
     @Test
     fun orbitSizeStaysInReadableBand() {
-        assertEquals(318.dp, portraitOrbitSize(1200.dp, 1200.dp, 1f, false))
-        assertEquals(132.dp, portraitOrbitSize(300.dp, 400.dp, 2f, true))
-        assertTrue(portraitOrbitSize(800.dp, 320.dp, 1f, false) <= 318.dp)
+        assertEquals(318.dp, portraitOrbitSize(1200.dp, 1200.dp, 1f, 0.dp))
+        assertEquals(132.dp, portraitOrbitSize(300.dp, 400.dp, 2f, 64.dp))
+        assertTrue(portraitOrbitSize(800.dp, 320.dp, 1f, 0.dp) <= 318.dp)
     }
 
     @Test

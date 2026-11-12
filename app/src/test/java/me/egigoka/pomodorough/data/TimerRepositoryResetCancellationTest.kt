@@ -29,15 +29,16 @@ class TimerRepositoryResetCancellationTest {
 
     @Test
     fun switchLogoutCancellationPropagatesBeforeNotice() {
-        // A61: cancel must throw before auth.clear() and the logoutError
+        // A61: cancel must throw before the credential clear and the logoutError
         // notice; ordinary logout errors still surface via logoutError?.let.
+        // R54-A04: the clear goes through retireRejectedCredentials().
         val window = functionWindow("fun cancelAccountSwitchInternal(")
         val catching = window.indexOfFirst { it.contains("runCatching { auth.logout() }") }
         assertTrue(catching >= 0)
         val guard = window.indexOfFirst { it.contains("is CancellationException") }
         assertTrue(guard > catching)
         assertTrue(window[guard].contains("throw"))
-        assertTrue(window.indexOfFirst { it.contains("auth.clear()") } > guard)
+        assertTrue(window.indexOfFirst { it.contains("retireRejectedCredentials()") } > guard)
         assertTrue(window.any { it.contains("logoutError?.let") })
     }
 

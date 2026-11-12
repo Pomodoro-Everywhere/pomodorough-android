@@ -2,6 +2,7 @@ package me.egigoka.pomodorough.data.iroh
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
+import me.egigoka.pomodorough.data.local.LegacyDependencyAdoptionPending
 import me.egigoka.pomodorough.data.local.LocalStateEntity
 import me.egigoka.pomodorough.data.local.LocalWorkspaceSnapshot
 import me.egigoka.pomodorough.data.local.PendingAutoStartOperationEntity
@@ -12,8 +13,20 @@ import me.egigoka.pomodorough.data.local.PendingSelectedTaskOperationEntity
 import me.egigoka.pomodorough.data.local.PendingTaskOperationEntity
 
 internal object WorkspaceCodec {
-    fun encode(snapshot: LocalWorkspaceSnapshot): String {
-        return IrohJson.strict.encodeToString(snapshot.toStored())
+    /**
+     * The centralized workspace stashed while a room is active. It keeps the R43-A03 safe base,
+     * so leaving the room rebuilds from the same canonical inputs it had before joining.
+     */
+    fun encodeReturnState(snapshot: LocalWorkspaceSnapshot): String = encode(snapshot, carrySafeBase = true)
+
+    /** R52-A02: a room workspace owns its canonical settings, so it never stores a centralized safe base. */
+    fun encodeRoomState(snapshot: LocalWorkspaceSnapshot): String = encode(snapshot, carrySafeBase = false)
+
+    private fun encode(snapshot: LocalWorkspaceSnapshot, carrySafeBase: Boolean): String {
+        // A deletion marker here means the workspace is mid-deletion. A background peer pass can
+        // reach this between the marker write and the Iroh quarantine; refuse to stash it.
+        require(snapshot.local.accountDeletionState == null) { "A workspace in account deletion cannot be stashed" }
+        return IrohJson.strict.encodeToString(snapshot.toStored(carrySafeBase))
     }
 
     fun decode(value: String): LocalWorkspaceSnapshot {
@@ -56,6 +69,25 @@ private data class StoredLocalState(
     val serverClockSampleElapsedRealtimeMs: Long?,
     val serverClockBootId: String?,
     val lastUuidV7: String?,
+    // Absent only in states written before the codec carried the legacy dependency markers.
+    // Every current encode writes an object, so absence is distinct from two null markers.
+    val legacyDependency: StoredLegacyDependency? = null,
+    // Present only in return states. Room states and states written before it decode as null.
+    val safeBase: StoredSafeBase? = null,
+)
+
+@Serializable
+private data class StoredSafeBase(
+    val durationsJson: String? = null,
+    val selectedTaskId: String? = null,
+    val canonicalHeadWallMs: Long? = null,
+    val canonicalHeadCounter: Long? = null,
+)
+
+@Serializable
+private data class StoredLegacyDependency(
+    val inputJson: String? = null,
+    val resultJson: String? = null,
 )
 
 @Serializable
@@ -73,6 +105,7 @@ private data class StoredCommand(
     val taskId: String?,
     val generatedByFinishCommandId: String?,
     val physicalOccurredAt: String?,
+    val neverSent: Boolean = false,
 )
 
 @Serializable
@@ -84,6 +117,7 @@ private data class StoredTaskOperation(
     val occurredAt: String,
     val hlcWallMs: Long,
     val hlcCounter: Long,
+    val neverSent: Boolean = false,
 )
 
 @Serializable
@@ -94,6 +128,7 @@ private data class StoredDurationOperation(
     val occurredAt: String,
     val hlcWallMs: Long,
     val hlcCounter: Long,
+    val neverSent: Boolean = false,
 )
 
 @Serializable
@@ -104,6 +139,7 @@ private data class StoredAutoStartOperation(
     val occurredAt: String,
     val hlcWallMs: Long,
     val hlcCounter: Long,
+    val neverSent: Boolean = false,
 )
 
 @Serializable
@@ -113,6 +149,7 @@ private data class StoredSelectedTaskOperation(
     val occurredAt: String,
     val hlcWallMs: Long,
     val hlcCounter: Long,
+    val neverSent: Boolean = false,
 )
 
 @Serializable
@@ -131,7 +168,7 @@ private data class StoredBootstrapResolution(
     val selectedTaskOperationsJson: String? = null,
 )
 
-private fun LocalWorkspaceSnapshot.toStored() = StoredWorkspace(
+private fun LocalWorkspaceSnapshot.toStored(carrySafeBase: Boolean) = StoredWorkspace(
     local = local.run {
         StoredLocalState(
             id, deviceId, deviceSequence, hlcWallMs, hlcCounter, revision,
@@ -139,26 +176,30 @@ private fun LocalWorkspaceSnapshot.toStored() = StoredWorkspace(
             tasksJson, knownTasksJson, selectedTaskId, canonicalAutoStartBreaks, ownedTimerId,
             serverClockOffsetMs, serverClockUncertaintyMs, serverClockSamplePhysicalMs,
             serverClockSampleElapsedRealtimeMs, serverClockBootId, lastUuidV7,
+            StoredLegacyDependency(legacyDependencyInputJson, legacyDependencyResultJson),
+            StoredSafeBase(
+                safeBaseDurationsJson, safeBaseSelectedTaskId, safeCanonicalHeadWallMs, safeCanonicalHeadCounter,
+            ).takeIf { carrySafeBase },
         )
     },
     commands = commands.map { value -> value.run {
         StoredCommand(
             id, deviceSequence, timerId, type, phase, plannedDurationMs, occurredAt,
             hlcWallMs, hlcCounter, observedElapsedMs, taskId, generatedByFinishCommandId,
-            physicalOccurredAt,
+            physicalOccurredAt, neverSent,
         )
     } },
     taskOperations = taskOperations.map { value -> value.run {
-        StoredTaskOperation(id, taskId, type, title, occurredAt, hlcWallMs, hlcCounter)
+        StoredTaskOperation(id, taskId, type, title, occurredAt, hlcWallMs, hlcCounter, neverSent)
     } },
     durationOperations = durationOperations.map { value -> value.run {
-        StoredDurationOperation(phase, id, durationMs, occurredAt, hlcWallMs, hlcCounter)
+        StoredDurationOperation(phase, id, durationMs, occurredAt, hlcWallMs, hlcCounter, neverSent)
     } },
     autoStartOperations = autoStartOperations.map { value -> value.run {
-        StoredAutoStartOperation(id, deviceId, enabled, occurredAt, hlcWallMs, hlcCounter)
+        StoredAutoStartOperation(id, deviceId, enabled, occurredAt, hlcWallMs, hlcCounter, neverSent)
     } },
     selectedTaskOperations = selectedTaskOperations.map { value -> value.run {
-        StoredSelectedTaskOperation(id, taskId, occurredAt, hlcWallMs, hlcCounter)
+        StoredSelectedTaskOperation(id, taskId, occurredAt, hlcWallMs, hlcCounter, neverSent)
     } },
     bootstrapResolution = bootstrapResolution?.run {
         StoredBootstrapResolution(
@@ -171,32 +212,39 @@ private fun LocalWorkspaceSnapshot.toStored() = StoredWorkspace(
 
 private fun StoredWorkspace.toEntity() = LocalWorkspaceSnapshot(
     local = local.run {
+        val markers = legacyDependency ?: unrecordedLegacyDependency(commands)
         LocalStateEntity(
             id, deviceId, deviceSequence, hlcWallMs, hlcCounter, revision,
             canonicalTimerJson, historyJson, settingsJson, userJson, ownerUserId,
             tasksJson, knownTasksJson, selectedTaskId, canonicalAutoStartBreaks, ownedTimerId,
             serverClockOffsetMs, serverClockUncertaintyMs, serverClockSamplePhysicalMs,
             serverClockSampleElapsedRealtimeMs, serverClockBootId, lastUuidV7,
+            legacyDependencyInputJson = markers.inputJson,
+            legacyDependencyResultJson = markers.resultJson,
+            safeBaseDurationsJson = safeBase?.durationsJson,
+            safeBaseSelectedTaskId = safeBase?.selectedTaskId,
+            safeCanonicalHeadWallMs = safeBase?.canonicalHeadWallMs,
+            safeCanonicalHeadCounter = safeBase?.canonicalHeadCounter,
         )
     },
     commands = commands.map { value -> value.run {
         PendingCommandEntity(
             id, deviceSequence, timerId, type, phase, plannedDurationMs, occurredAt,
             hlcWallMs, hlcCounter, observedElapsedMs, taskId, generatedByFinishCommandId,
-            physicalOccurredAt,
+            physicalOccurredAt, neverSent,
         )
     } },
     taskOperations = taskOperations.map { value -> value.run {
-        PendingTaskOperationEntity(id, taskId, type, title, occurredAt, hlcWallMs, hlcCounter)
+        PendingTaskOperationEntity(id, taskId, type, title, occurredAt, hlcWallMs, hlcCounter, neverSent)
     } },
     durationOperations = durationOperations.map { value -> value.run {
-        PendingDurationOperationEntity(phase, id, durationMs, occurredAt, hlcWallMs, hlcCounter)
+        PendingDurationOperationEntity(phase, id, durationMs, occurredAt, hlcWallMs, hlcCounter, neverSent)
     } },
     autoStartOperations = autoStartOperations.map { value -> value.run {
-        PendingAutoStartOperationEntity(id, deviceId, enabled, occurredAt, hlcWallMs, hlcCounter)
+        PendingAutoStartOperationEntity(id, deviceId, enabled, occurredAt, hlcWallMs, hlcCounter, neverSent)
     } },
     selectedTaskOperations = selectedTaskOperations.map { value -> value.run {
-        PendingSelectedTaskOperationEntity(id, taskId, occurredAt, hlcWallMs, hlcCounter)
+        PendingSelectedTaskOperationEntity(id, taskId, occurredAt, hlcWallMs, hlcCounter, neverSent)
     } },
     bootstrapResolution = bootstrapResolution?.run {
         PendingBootstrapResolutionEntity(
@@ -204,5 +252,16 @@ private fun StoredWorkspace.toEntity() = LocalWorkspaceSnapshot(
             taskOperationsJson, durationOperationsJson, ownerUserId, userJson,
             autoStartOperationsJson, selectedTaskOperationsJson,
         )
+    },
+)
+
+/**
+ * A state stashed before the markers existed was never seen by Migration 16 to 17, which marks
+ * only the live `local_state` row. Mark it the same way the migration would have, so the next
+ * startup asks Core about its retained dependency rows instead of trusting them as modern.
+ */
+private fun unrecordedLegacyDependency(commands: List<StoredCommand>) = StoredLegacyDependency(
+    resultJson = LegacyDependencyAdoptionPending.takeIf {
+        commands.any { it.generatedByFinishCommandId != null }
     },
 )

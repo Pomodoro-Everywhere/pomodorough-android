@@ -6,7 +6,7 @@ import java.time.Instant
 import java.util.UUID
 import me.egigoka.pomodorough.data.local.LocalStateEntity
 
-internal class SyncProtocolException(message: String) : Exception(message)
+internal open class SyncProtocolException(message: String) : Exception(message)
 internal class ProfileProtocolException(message: String) : Exception(message)
 
 internal object TimerSyncValidation {
@@ -195,7 +195,7 @@ internal object TimerSyncValidation {
             "Saved task operation identity is invalid"
         }
         require(isUuid(operation.taskId)) { "Saved task operation task ID is invalid" }
-        require(operation.type in setOf(TaskOperationType.Upsert, TaskOperationType.Delete)) {
+        require(operation.type in TaskOperationType.all) {
             "Saved task operation type is invalid"
         }
         requireOperationClock(operation.occurredAt, operation.hlcWallMs, operation.hlcCounter, false)
@@ -205,6 +205,9 @@ internal object TimerSyncValidation {
             }
             TaskOperationType.Delete -> require(operation.title == null) {
                 "Saved task delete must not contain a title"
+            }
+            TaskOperationType.Rename -> require(operation.title != null) {
+                "Saved task rename title is missing"
             }
         }
     }
@@ -292,6 +295,8 @@ internal object TimerSyncValidation {
             "$source returned an invalid history status")
         protocolRequire(item.plannedDurationMs in DurationLimits.MinMs..MaxTimerDurationMs,
             "$source returned an invalid history duration")
+        protocolRequire(item.elapsedMs?.let { it in 0..item.plannedDurationMs } ?: true,
+            "$source returned an invalid history elapsed time")
         protocolRequire(!item.pending, "$source returned pending canonical history")
         if (item.status == TimerStatus.Completed) validateCompletedHistoryTime(item, source)
         else protocolRequire(item.endedAt != null && parseInstant(item.endedAt),

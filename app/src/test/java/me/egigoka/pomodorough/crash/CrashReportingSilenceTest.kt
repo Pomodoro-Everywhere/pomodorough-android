@@ -32,6 +32,7 @@ class CrashReportingSilenceTest {
         "me/egigoka/pomodorough/data/SyncWireBounds.kt",
         "me/egigoka/pomodorough/data/SynchronizedProjectionRequest.kt",
         "me/egigoka/pomodorough/data/TimerLocalInitialization.kt",
+        "me/egigoka/pomodorough/data/LegacyDependencyStartup.kt",
         "me/egigoka/pomodorough/data/TimerMutationCoordinator.kt",
         "me/egigoka/pomodorough/data/UuidV7.kt",
         "me/egigoka/pomodorough/data/auth/LogoutRevocationRetryController.kt",
@@ -51,6 +52,11 @@ class CrashReportingSilenceTest {
         "me/egigoka/pomodorough/domain/TimerPresentation.kt",
         "me/egigoka/pomodorough/timer/TimerAlarmReceiver.kt",
         "me/egigoka/pomodorough/timer/TimerAlarmScheduler.kt",
+        "me/egigoka/pomodorough/timer/PhaseEndHaptics.kt",
+        "me/egigoka/pomodorough/tile/PomodoroughTileService.kt",
+        "me/egigoka/pomodorough/widget/PomodoroughWidget.kt",
+        "me/egigoka/pomodorough/widget/WidgetRefresh.kt",
+        "me/egigoka/pomodorough/timer/BootReceiver.kt",
         "me/egigoka/pomodorough/ui/TimerScreenScaffold.kt",
         "me/egigoka/pomodorough/ui/UiComponents.kt",
         "me/egigoka/pomodorough/ui/PomodoroughViewModel.kt",
@@ -93,6 +99,13 @@ class CrashReportingSilenceTest {
         "me/egigoka/pomodorough/data/iroh/IrohRoomOrchestration.kt" to "fun rollbackJoinedRoom(",
         "me/egigoka/pomodorough/data/TimerLocalInitialization.kt" to "fun load(",
         "me/egigoka/pomodorough/ui/PomodoroughViewModel.kt" to "fun deliverCompletionAlert(",
+        "me/egigoka/pomodorough/tile/PomodoroughTileService.kt" to "fun onClick(",
+        "me/egigoka/pomodorough/tile/PomodoroughTileService.kt" to "fun initializeQuietly(",
+        "me/egigoka/pomodorough/widget/PomodoroughWidget.kt" to "fun loadState(",
+        "me/egigoka/pomodorough/widget/WidgetRefresh.kt" to "fun refresh(",
+        "me/egigoka/pomodorough/timer/BootReceiver.kt" to "fun onReceive(",
+        "me/egigoka/pomodorough/data/iroh/IrohRoomOrchestration.kt" to "fun readStartupRoute(",
+        "me/egigoka/pomodorough/data/TimerRepository.kt" to "fun reloadStartupWorkspace(",
     )
 
     @Test
@@ -251,7 +264,8 @@ class CrashReportingSilenceTest {
     private fun isBoundedDelegatedReport(line: String): Boolean =
         line.contains("handleAccountDeletionFailure") ||
             line.contains("handleAccountDeletionExecutionFailure") ||
-            line.contains("AccountDeletionReporter")
+            line.contains("AccountDeletionReporter") ||
+            line.contains("CorruptStateReporter.report(")
 
     private fun hasSilenceJustification(lines: List<String>, catchIndex: Int): Boolean {
         val from = maxOf(0, catchIndex - 5)

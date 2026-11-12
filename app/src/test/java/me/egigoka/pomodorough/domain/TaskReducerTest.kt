@@ -179,6 +179,8 @@ class TaskReducerTest {
         plannedDurationMs = duration,
         completedAt = "2026-07-21T10:00:00Z",
         taskId = taskId,
+        // Rows reach the summary from Core projection output, which always fills elapsedMs.
+        elapsedMs = duration,
     )
 
     private fun <T> permutations(values: List<T>): List<List<T>> = when (values.size) {

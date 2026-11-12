@@ -42,7 +42,7 @@ internal class IrohIncomingRpcHandler(
                 throw error
             } catch (error: Exception) {
                 // expected-silent: listener socket closed or failed; loop ends via Unavailable event, not a crash.
-                onEvent(IrohIncomingRpcEvent.Unavailable(error.message))
+                onEvent(IrohIncomingRpcEvent.Unavailable("Iroh endpoint stopped accepting peers"))
                 return@supervisorScope
             } ?: return@supervisorScope
             launch {

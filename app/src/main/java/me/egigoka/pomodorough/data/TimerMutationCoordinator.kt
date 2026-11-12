@@ -90,6 +90,8 @@ internal data class TaskMutationInput(
     val task: FocusTask,
     val select: Boolean,
     val reservation: TimerMutationReservation,
+    // The title a rename moves the task to; only a rename carries it.
+    val renamedTitle: String? = null,
 )
 
 internal data class TimerCommandMutationPlan(
@@ -615,19 +617,21 @@ internal class TimerMutationCoordinator(
 
     private fun reservedTaskMutation(input: TaskMutationInput): ReservedTaskMutation? {
         val state = input.state
-        val clearsSelection = input.type == TaskOperationType.Delete &&
+        val clearsSelection = TaskOperationType.removesTask(input.type) &&
             state.selectedTaskId == input.task.id
         val changesSelection = input.select || clearsSelection
         val reservationSize = if (changesSelection) 2 else 1
         if (input.reservation.stamps.size != reservationSize ||
             input.reservation.uuids.size != reservationSize
         ) return null
+        val title = operationTitle(input)
+        if (input.type == TaskOperationType.Rename && title == null) return null
         val stamp = input.reservation.stamps.first()
         val operation = TaskOperation(
             id = "task-operation-${input.reservation.uuids.first()}",
             taskId = input.task.id,
             type = input.type,
-            title = input.task.title.takeIf { input.type == TaskOperationType.Upsert },
+            title = title,
             occurredAt = stamp.occurredAt,
             hlcWallMs = stamp.wallMs,
             hlcCounter = stamp.counter,
@@ -653,6 +657,12 @@ internal class TimerMutationCoordinator(
             } ?: state.queues.selectedTaskOperations,
             finalStamp = input.reservation.stamps.last(),
         )
+    }
+
+    private fun operationTitle(input: TaskMutationInput): String? = when (input.type) {
+        TaskOperationType.Upsert -> input.task.title
+        TaskOperationType.Rename -> input.renamedTitle
+        else -> null
     }
 
     private fun cancelCommands(input: TimerCancelMutationInput): List<TimerCommand> {

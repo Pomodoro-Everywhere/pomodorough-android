@@ -6,13 +6,17 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import me.egigoka.pomodorough.crash.CrashReporter
+import me.egigoka.pomodorough.data.CorruptStateCategory
+import me.egigoka.pomodorough.data.CorruptStateReporter
 import me.egigoka.pomodorough.data.local.IrohRoomEntity
 import me.egigoka.pomodorough.data.local.LocalStateEntity
 import me.egigoka.pomodorough.data.local.ReplicationSettingsEntity
@@ -20,6 +24,7 @@ import me.egigoka.pomodorough.data.local.ReplicationSettingsEntity
 internal data class IrohRoomServicePort(
     val state: StateFlow<IrohNetworkState>,
     val publishState: (IrohNetworkState) -> Unit,
+    val transformState: ((IrohNetworkState) -> IrohNetworkState) -> Unit,
     val start: suspend (IrohServiceContext, Boolean) -> String,
     val stop: suspend () -> Unit,
     val close: suspend () -> Unit,
@@ -66,24 +71,31 @@ internal class IrohRoomOrchestration(
     private val recoveryGeneration = AtomicLong()
     private val lifecycle = IrohLifecycleState()
     private var initialized = false
+
+    @Volatile
     private var invite: String? = null
 
-    private data class JoinPreparation(
+    // R54-A14: [routeBeforeJoin] is the persisted route while the join runs, until service.join
+    // returns: that call activates the joined room as the IROH route, and [activated] records it.
+    private class JoinPreparation(
         val roomId: String,
         val createdRoom: Boolean,
-    )
+        val routeBeforeJoin: IrohNetworkState,
+    ) {
+        var activated = false
+    }
 
+    // R54-A10: the collector re-attaches the cached invite to the current state in one atomic
+    // step. Publishing the delivered value instead overwrote any newer state written meanwhile.
     init {
         scope.launch {
-            service.state.collect { next ->
-                if (invite != null && next.invite == null) {
-                    publish(next.copy(invite = invite))
-                }
-            }
+            service.state.collect { attachCachedInvite() }
         }
     }
 
-    suspend fun initialize() = mutex.withLock { initializeLocked() }
+    suspend fun initialize() {
+        mutex.withLock { initializeLocked() }
+    }
 
     suspend fun setMode(mode: ReplicationMode) = runIrohAction {
         if (mode == service.state.value.mode) {
@@ -146,13 +158,15 @@ internal class IrohRoomOrchestration(
         try {
             decoded = IrohRoomInvite.decode(encodedInvite.trim())
             preparation = prepareJoinedRoom(decoded)
-            connectJoinedRoom(decoded)
+            connectJoinedRoom(decoded, preparation)
             completeJoinedRoom(decoded.roomId)
         } catch (error: CancellationException) {
+            if (preparation != null) stopCancelledJoin(preparation)
             throw error
         } catch (error: Exception) {
             rollbackJoinedRoom(preparation)
             if (error !is IrohSecretVaultException) CrashReporter.report(error)
+            preparation?.let(::publishKnownJoinRoute)
             recoverPersistedRoute(error, "Iroh room could not be joined")
         } finally {
             decoded?.roomSecret?.fill(0)
@@ -197,7 +211,7 @@ internal class IrohRoomOrchestration(
             CrashReporter.report(error)
             publish(service.state.value.copy(
                 status = IrohConnectionStatus.UNAVAILABLE,
-                message = error.message ?: "Iroh invite could not be refreshed",
+                message = "Iroh invite could not be refreshed",
                 transitioning = false,
             ))
         }
@@ -218,11 +232,7 @@ internal class IrohRoomOrchestration(
         } catch (_: Exception) {
             // expected-silent: explicit retry failures use recovery UI; native endpoint diagnostics
             // belong to the lifecycle. Do not duplicate them or expose exception text and secrets.
-            publish(service.state.value.copy(
-                status = IrohConnectionStatus.UNAVAILABLE,
-                message = "Iroh sync could not be completed. Try again.",
-                transitioning = false,
-            ))
+            publishSyncUnavailable()
         }
     }
 
@@ -244,7 +254,7 @@ internal class IrohRoomOrchestration(
         } finally {
             recoveryRequested.set(false)
         }
-        if (restart) onForeground()
+        if (restart) restartForeground()
     }
 
     suspend fun clearAccountData() = mutex.withLock {
@@ -280,9 +290,23 @@ internal class IrohRoomOrchestration(
         accountQuarantined.set(false)
     }
 
+    // R54-A05: TimerRepository.initialize() replays foreground on every call. A replay while
+    // already foreground neither renews the lifecycle generation nor binds the endpoint again.
     fun onForeground() {
         if (closed.get() || accountQuarantined.get()) return
-        lifecycle.enterForeground()
+        lifecycle.enterForegroundIfBackground() ?: return
+        launchForegroundStart()
+    }
+
+    // Identity repair restarts the endpoint only while the app is still foreground. A background
+    // that lands during the repair keeps the endpoint down until the next foreground: the restart
+    // never forces a lifecycle transition, so it cannot bind behind a backgrounded app.
+    private fun restartForeground() {
+        if (closed.get() || !isForeground()) return
+        launchForegroundStart()
+    }
+
+    private fun launchForegroundStart() {
         scope.launch {
             runIrohAction {
                 if (service.state.value.mode == ReplicationMode.IROH) {
@@ -307,38 +331,63 @@ internal class IrohRoomOrchestration(
         service.close()
     }
 
-    private suspend fun initializeLocked() {
-        if (initialized) return
+    // Returns false when this call's first foreground endpoint start failed. The failure is
+    // already published, so the caller's action must not bind or report the endpoint again.
+    private suspend fun initializeLocked(): Boolean {
+        if (initialized) return true
         val pendingRecovery = service.pendingIdentityRecovery()
-        if (pendingRecovery == null) persistence.discardIncompleteRooms()
-        val settings = persistence.replicationSettings()
-        val mode = runCatching { ReplicationMode.valueOf(settings.mode) }
-            .getOrDefault(ReplicationMode.CENTRALIZED)
-        val room = settings.activeRoomId?.let { persistence.room(it) }
-        val snapshot = room?.let { persistence.snapshot(it.roomId) }
+        val (mode, room, snapshot) = readStartupRoute(discardIncomplete = pendingRecovery == null)
         pendingRecovery?.let { kind ->
             publish((snapshot ?: IrohNetworkState()).copy(mode = mode))
             quarantineRecovery(kind)
             initialized = true
-            return
+            return true
         }
         if (mode == ReplicationMode.IROH && room == null) {
             persistence.setMode(ReplicationMode.OFFLINE)
             publish(IrohNetworkState(mode = ReplicationMode.OFFLINE))
             initialized = true
-            return
+            return true
         }
         publish((snapshot ?: IrohNetworkState()).copy(mode = mode))
-        if (!recoverLocalOperations(mode, snapshot)) return
+        if (!recoverLocalOperations(mode, snapshot)) return true
         initialized = true
-        if (mode == ReplicationMode.IROH && snapshot?.conflict == null && isForeground()) {
-            try {
-                startIfNeeded()
-            } catch (error: IrohSecretVaultException) {
-                // expected-silent: vault recovery is reported through the recovery UI, not a crash.
-                quarantineRecovery(error.recoveryKind)
-            }
-        }
+        val startsEndpoint =
+            mode == ReplicationMode.IROH && snapshot?.conflict == null && isForeground()
+        return !startsEndpoint || startInitialEndpoint()
+    }
+
+    // R54-A07: a failed route read publishes nothing and leaves initialization open, so the next
+    // call reads the route again. It reports one bounded category without persisted content or SQL.
+    private suspend fun readStartupRoute(discardIncomplete: Boolean): IrohStartupRoute = try {
+        if (discardIncomplete) persistence.discardIncompleteRooms()
+        val settings = persistence.replicationSettings()
+        val mode = runCatching { ReplicationMode.valueOf(settings.mode) }
+            .getOrDefault(ReplicationMode.CENTRALIZED)
+        val room = settings.activeRoomId?.let { persistence.room(it) }
+        IrohStartupRoute(mode, room, room?.let { persistence.snapshot(it.roomId) })
+    } catch (error: CancellationException) {
+        throw error
+    } catch (error: Exception) {
+        CorruptStateReporter.report(CorruptStateCategory.ReplicationRouteRead)
+        throw IrohRouteReadException(error)
+    }
+
+    private suspend fun startInitialEndpoint(): Boolean = try {
+        startIfNeeded()
+        true
+    } catch (error: CancellationException) {
+        throw error
+    } catch (error: IrohSecretVaultException) {
+        // expected-silent: vault recovery is reported through the recovery UI, not a crash.
+        quarantineRecovery(error.recoveryKind)
+        false
+    } catch (_: Exception) {
+        // R54-A03: Sync now's policy. Initialization completes with the room, operations, and
+        // secret kept, so Sync now or the next foreground binds again. expected-silent: the
+        // endpoint lifecycle reports bind and ticket failures; the state carries no error text.
+        publishSyncUnavailable()
+        false
     }
 
     private suspend fun recoverLocalOperations(
@@ -357,7 +406,7 @@ internal class IrohRoomOrchestration(
                     CrashReporter.report(error)
                     publish(service.state.value.copy(
                         status = IrohConnectionStatus.UNAVAILABLE,
-                        message = error.message ?: "Saved Iroh operations could not be recovered",
+                        message = "Saved Iroh operations could not be recovered",
                     ))
                     false
                 }
@@ -377,7 +426,7 @@ internal class IrohRoomOrchestration(
             publish(service.state.value.copy(
                 mode = ReplicationMode.IROH,
                 status = IrohConnectionStatus.UNAVAILABLE,
-                message = error.message ?: "Iroh endpoint could not start",
+                message = "Iroh endpoint could not start",
                 transitioning = false,
             ))
         }
@@ -389,6 +438,7 @@ internal class IrohRoomOrchestration(
             flushActiveIrohLocked()
             service.stop()
         }
+        val routeBeforeJoin = service.state.value
         val createdRoom = persistence.prepareJoinedRoom(invite, endpointId).second
         publish(IrohNetworkState(
             mode = service.state.value.mode,
@@ -397,10 +447,10 @@ internal class IrohRoomOrchestration(
             roomName = invite.roomName,
             transitioning = true,
         ))
-        return JoinPreparation(invite.roomId, createdRoom)
+        return JoinPreparation(invite.roomId, createdRoom, routeBeforeJoin)
     }
 
-    private suspend fun connectJoinedRoom(invite: IrohRoomInvite) {
+    private suspend fun connectJoinedRoom(invite: IrohRoomInvite, preparation: JoinPreparation) {
         val local = checkNotNull(persistence.localState())
         val owner = lifecycle.snapshot().generation
         startService(
@@ -409,6 +459,7 @@ internal class IrohRoomOrchestration(
             owner = owner,
         )
         service.join(invite)
+        preparation.activated = true
         startService(
             IrohServiceContext(invite.roomId, invite.roomSecret.copyOf(), local.deviceId, null),
             owner = owner,
@@ -422,6 +473,36 @@ internal class IrohRoomOrchestration(
             status = service.state.value.status,
             transitioning = false,
         ))
+    }
+
+    // R54-A12: once the join has stopped the previous endpoint and prepared its room, any running
+    // endpoint is the join's own, so a cancelled join stops it. Otherwise it stays bound behind the
+    // route the cancellation restores. The prepared room is left to the startup discard, as before.
+    // The stop is non-cancellable because the join's job is the cancelled one.
+    // R54-A14: it then publishes the route the join knows is persisted, so the cancellation's
+    // route read falls back to that route instead of the failed room.
+    private suspend fun stopCancelledJoin(preparation: JoinPreparation) {
+        withContext(NonCancellable) {
+            try {
+                service.stop()
+            } catch (error: Exception) {
+                // The caller rethrows its own cancellation next, so a failed stop is reported here.
+                CrashReporter.report(error)
+            }
+        }
+        publishKnownJoinRoute(preparation)
+    }
+
+    // R54-A14: a failed or cancelled join publishes the route it knows is persisted before it reads
+    // that route, so the fallback for an unreadable route is that route instead of the failed
+    // room. Once activated, that is the joined room on the IROH route; before, it is the route
+    // the join replaced. A pending identity recovery keeps its prompt.
+    private fun publishKnownJoinRoute(preparation: JoinPreparation) {
+        val current = service.state.value
+        if (current.identityRecovery != null) return
+        val route =
+            if (preparation.activated) current.copy(mode = ReplicationMode.IROH) else preparation.routeBeforeJoin
+        publish(route.copy(transitioning = true))
     }
 
     private suspend fun rollbackJoinedRoom(preparation: JoinPreparation?) {
@@ -485,29 +566,76 @@ internal class IrohRoomOrchestration(
         publish(service.state.value.copy(operationCount = projection.operationCount))
     }
 
-    private suspend fun recoverPersistedRoute(error: Exception, fallbackMessage: String) {
+    // R54-A13: the state carries the action's bounded message, never exception text.
+    private suspend fun recoverPersistedRoute(error: Exception, message: String) {
         if (error is IrohSecretVaultException) {
             // expected-silent: vault recovery is reported through the recovery UI, not a crash.
             quarantineRecovery(error.recoveryKind)
             return
         }
+        // R54-A11: an unreadable route still ends the action on the current state, and nothing
+        // restarts: the next foreground or Sync now binds again.
+        val route = persistedRouteOrNull()
+        publish((route ?: service.state.value).copy(
+            status = IrohConnectionStatus.UNAVAILABLE,
+            message = message,
+            transitioning = false,
+        ))
+        if (route != null && route.mode == ReplicationMode.IROH && route.conflict == null &&
+            isForeground()
+        ) {
+            if (!startUnlessIdentityRecoveryRequired()) return
+            publish(service.state.value.copy(
+                message = message,
+                transitioning = false,
+            ))
+        }
+    }
+
+    // The action's own failure is already reported, so a failed route read is reported here as a
+    // second failure. A cancelled read still cancels the action.
+    private suspend fun persistedRouteOrNull(): IrohNetworkState? = try {
+        persistedRoute()
+    } catch (error: CancellationException) {
+        throw error
+    } catch (error: Exception) {
+        CrashReporter.report(error)
+        null
+    }
+
+    private suspend fun persistedRoute(): IrohNetworkState {
         val settings = persistence.replicationSettings()
         val mode = runCatching { ReplicationMode.valueOf(settings.mode) }
             .getOrDefault(ReplicationMode.OFFLINE)
         val snapshot = settings.activeRoomId?.let { roomId -> persistence.snapshot(roomId) }
-        publish((snapshot ?: IrohNetworkState(mode = mode)).copy(
-            mode = mode,
-            status = IrohConnectionStatus.UNAVAILABLE,
-            message = error.message ?: fallbackMessage,
-            transitioning = false,
-        ))
-        if (mode == ReplicationMode.IROH && snapshot?.conflict == null && isForeground()) {
-            if (!startUnlessIdentityRecoveryRequired()) return
-            publish(service.state.value.copy(
-                message = error.message ?: fallbackMessage,
-                transitioning = false,
-            ))
+        return (snapshot ?: IrohNetworkState(mode = mode)).copy(mode = mode)
+    }
+
+    // R54-A06: creating, joining or leaving a room, changing the route, and identity recovery
+    // publish `transitioning`, which disables the network actions and blocks timer mutations.
+    // Outside the Iroh route no later publish clears it, so a cancelled exit, including one from
+    // the failure handling, clears it here before the cancellation propagates. An action that
+    // never set the flag keeps its state. A pending identity recovery keeps its prompt; any
+    // other state becomes the persisted route without an error message. Nothing restarts: the
+    // next foreground or Sync now binds again. The reads are non-cancellable because the
+    // caller's job is usually the cancelled one.
+    private suspend fun clearCancelledTransition() {
+        if (!service.state.value.transitioning) return
+        withContext(NonCancellable) {
+            val current = service.state.value
+            val settled =
+                if (current.identityRecovery == null) persistedRouteOrCurrent() else current
+            publish(settled.copy(transitioning = false))
         }
+    }
+
+    private suspend fun persistedRouteOrCurrent(): IrohNetworkState = try {
+        persistedRoute()
+    } catch (error: Exception) {
+        // The caller rethrows its own cancellation next, so a failed route read is reported here
+        // (CrashReporter skips a cancelled read) and only the flag changes on the current state.
+        CrashReporter.report(error)
+        service.state.value
     }
 
     private suspend fun startUnlessIdentityRecoveryRequired(): Boolean = try {
@@ -520,12 +648,11 @@ internal class IrohRoomOrchestration(
         quarantineRecovery(error.recoveryKind)
         false
     } catch (error: Exception) {
+        // Preconditions and a closed lifecycle are reported only here. A bind or ticket failure
+        // arrives as the instance the lifecycle already reported, which Sentry deduplicates.
         CrashReporter.report(error)
-        publish(service.state.value.copy(
-            status = IrohConnectionStatus.UNAVAILABLE,
-            message = error.message ?: "Iroh endpoint could not start",
-            transitioning = false,
-        ))
+        // R54-A05: the state carries the Sync now notice, never exception text.
+        publishSyncUnavailable()
         true
     }
 
@@ -542,15 +669,45 @@ internal class IrohRoomOrchestration(
         if (!closed.get()) service.publishState(value)
     }
 
+    private fun attachCachedInvite() {
+        if (closed.get()) return
+        service.transformState { current ->
+            val cached = invite
+            if (cached != null && current.invite == null) current.copy(invite = cached) else current
+        }
+    }
+
+    private fun publishSyncUnavailable() {
+        publish(service.state.value.copy(
+            status = IrohConnectionStatus.UNAVAILABLE,
+            message = "Iroh sync could not be completed. Try again.",
+            transitioning = false,
+        ))
+    }
+
     private suspend fun runIrohAction(action: suspend () -> Unit) {
         val generation = recoveryGeneration.get()
         if (!permitsIrohAction(generation)) return
         mutex.withLock {
             if (!permitsIrohAction(generation)) return@withLock
-            initializeLocked()
+            if (!initializeForAction()) return@withLock
             if (!permitsIrohAction(generation)) return@withLock
-            action()
+            try {
+                action()
+            } catch (error: CancellationException) {
+                clearCancelledTransition()
+                throw error
+            }
         }
+    }
+
+    // R54-A07: an action that cannot read the route does not run. The read is already reported,
+    // and initialization stays open for the next action or initialize().
+    private suspend fun initializeForAction(): Boolean = try {
+        initializeLocked()
+    } catch (_: IrohRouteReadException) {
+        // expected-silent: readStartupRoute sent the bounded route-read report.
+        false
     }
 
     private fun permitsIrohAction(generation: Long): Boolean =
@@ -567,7 +724,7 @@ internal class IrohRoomOrchestration(
             when (kind) {
                 IrohIdentityRecoveryKind.ENDPOINT_CORRUPTED -> {
                     repairEndpointIdentity()
-                    service.state.value.mode == ReplicationMode.IROH && isForeground()
+                    service.state.value.mode == ReplicationMode.IROH
                 }
                 IrohIdentityRecoveryKind.KEY_INVALIDATED_OR_MISSING -> {
                     resetIrohIdentity()
@@ -575,6 +732,7 @@ internal class IrohRoomOrchestration(
                 }
             }
         } catch (error: CancellationException) {
+            clearCancelledTransition()
             throw error
         } catch (error: IrohSecretVaultException) {
             // expected-silent: vault recovery is reported through the recovery UI, not a crash.

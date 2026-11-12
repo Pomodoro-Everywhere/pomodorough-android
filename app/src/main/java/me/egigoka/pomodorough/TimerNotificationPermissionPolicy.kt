@@ -12,8 +12,9 @@ object TimerNotificationPermissionPolicy {
         sdkInt: Int,
         permissionGranted: Boolean,
         timerStatus: String?,
+        promptDeclined: Boolean,
     ): TimerNotificationPermissionAction =
-        if (sdkInt >= 33 && !permissionGranted && timerStatus != TimerStatus.Running) {
+        if (sdkInt >= 33 && !permissionGranted && !promptDeclined && timerStatus != TimerStatus.Running) {
             TimerNotificationPermissionAction.RequestPermission
         } else {
             TimerNotificationPermissionAction.ToggleTimer

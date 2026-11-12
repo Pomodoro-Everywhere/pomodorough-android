@@ -6,6 +6,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestDispatcher
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -176,6 +177,40 @@ class CentralizedSyncRuntimeTest {
         runtime.shutdown()
 
         assertEquals(true, cleanupFinished.isCompleted)
+    }
+
+    // A held legacy queue prepares no attempt but keeps its rows, so the loop must stop after
+    // one empty preparation instead of spinning until something outside clears the queue.
+    @Test
+    fun heldLegacyQueueEndsTheLoopAfterOneEmptyPreparation() = runTest {
+        assertEquals(1, preparesUntilIdle(legacyAdoptionPending = true, idleAfter = 5))
+    }
+
+    @Test
+    fun modernQueueKeepsPreparingWhileRowsRemain() = runTest {
+        assertEquals(3, preparesUntilIdle(legacyAdoptionPending = false, idleAfter = 3))
+    }
+
+    /** Counts preparations of one forced sync. Each prepares nothing; the queue empties at [idleAfter]. */
+    private suspend fun TestScope.preparesUntilIdle(legacyAdoptionPending: Boolean, idleAfter: Int): Int {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        var prepares = 0
+        lateinit var host: FakeCentralizedSyncRuntimeHost
+        host = FakeCentralizedSyncRuntimeHost(
+            prepare = {
+                prepares += 1
+                if (prepares >= idleAfter) host.snapshot = host.snapshot.copy(pendingQueuesEmpty = true)
+                null
+            },
+            accept = {},
+        )
+        host.snapshot = legacyHoldSnapshot(pendingQueuesEmpty = false, legacyAdoptionPending = legacyAdoptionPending)
+        val runtime = runtime(dispatcher, host) { error("A held queue never reaches the network") }
+
+        runtime.requestSync(force = true)
+        runCurrent()
+        runtime.shutdown()
+        return prepares
     }
 
     private fun runtime(

@@ -65,7 +65,7 @@ object TaskReducer {
                     ?.let(::taskFromTitle)
                     ?.takeIf { it.id == operation.taskId }
                     ?.let { tasks[operation.taskId] = it }
-                TaskOperationType.Delete -> tasks.remove(operation.taskId)
+                TaskOperationType.Delete, TaskOperationType.Rename -> tasks.remove(operation.taskId)
             }
         }
         return tasks.values.sortedWith { left, right ->
@@ -90,7 +90,7 @@ object TaskReducer {
                 ?: return@forEach
             if (date != today) return@forEach
             val current = totals[taskId] ?: (0 to 0L)
-            totals[taskId] = current.first + 1 to current.second + item.plannedDurationMs
+            totals[taskId] = current.first + 1 to current.second + item.countedElapsedMs()
         }
         return tasks.map { task ->
             val total = totals[task.id] ?: (0 to 0L)

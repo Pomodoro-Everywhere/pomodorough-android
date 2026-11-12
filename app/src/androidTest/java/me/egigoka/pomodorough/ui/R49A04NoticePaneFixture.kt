@@ -79,6 +79,7 @@ internal class R49A04NoticePaneFixture(
         private set
     val timerCalls = mutableListOf<String>()
     private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
+    private val conflictSentence get() = context.getString(R.string.conflict_card_sentence)
     private val messagePane get() = if (region == R49A04NoticeRegion.Split) "timer_fold_readout" else "timer_fold_available"
     private val actionPane get() = if (region == R49A04NoticeRegion.Split) "timer_fold_controls" else "timer_fold_available"
 
@@ -132,9 +133,11 @@ internal class R49A04NoticePaneFixture(
         settle()
     }
 
+    // UX round 2, L5: the card shows one authored sentence; the raw AppState.conflict never renders.
     fun assertMessages(notice: String = NOTICE) {
-        rule.onAllNodesWithText(CONFLICT).assertCountEquals(1)
-        val conflict = reveal(rule.onNodeWithText(CONFLICT), messagePane)
+        rule.onAllNodesWithText(CONFLICT, substring = true, useUnmergedTree = true).assertCountEquals(0)
+        rule.onAllNodesWithText(conflictSentence).assertCountEquals(1)
+        val conflict = reveal(rule.onNodeWithText(conflictSentence), messagePane)
         conflict.assert(SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite))
         rule.onAllNodesWithText(notice, useUnmergedTree = true).assertCountEquals(1)
         val card = reveal(noticeNode(notice), messagePane)
@@ -142,7 +145,7 @@ internal class R49A04NoticePaneFixture(
         assertEquals(context.getString(R.string.dismiss), card.fetchSemanticsNode().config[SemanticsActions.OnClick].label)
         rule.onAllNodes(hasClickAction() and hasAnyAncestor(hasContentDescription(description(notice))))
             .assertCountEquals(0)
-        val conflictButtons = hasClickAction() and hasAnyAncestor(hasText(CONFLICT))
+        val conflictButtons = hasClickAction() and hasAnyAncestor(hasText(conflictSentence))
         rule.onAllNodes(conflictButtons).assertCountEquals(1)
     }
 
@@ -157,11 +160,11 @@ internal class R49A04NoticePaneFixture(
     fun dismissConflict() {
         reveal(rule.onNodeWithText(context.getString(R.string.dismiss)), messagePane)
             .assertIsEnabled().performTouchInput { click() }
-        rule.onNodeWithText(CONFLICT).assertDoesNotExist()
+        rule.onNodeWithText(conflictSentence).assertDoesNotExist()
     }
 
     fun assertConflictReachable() {
-        reveal(rule.onNodeWithText(CONFLICT), messagePane)
+        reveal(rule.onNodeWithText(conflictSentence), messagePane)
     }
 
     fun assertNoticeReachable(notice: String = NOTICE) {

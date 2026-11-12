@@ -137,13 +137,15 @@ class R50A04MutationPersistenceTest {
         assertTrue(commitBeforeInstall(window, "commit", "installTimerMutation"))
     }
 
+    // UX round 2 batch B rework: the task commit moved from issueTaskOperation into
+    // commitTaskOperationLocked, which the delete settlement also calls inside the lock.
     @Test
     fun taskCommitRetainsCommittedStateOnStorageFailure() {
-        val window = functionWindow("fun issueTaskOperation(")
+        val window = functionWindow("fun commitTaskOperationLocked(")
         assertTrue(window.contains("RepositoryTaskTransition"))
         assertTrue(window.contains("installTaskMutation"))
         assertTrue(window.contains("publishMutationCommitFailure"))
-        assertTrue(window.contains("return@withLock"))
+        assertTrue(window.contains("return false"))
         assertTrue(commitBeforeInstall(window, "commit", "installTaskMutation"))
     }
 
@@ -168,10 +170,10 @@ class R50A04MutationPersistenceTest {
         val timerFailure = timer.indexOf("publishMutationCommitFailure")
         assertTrue(timerFailure >= 0)
         assertTrue(timer.lastIndexOf("return false") > timerFailure)
-        val task = functionWindow("fun issueTaskOperation(")
+        val task = functionWindow("fun commitTaskOperationLocked(")
         val taskFailure = task.indexOf("publishMutationCommitFailure")
         assertTrue(taskFailure >= 0)
-        assertTrue(task.lastIndexOf("return@withLock") > taskFailure)
+        assertTrue(task.lastIndexOf("return false") > taskFailure)
         assertTrue(text.contains("if (saved) afterLocalMutation()"))
     }
 
@@ -182,7 +184,7 @@ class R50A04MutationPersistenceTest {
             "override suspend fun setAutoStart(",
             "fun commitSelectedTask(",
             "fun commitTimerCommand(",
-            "fun issueTaskOperation(",
+            "fun commitTaskOperationLocked(",
             "private suspend fun finishLocalTimer(",
             "override suspend fun cancelAndClearTimer()",
         )) {

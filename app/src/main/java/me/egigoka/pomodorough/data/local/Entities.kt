@@ -1,6 +1,7 @@
 package me.egigoka.pomodorough.data.local
 
 import androidx.room.Entity
+import androidx.room.ColumnInfo
 import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -41,6 +42,9 @@ data class LocalStateEntity(
     val safeBaseSelectedTaskId: String? = null,
     val safeCanonicalHeadWallMs: Long? = null,
     val safeCanonicalHeadCounter: Long? = null,
+    @ColumnInfo(defaultValue = "'commands'") val syncNextDomain: String = "commands",
+    val legacyDependencyInputJson: String? = null,
+    val legacyDependencyResultJson: String? = null,
 )
 
 @Entity(tableName = "pending_bootstrap_resolution")

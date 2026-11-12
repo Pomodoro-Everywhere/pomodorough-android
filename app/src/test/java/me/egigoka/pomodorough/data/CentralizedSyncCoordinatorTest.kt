@@ -341,6 +341,30 @@ class CentralizedSyncCoordinatorTest {
         assertTrue(transition is CentralizedBootstrapPreparationTransition.Invalid)
     }
 
+    // UX round 2, item 2: the bootstrap projection uses the base that TimerRepository carries.
+    // The optimistic local selection and the local durations never reach Core as the base.
+    @Test
+    fun bootstrapPreparationProjectsOverTheCarriedBase() {
+        val snapshot = generatedBreakSnapshot()
+        val carried = snapshot.projectionBase.copy(durationsMs = SafeBaseDurations, selectedTaskId = null)
+        val transition = coordinator.prepareBootstrapResolution(
+            CentralizedBootstrapPreparationInput(
+                snapshot = snapshot.copy(
+                    local = snapshot.local.copy(selectedTaskId = TaskOneId),
+                    projectionBase = carried,
+                ),
+                bootstrap = response(acknowledgement = null),
+                strategy = BootstrapStrategy.Merge,
+                sampledLocal = snapshot.local,
+                projectionNow = Instant.parse("2026-07-20T00:06:00Z"),
+            ),
+        )
+
+        val planned = transition as CentralizedBootstrapPreparationTransition.Planned
+        assertEquals(SafeBaseDurations, planned.projection.durationsMs)
+        assertEquals(null, planned.projection.selectedTaskId)
+    }
+
     @Test
     fun bootstrapPlanKeepsRemoteStateForDifferentOwner() {
         val plan = coordinator.bootstrapPlan(
@@ -394,6 +418,11 @@ class CentralizedSyncCoordinatorTest {
             knownTasks = emptyMap(),
             settings = settings,
             selectedPhaseGeneration = 4,
+            projectionBase = CoreProjectionBase(
+                canonicalTimer = source,
+                durationsMs = settings.effectiveDurationsMs(),
+                autoStartBreaks = true,
+            ),
         )
     }
 
@@ -535,5 +564,6 @@ class CentralizedSyncCoordinatorTest {
         val FinishWallMs = Instant.parse(FinishTime).toEpochMilli()
         val GeneratedWallMs = Instant.parse(GeneratedTime).toEpochMilli()
         val ServerWallMs = Instant.parse("2026-07-20T00:06:00Z").toEpochMilli()
+        val SafeBaseDurations = DurationsMs(focus = 1_800_000L, shortBreak = 360_000L, longBreak = 1_200_000L)
     }
 }

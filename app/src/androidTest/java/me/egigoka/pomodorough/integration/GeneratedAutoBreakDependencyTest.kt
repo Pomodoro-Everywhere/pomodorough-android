@@ -543,7 +543,19 @@ class GeneratedAutoBreakDependencyTest {
                             // This 144-case restart/response-loss matrix runs late in the full
                             // connected suite; retain exact convergence checks while tolerating
                             // sustained emulator GC and interpreted SharedCore execution.
-                            awaitState(timeoutMs = 30_000) {
+                            awaitState(
+                                timeoutMs = 30_000,
+                                describe = {
+                                    "case=$caseIndex chain=$chain outcome=$outcome " +
+                                        "correctsToLong=$correctsToLong restart=$restartsBeforeHttp " +
+                                        "responseLoss=$losesResponse " +
+                                        "syncCalls=${service.syncCalls}/$expectedCalls " +
+                                        "pendingCount=${signed.state.value.pendingCount} " +
+                                        "syncStatus=${signed.state.value.syncStatus} " +
+                                        "notice=${signed.state.value.notice} " +
+                                        "requests=${service.syncRequests.map { r -> r.commands.map { it.type } }}"
+                                },
+                            ) {
                                 service.syncCalls == expectedCalls &&
                                     signed.state.value.pendingCount == 0
                             }
@@ -995,6 +1007,8 @@ class GeneratedAutoBreakDependencyTest {
             PomodoroughDatabase.Migration12To13,
             PomodoroughDatabase.Migration13To14,
             PomodoroughDatabase.Migration14To15,
+            PomodoroughDatabase.Migration15To16,
+            PomodoroughDatabase.Migration16To17,
         ).build()
         val service = TestRepositoryService(profile).apply {
             bootstrapResponse = response(revision = 5)

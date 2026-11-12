@@ -223,6 +223,11 @@ class R43A04RemoteCompletionTest {
             knownTasks = emptyMap(),
             settings = settings,
             selectedPhaseGeneration = 4,
+            projectionBase = CoreProjectionBase(
+                history = canonicalHistory,
+                durationsMs = settings.effectiveDurationsMs(),
+                autoStartBreaks = true,
+            ),
         )
     }
 

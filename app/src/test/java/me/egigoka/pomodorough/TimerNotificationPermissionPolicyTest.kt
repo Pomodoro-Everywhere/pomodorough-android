@@ -69,11 +69,33 @@ class TimerNotificationPermissionPolicyTest {
         )
     }
 
+    // UX round 2, B6 (AND-06): "Not now" is an answer. Later starts and
+    // resumes go straight to the timer.
+    @Test
+    fun declinedPromptIsNotAskedAgain() {
+        listOf(
+            null,
+            TimerStatus.Paused,
+            TimerStatus.Completed,
+            TimerStatus.Cancelled,
+            TimerStatus.Superseded,
+        ).forEach { status ->
+            assertDecision(
+                TimerNotificationPermissionAction.ToggleTimer,
+                sdkInt = 33,
+                permissionGranted = false,
+                timerStatus = status,
+                promptDeclined = true,
+            )
+        }
+    }
+
     private fun assertDecision(
         expected: TimerNotificationPermissionAction,
         sdkInt: Int,
         permissionGranted: Boolean,
         timerStatus: String?,
+        promptDeclined: Boolean = false,
     ) {
         assertEquals(
             expected,
@@ -81,6 +103,7 @@ class TimerNotificationPermissionPolicyTest {
                 sdkInt = sdkInt,
                 permissionGranted = permissionGranted,
                 timerStatus = timerStatus,
+                promptDeclined = promptDeclined,
             ),
         )
     }

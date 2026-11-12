@@ -119,7 +119,10 @@ internal object LegacyTimerReducer {
             phase = item.phase,
             status = item.status,
             plannedDurationMs = item.plannedDurationMs,
-            elapsedAtAnchorMs = if (item.status == TimerStatus.Completed) item.plannedDurationMs else 0,
+            // Core 0.55.0 counts a row stored without elapsedMs as its plan when
+            // completed and as zero otherwise.
+            elapsedAtAnchorMs = item.elapsedMs
+                ?: if (item.status == TimerStatus.Completed) item.plannedDurationMs else 0,
             anchorAt = item.endedAt ?: occurredAt,
             taskId = item.taskId,
             lastIntent = null,
@@ -159,8 +162,11 @@ internal object LegacyTimerReducer {
             activate(timer)
             val terminal = timer.copy(
                 status = status,
+                // Core 0.55.0 ignores a Finish command's observedElapsedMs: a
+                // running session ends at the time measured to the command, and
+                // a paused or ended session keeps its stored elapsed.
                 elapsedAtAnchorMs = if (status == TimerStatus.Completed) {
-                    timer.plannedDurationMs
+                    elapsedAt(timer, occurredAt)
                 } else {
                     command.observedElapsedMs.coerceIn(0, timer.plannedDurationMs)
                 },
@@ -186,7 +192,10 @@ internal object LegacyTimerReducer {
             val displaced = current?.takeIf { it.id != replacementId } ?: return
             if (displaced.status in activeStatuses) {
                 addTerminalHistory(
-                    history, displaced, command, TimerStatus.Superseded,
+                    history,
+                    displaced.copy(elapsedAtAnchorMs = elapsedAt(displaced, occurredAt)),
+                    command,
+                    TimerStatus.Superseded,
                     historyId = historyIds[displaced.id] ?: displaced.id,
                 )
             } else if (displaced.status in terminalStatuses && history.none { it.timerId == displaced.id }) {
@@ -201,6 +210,7 @@ internal object LegacyTimerReducer {
             phase = timer.phase,
             status = timer.status,
             plannedDurationMs = timer.plannedDurationMs,
+            elapsedMs = timer.elapsedAtAnchorMs.coerceIn(0, timer.plannedDurationMs),
             completedAt = timer.anchorAt.takeIf { timer.status == TimerStatus.Completed },
             endedAt = timer.anchorAt,
             taskId = timer.taskId,
@@ -239,6 +249,7 @@ internal object LegacyTimerReducer {
                     phase = current.phase,
                     status = TimerStatus.Completed,
                     plannedDurationMs = current.plannedDurationMs,
+                    elapsedMs = current.plannedDurationMs,
                     completedAt = completedAt,
                     endedAt = completedAt,
                     taskId = current.taskId,
@@ -266,12 +277,23 @@ internal object LegacyTimerReducer {
                 phase = timer.phase,
                 status = status,
                 plannedDurationMs = timer.plannedDurationMs,
+                elapsedMs = timer.elapsedAtAnchorMs.coerceIn(0, timer.plannedDurationMs),
                 completedAt = physicalOccurredAt.takeIf { status == TimerStatus.Completed },
                 endedAt = physicalOccurredAt,
                 pending = true,
                 taskId = timer.taskId,
             ),
         )
+    }
+
+    /** Mirrors Core `elapsed_at`: a running session counts the time since its anchor. */
+    private fun elapsedAt(timer: CanonicalTimer, at: String): Long {
+        val stored = timer.elapsedAtAnchorMs.coerceIn(0, timer.plannedDurationMs)
+        if (timer.status != TimerStatus.Running) return stored
+        val delta = runCatching {
+            Duration.between(Instant.parse(timer.anchorAt), Instant.parse(at)).toMillis()
+        }.getOrNull()?.coerceAtLeast(0) ?: 0
+        return (stored + delta).coerceIn(0, timer.plannedDurationMs)
     }
 
     private val activeStatuses = setOf(TimerStatus.Running, TimerStatus.Paused)

@@ -84,7 +84,7 @@ internal class IrohCanonicalRecordPersistence(
         newEntities: List<IrohOperationEntity>,
         projected: IrohRoomProjection,
     ) {
-        val updatedRoom = room.copy(roomStateJson = WorkspaceCodec.encode(projected.snapshot))
+        val updatedRoom = room.copy(roomStateJson = WorkspaceCodec.encodeRoomState(projected.snapshot))
         if (hadRecords) {
             dao.captureIrohOperations(updatedRoom, newEntities, projected.snapshot)
         } else {
@@ -131,7 +131,7 @@ internal class IrohCanonicalRecordPersistence(
                 records = dao.loadOperationsBounded(roomId) + newEntities,
                 baseSnapshot = base,
             )
-            val updated = room.copy(roomStateJson = WorkspaceCodec.encode(projected.snapshot))
+            val updated = room.copy(roomStateJson = WorkspaceCodec.encodeRoomState(projected.snapshot))
             try {
                 if (active) {
                     dao.insertRemoteIrohRecordsAndActivate(updated, newEntities, projected.snapshot)
@@ -150,7 +150,7 @@ internal class IrohCanonicalRecordPersistence(
             if (active) return@withLock captureLocalOperationsLocked()
             val projected = projection.project(roomId)
             val room = checkNotNull(dao.irohRoom(roomId)) { "Iroh room is missing" }
-            val updated = room.copy(roomStateJson = WorkspaceCodec.encode(projected.snapshot))
+            val updated = room.copy(roomStateJson = WorkspaceCodec.encodeRoomState(projected.snapshot))
             dao.updateIrohRoom(updated)
             projected
         }

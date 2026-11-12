@@ -26,7 +26,7 @@ class IrohRoomOrchestrationNegativeIntegrationTest {
         assertEquals(1, harness.stopCount)
         assertEquals(ReplicationMode.CENTRALIZED, harness.state.value.mode)
         assertEquals(IrohConnectionStatus.UNAVAILABLE, harness.state.value.status)
-        assertEquals("endpoint unavailable", harness.state.value.message)
+        assertEquals("Iroh room could not be joined", harness.state.value.message)
         assertFalse(harness.state.value.transitioning)
     }
 }

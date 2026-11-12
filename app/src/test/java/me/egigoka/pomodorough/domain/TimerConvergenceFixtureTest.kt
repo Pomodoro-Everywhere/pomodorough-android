@@ -26,7 +26,7 @@ class TimerConvergenceFixtureTest {
             "%02x".format(it.toInt() and 0xff)
         }
         assertEquals(
-            "51c357d8fd63e7200c1316ef36fc45821bea9ac2fbe11f255832fa21110ea104",
+            "60ee91bed591a89fb728e6d252cfc47a202ca87cac3adc7f4c4bfab3de7038f3",
             digest,
         )
 
@@ -274,6 +274,7 @@ class TimerConvergenceFixtureTest {
                 status = it.status,
                 phase = it.phase,
                 durationMs = it.plannedDurationMs,
+                elapsedMs = it.elapsedMs,
                 commandId = it.commandId,
                 endedMs = Instant.parse(it.endedAt ?: it.completedAt).toEpochMilli() - epoch.toEpochMilli(),
                 taskId = it.taskId,
@@ -339,6 +340,8 @@ private data class ConvergenceHistory(
     val status: String,
     val phase: String,
     val durationMs: Long,
+    // Required in fixture version 2: Core 0.55.0 records the time every row ran.
+    val elapsedMs: Long?,
     val commandId: String? = null,
     val endedMs: Long,
     val taskId: String? = null,

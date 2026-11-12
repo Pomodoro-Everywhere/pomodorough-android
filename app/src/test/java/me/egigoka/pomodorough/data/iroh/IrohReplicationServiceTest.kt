@@ -24,6 +24,35 @@ class IrohReplicationServiceTest {
     }
 
     @Test
+    fun transformStateDerivesTheChangeFromTheCurrentState() {
+        // R54-A10: the invite collector's change applies to the state current at write time.
+        val service = IrohReplicationService(store = FakeStore(), binding = NoopBinding(), onProjection = {})
+        val newer = IrohNetworkState(roomId = "room-test0001", message = "newer notice")
+        service.replaceState(newer)
+        service.transformState { current -> current.copy(invite = "invite-1") }
+        assertEquals(newer.copy(invite = "invite-1"), service.state.value)
+    }
+
+    @Test
+    fun transformStateRetriesOnAWriteThatLandsDuringTheTransform() {
+        // R54-A10: a write that lands while the change is computed survives, because the change
+        // is computed again on the newer state.
+        val service = IrohReplicationService(store = FakeStore(), binding = NoopBinding(), onProjection = {})
+        service.replaceState(IrohNetworkState(roomId = "room-test0001", message = "older notice"))
+        var calls = 0
+        service.transformState { current ->
+            calls += 1
+            if (calls == 1) service.replaceState(current.copy(message = "newer notice"))
+            current.copy(invite = "invite-1")
+        }
+        assertEquals(
+            IrohNetworkState(roomId = "room-test0001", message = "newer notice", invite = "invite-1"),
+            service.state.value,
+        )
+        assertEquals(2, calls)
+    }
+
+    @Test
     fun updateStateOrdinarySnapshotFailureStaysSilentAndPublishesStatus() = runTest {
         val reported = mutableListOf<Throwable>()
         val previous = CrashReporter.delegate

@@ -5,10 +5,14 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.os.SystemClock
+import android.util.Log
+import androidx.annotation.StringRes
 import java.io.File
 import java.io.IOException
 import java.nio.charset.StandardCharsets
 import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
@@ -55,9 +59,11 @@ import me.egigoka.pomodorough.data.local.TimerDao
 import me.egigoka.pomodorough.data.storage.BootstrapPreparationStorageUpdate
 import me.egigoka.pomodorough.data.storage.BootstrapResolutionStorageUpdate
 import me.egigoka.pomodorough.data.storage.FullSyncStorageUpdate
+import me.egigoka.pomodorough.data.storage.StoredTimerWorkspace
 import me.egigoka.pomodorough.data.storage.TimerStore
 import me.egigoka.pomodorough.data.time.TrustedClock
 import me.egigoka.pomodorough.data.iroh.IrohReplicationController
+import me.egigoka.pomodorough.data.iroh.IrohRouteReadException
 import me.egigoka.pomodorough.data.iroh.protocol.IrohNetworkState
 import me.egigoka.pomodorough.data.iroh.protocol.ReplicationMode
 import me.egigoka.pomodorough.domain.SettingsReducer
@@ -95,6 +101,10 @@ data class AppState(
     val network: IrohNetworkState = IrohNetworkState(),
     val localAccountResetRequired: Boolean = false,
     val completionAlertTimerId: String? = null,
+    // New fields go last: positional construction and componentN() are a source contract.
+    val localStorageReadFailed: Boolean = false,
+    val skipDestinationPhase: String? = null,
+    val noticeAction: NoticeAction? = null,
 ) {
     /** Named reset state; Boolean remains a constructor component for source compatibility. */
     val accountStatus: AccountStatus
@@ -156,6 +166,11 @@ class TimerRepository(
     private val transitionCommitter by lazy {
         RepositoryTransitionCommitter.forTimerStore(timerStore)
     }
+    private val pendingTaskDeletionWindow = PendingTaskDeletionWindow(
+        PendingTaskDeletionMarkerStore(
+            appContext.getSharedPreferences(PendingTaskDeletionMarkerStore.PreferencesName, Context.MODE_PRIVATE),
+        ),
+    )
     private val trustedClock = TrustedClock(currentTimeMillis, elapsedRealtimeMillis, bootId)
     private val statePublisher = RepositoryStatePublisher()
     private val centralizedAccountSync = CentralizedAccountSyncAggregate(
@@ -188,6 +203,7 @@ class TimerRepository(
         CoreProjectionDispatcher(coreDispatch)
     }
     private val coreCompletion by lazy { CoreCompletionDispatcher(coreDispatch) }
+    private val coreSkipDestination by lazy { CoreSkipDestinationDispatcher(coreDispatch) }
     private val coreHlc by lazy { CoreHlcDispatcher(coreDispatch) }
     private val mutationCoordinator by lazy {
         TimerMutationCoordinator(json, coreProjection, coreCompletion)
@@ -211,6 +227,10 @@ class TimerRepository(
     private val actionMutex = workspaceCoordinator
     private val initialized = CompletableDeferred<Unit>()
     private val networkInitializationStarted = AtomicBoolean(false)
+    private val accountRestoreRetryInFlight = AtomicBoolean(false)
+    // Set by restored connectivity and cleared when a restore attempt starts, so a failed
+    // attempt can tell that the network came back after it began.
+    private val connectivityRestoredDuringRestore = AtomicBoolean(false)
     @Volatile private var accountAdmissionResolved = false
     private val accountPublication = AccountPublicationLinearizer()
     private val connectivity = appContext.getSystemService(ConnectivityManager::class.java)
@@ -249,8 +269,22 @@ class TimerRepository(
     private var terminalSyncError: String?
         get() = centralizedAccountSync.terminalSyncError
         set(value) { centralizedAccountSync.terminalSyncError = value }
+    // UX round 2, L5: the conflict card shows an authored sentence, so the raw
+    // reason stays a diagnostic. It goes to the local log once, when it is set;
+    // there is no Sentry capture here.
     private var conflict: String? = null
+        set(value) {
+            if (value != null && value != field) Log.w(ConflictLogTag, "Conflict reason: $value")
+            field = value
+        }
+    // A notice set anywhere else is a plain sentence: it drops the retry that
+    // an earlier account failure offered. Only resetSignedOutAuthentication pairs them.
     private var notice: String? = null
+        set(value) {
+            field = value
+            noticeAction = null
+        }
+    private var noticeAction: NoticeAction? = null
     private var historyResolution: HistoryResolutionState?
         get() = centralizedAccountSync.historyResolution
         set(value) { centralizedAccountSync.historyResolution = value }
@@ -258,10 +292,15 @@ class TimerRepository(
         get() = centralizedAccountSync.accountSwitch
         set(value) { centralizedAccountSync.accountSwitch = value }
     private var localMutationCorrupted = false
+    private var localStorageReadFailed = false
+    // R54-A07: a startup read of the replication route or workspace failed. Startup shows the
+    // retry screen, and mutations and network work stay blocked until a later startup succeeds.
+    private var replicationStartupReadFailed = false
     private var credentialRecoveryRequired = false
     private var mutationFailure: String? = null
     private var selectedPhaseGeneration = 0L
     private var networkState = IrohNetworkState()
+    private var skipDestinationMemo: SkipDestinationMemo? = null
 
     private val centralizedSyncRuntime = CentralizedSyncRuntime(
         initialized = initialized,
@@ -315,17 +354,106 @@ class TimerRepository(
     }
 
     override suspend fun initialize() {
+        initializeWorkspace()
+        replayLeftoverTaskDeletion()
+    }
+
+    private suspend fun initializeWorkspace() {
         ensureLocalInitialized()
-        if (localMutationCorrupted || mutationFailure != null) return
-        if (resolveDeletionStateForInitialization()) return
-        if (resolveCredentialStateForInitialization()) return
-        logoutRevocations.startIfNeeded()
-        accountAdmissionResolved = true
-        replication?.initialize()
+        // A failed storage read leaves startup open for the next initialize().
+        if (!initialized.isCompleted) return
+        if (!admitAccountInitialization()) return
+        if (!initializeReplication()) return
+        // R54-A07: this startup read the route, so it releases an earlier read hold before the
+        // workspace gates run. The reload or the publish below then replaces the retry screen.
+        replicationStartupReadFailed = false
         if (foreground) replication?.onForeground()
         if (initializeNonCentralizedWorkspace()) return
+        publish()
         initializeCentralizedAccount()
     }
+
+    // R54-A07: a failed route read holds startup on the retry screen instead of escaping the
+    // caller. The orchestration published nothing and reads the route again on the next call.
+    private suspend fun initializeReplication(): Boolean {
+        try {
+            replication?.initialize()
+        } catch (_: IrohRouteReadException) {
+            // expected-silent: the orchestration already sent the bounded route-read report.
+            replicationStartupReadFailed = true
+            publish()
+            return false
+        }
+        return true
+    }
+
+    private suspend fun admitAccountInitialization(): Boolean {
+        if (localMutationCorrupted || mutationFailure != null) return false
+        if (resolveDeletionStateForInitialization()) return false
+        if (resolveCredentialStateForInitialization()) return false
+        logoutRevocations.startIfNeeded()
+        accountAdmissionResolved = true
+        return true
+    }
+
+    // R54-A01: refresh, foreground, and restored connectivity re-admit a restore that failed
+    // with credentials and owner retained. Each request admits at most one attempt through
+    // initialization's gates and single-flight restore; a failure waits for the next request.
+    private fun requestAccountRestoreRetry() {
+        if (!accountRestoreRetryAllowed()) return
+        if (!accountRestoreRetryInFlight.compareAndSet(false, true)) return
+        scope.launch {
+            try {
+                accountWorkspaceController.serialize { retryAccountRestore() }
+            } finally {
+                accountRestoreRetryInFlight.set(false)
+            }
+            requestRetryForConnectivityRestoredDuringRestore()
+        }
+    }
+
+    // A restore request dropped because an attempt was in flight would otherwise wait for the
+    // next foreground if that attempt fails. Only restored connectivity carries news the attempt
+    // could not see; each restored network earns one follow-up request. A running retry holds
+    // admission, so it makes the request itself after releasing it. While the gate refuses (for
+    // example, an explicit restore holds initialization), the restoration stays recorded so the
+    // failure of that restore can spend it.
+    private fun requestRetryForConnectivityRestoredDuringRestore() {
+        if (accountRestoreRetryInFlight.get()) return
+        if (!accountRestoreRetryAllowed()) return
+        if (connectivityRestoredDuringRestore.getAndSet(false)) requestAccountRestoreRetry()
+    }
+
+    private suspend fun retryAccountRestore() {
+        if (!accountRestoreRetryAllowed() || !admitAccountInitialization()) return
+        initializeCentralizedAccount()
+    }
+
+    // A SignedOut account with the restore re-armed means a restore or sign-in failed; startup
+    // before its first restore stays Loading. The owner must be retained so a retry never
+    // reaches the stale-credential clear.
+    private fun accountRestoreRetryAllowed(): Boolean =
+        initialized.isCompleted && !networkInitializationStarted.get() && !accountNetworkBlocked() &&
+            replicationMode() == ReplicationMode.CENTRALIZED && authStatus == AuthStatus.SignedOut &&
+            credentialsAdmitRestoreRetry() && retainsAccountOwner()
+
+    // Unreadable credentials are admitted so initialization's gate publishes the same recovery
+    // notice as initialize() and fences later retries. Pending logout never retries, so a retry
+    // cannot republish its notice; empty credentials have nothing to restore.
+    private fun credentialsAdmitRestoreRetry(): Boolean = when (auth.credentialState()) {
+        AuthCredentialState.Active, AuthCredentialState.Unreadable -> true
+        AuthCredentialState.Empty, AuthCredentialState.LogoutPending -> false
+    }
+
+    private fun retainsAccountOwner(): Boolean =
+        local.ownerUserId != null || local.userJson != null || hasRecoverablePendingOwner()
+
+    private fun hasRecoverablePendingOwner(): Boolean =
+        pendingBootstrapResolution?.let { pendingResolution ->
+            historyResolution?.corrupted != true &&
+                pendingResolution.ownerUserId.isNotBlank() &&
+                pendingResolution.userJson.isNotBlank()
+        } == true
 
     private suspend fun resolveDeletionStateForInitialization(): Boolean =
         when (local.accountDeletionState) {
@@ -348,8 +476,8 @@ class TimerRepository(
             null -> false
             else -> {
                 localMutationCorrupted = true
-                conflict = LocalStateCorruptedError
-                terminalSyncError = LocalStateCorruptedError
+                conflict = localStateCorruptedSentence()
+                terminalSyncError = localStateCorruptedSentence()
                 publish()
                 true
             }
@@ -376,22 +504,37 @@ class TimerRepository(
 
     private suspend fun initializeNonCentralizedWorkspace(): Boolean {
         if (replicationMode() == ReplicationMode.CENTRALIZED) return false
-        reloadWorkspace(replicationMode())
+        if (!reloadStartupWorkspace(replicationMode())) return true
         if (authStatus == AuthStatus.Loading) {
             authStatus = if (user != null && auth.hasTokens()) AuthStatus.SignedIn else AuthStatus.SignedOut
-            publish()
         }
+        // Also replaces a retry screen when the reload gates held the stored workspace back.
+        publish()
         return true
+    }
+
+    // R54-A07: a failed startup reload holds startup on the retry screen. Returns false after
+    // that failure; the stored rows stay untouched for the next startup to read again.
+    private suspend fun reloadStartupWorkspace(mode: ReplicationMode): Boolean = actionMutex.withLock {
+        if (!workspaceReloadAdmitted(mode)) return@withLock true
+        val stored = try {
+            timerStore.loadWorkspace()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            // One bounded read report via CrashReporter (no persisted content or SQL).
+            CorruptStateReporter.report(CorruptStateCategory.StartupWorkspaceRead)
+            replicationStartupReadFailed = true
+            publish()
+            return@withLock false
+        }
+        installStoredWorkspace(stored)
+        true
     }
 
     private suspend fun initializeCentralizedAccount() {
         if (!networkInitializationStarted.compareAndSet(false, true)) return
-        val recoverablePendingOwner = pendingBootstrapResolution?.let { pendingResolution ->
-            historyResolution?.corrupted != true &&
-                pendingResolution.ownerUserId.isNotBlank() &&
-                pendingResolution.userJson.isNotBlank()
-        } == true
-        if (local.ownerUserId == null && local.userJson == null && auth.hasTokens() && !recoverablePendingOwner) {
+        if (local.ownerUserId == null && local.userJson == null && auth.hasTokens() && !hasRecoverablePendingOwner()) {
             val clearError = runCatching(auth::clear).exceptionOrNull()
             if (clearError is CancellationException) throw clearError
             val outcome = StaleCredentialClearRecovery.resolve(clearError)
@@ -434,6 +577,7 @@ class TimerRepository(
                 finishLocalInitialization()
                 return@withLock
             }
+            if (!adoptLegacyDependencies()) return@withLock
             val legacyRepaired = validateLoadedMutationState() ?: return@withLock
             val repair = repairLoadedMutationState(loaded, legacyRepaired)
             val initialProjection = mutationProjection(::projectSynchronizedState)
@@ -454,11 +598,123 @@ class TimerRepository(
         // A73 guard-first (A60 pattern): the guarded block swallows cancel; rethrow
         // before mapping to a projection failure so coroutine cancel propagates.
         if (error is CancellationException) throw error
+        // R54-A08/A09: startup ends without a workspace, so the boot reschedule and every
+        // mutation return early from here on. One bounded report, without error text, records it.
+        CorruptStateReporter.report(CorruptStateCategory.ProjectionRuntimeStartup)
         mutationFailure = projectionFailureMessage(error)
         notice = mutationFailure
         finishFailedInitialization()
         return false
     }
+
+    private suspend fun adoptLegacyDependencies(): Boolean {
+        if (replicationMode() == ReplicationMode.IROH) return true
+        val gate = recordLegacyDependencyDecision()
+        if (gate != LegacyDependencyGate.Open) {
+            holdLegacyDependencies(gate)
+            finishFailedInitialization()
+            return false
+        }
+        // Adoption never rewrites retained rows, so the loaded sibling map still gates release.
+        return true
+    }
+
+    /**
+     * Leaving an Iroh room, or switching an Iroh workspace to another mode, installs a workspace
+     * that startup skipped. Adopt it before any sync can send its retained queue as modern rows.
+     */
+    private suspend fun adoptReloadedLegacyDependencies() {
+        if (replicationMode() == ReplicationMode.IROH) return
+        val gate = recordLegacyDependencyDecision()
+        if (gate == LegacyDependencyGate.Open) return
+        holdLegacyDependencies(gate)
+        publish()
+    }
+
+    private suspend fun recordLegacyDependencyDecision(): LegacyDependencyGate {
+        // Only Migration 16 to 17 marks a pre-R54 queue for Core. Null markers mean a modern
+        // workspace, and a recorded decision is validated below without calling Core again.
+        if (!LegacyDependencyStartup.pending(local)) return legacyDependencyGate()
+        local = try {
+            LegacyDependencyStartup(dao, coreDispatch).adopt(Instant.ofEpochMilli(currentTimeMillis()), ZoneId.systemDefault())
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            CrashReporter.report(error)
+            return LegacyDependencyGate.RetryAdoption
+        }
+        clearLegacyRetryNotice()
+        return legacyDependencyGate()
+    }
+
+    // The record write now committed, so the retry notice from an earlier attempt is stale.
+    private fun clearLegacyRetryNotice() {
+        if (mutationFailure != appContext.getString(R.string.legacy_dependency_recovery_not_saved)) return
+        if (notice == mutationFailure) notice = null
+        mutationFailure = null
+    }
+
+    // A successful mutation clears its earlier failure. A held legacy queue keeps its notice
+    // until a Core decision opens the gate, because a cleared failure reopens restore admission
+    // and workspace reload.
+    private fun clearMutationFailure() {
+        if (heldLegacyDependencyNotice() != null) return
+        if (notice == mutationFailure) notice = null
+        mutationFailure = null
+    }
+
+    private fun legacyDependencyGate(): LegacyDependencyGate = when {
+        LegacyDependencyStartup.pending(local) -> LegacyDependencyGate.RetryAdoption
+        LegacyDependencyStartup.blocked(local) -> LegacyDependencyGate.Blocked
+        else -> LegacyDependencyGate.Open
+    }
+
+    /**
+     * Raises the notice for a held legacy queue. A blocked decision is final, because startup
+     * never asks Core again, so it also takes the corrupt-state route: sync stays blocked with a
+     * persistent error, and Reset Local Account clears the queue and both markers (clearedLocal).
+     */
+    private fun holdLegacyDependencies(gate: LegacyDependencyGate) {
+        when (gate) {
+            LegacyDependencyGate.Open -> return
+            LegacyDependencyGate.RetryAdoption -> {
+                mutationFailure = appContext.getString(R.string.legacy_dependency_recovery_not_saved)
+            }
+            LegacyDependencyGate.Blocked -> {
+                mutationFailure = appContext.getString(R.string.legacy_dependencies_need_recovery)
+                localMutationCorrupted = true
+                terminalSyncError = mutationFailure
+                conflict = mutationFailure
+            }
+        }
+        notice = mutationFailure
+        // A reload during a retry delay can hold the next attempt; the notice replaces "retrying".
+        retrying = false
+    }
+
+    /**
+     * Sign-in, restore, and a history choice can send the retained queue through
+     * resolveBootstrap, and a new Iroh room sends it to peers, so each new attempt waits for the
+     * Core decision. Each call retries a pending adoption once. Nothing is persisted for a held
+     * attempt: a history choice is dropped and the dialog asks again, and an Automatic plan is
+     * not prepared.
+     */
+    private suspend fun legacyDependenciesAllowEgress(): Boolean {
+        val gate = recordLegacyDependencyDecision()
+        if (gate == LegacyDependencyGate.Open) return true
+        holdLegacyDependencies(gate)
+        publish()
+        return false
+    }
+
+    // Entering a room from another mode stashes this workspace and builds the room from its
+    // queue. A live IROH workspace skips adoption on purpose (adoptLegacyDependencies).
+    private suspend fun legacyDependenciesAllowRoomEntry(): Boolean =
+        replicationMode() == ReplicationMode.IROH || actionMutex.withLock { legacyDependenciesAllowEgress() }
+
+    // A held sign-in keeps the hold notice on the signed-out screen.
+    private fun heldLegacyDependencyNotice(): String? =
+        mutationFailure.takeIf { ::local.isInitialized && legacyDependencyGate() != LegacyDependencyGate.Open }
 
     private suspend fun loadLocalInitialization(): LocalInitializationData? = try {
         timerStore.initialize()
@@ -472,12 +728,25 @@ class TimerRepository(
         accountPublication.transition(error.local.accountDeletionState != null)
         local = error.local
         localMutationCorrupted = true
-        terminalSyncError = LocalStateCorruptedError
-        conflict = LocalStateCorruptedError
-        historyResolution = HistoryResolutionState(0, 0, corrupted = true, error = LocalStateCorruptedError)
+        terminalSyncError = localStateCorruptedSentence()
+        conflict = localStateCorruptedSentence()
+        historyResolution = HistoryResolutionState(0, 0, corrupted = true, error = localStateCorruptedSentence())
         alarmCoordinator.cancelForAccountClear()
         finishFailedInitialization()
         null
+    } catch (error: LocalStorageReadException) {
+        // One bounded read report per stage via CrashReporter (no persisted content or SQL).
+        failLocalStorageRead(error.stage)
+        null
+    }
+
+    // R54-A02: a read failure is not corruption. Every row stays as stored and initialization
+    // stays incomplete, so startup shows a retry and the next initialize() reads again. Each stage
+    // reports once, without persisted content or SQL.
+    private fun failLocalStorageRead(stage: LocalStorageReadStage) {
+        CorruptStateReporter.report(stage.category)
+        localStorageReadFailed = true
+        publish()
     }
 
     private fun installLocalInitialization(data: LocalInitializationData) {
@@ -486,6 +755,7 @@ class TimerRepository(
         )
         accountPublication.transition(data.local.accountDeletionState != null)
         local = data.local
+        syncNextDomain = local.syncNextDomain
         pending = data.commands
         commandDependencies = data.commandDependencies
         pendingDurationOperations = data.durationOperations
@@ -510,7 +780,7 @@ class TimerRepository(
             if (error is CancellationException) throw error
         }
         if (legacyRepair.isFailure) {
-            return failCorruptMutationState(LocalClockRangeError, CorruptStateCategory.ClockRange)
+            return failCorruptMutationState(localClockRangeSentence(), CorruptStateCategory.ClockRange)
         }
         val queueError = runCatching {
             TimerSyncValidation.validatePendingQueues(pendingSyncQueues(), local.deviceId)
@@ -518,7 +788,7 @@ class TimerRepository(
         if (queueError is CancellationException) throw queueError
         if (queueError != null) {
             return failCorruptMutationState(
-                queueError.message ?: LocalStateCorruptedError,
+                queueError.message ?: localStateCorruptedSentence(),
                 CorruptStateCategory.QueueValidation,
             )
         }
@@ -527,10 +797,14 @@ class TimerRepository(
         }.exceptionOrNull()
         if (rangeError is CancellationException) throw rangeError
         if (rangeError != null) {
-            return failCorruptMutationState(LocalClockRangeError, CorruptStateCategory.ClockRange)
+            return failCorruptMutationState(localClockRangeSentence(), CorruptStateCategory.ClockRange)
         }
         return legacyRepair.getOrDefault(false)
     }
+
+    private fun localStateCorruptedSentence() = appContext.getString(R.string.local_state_corrupted_sync_blocked)
+
+    private fun localClockRangeSentence() = appContext.getString(R.string.local_clock_outside_sync_range)
 
     private fun failCorruptMutationState(message: String, category: CorruptStateCategory): Boolean? {
         CorruptStateReporter.report(category)
@@ -551,9 +825,9 @@ class TimerRepository(
         } ?: false
         val pendingById = pending.associateBy(TimerCommand::id)
         val invalidEntities = data.commandEntities.filter { entity ->
-            val sourceId = entity.generatedByFinishCommandId ?: return@filter false
+            val sourceId = commandDependencies[entity.id] ?: return@filter false
             val source = pendingById[sourceId]
-            source?.type != CommandType.Finish || entity.deviceSequence <= source.deviceSequence
+            source == null || entity.deviceSequence <= source.deviceSequence
         }
         discardInvalidDependentCommands(invalidEntities)
         val highestSequence = pending.maxOfOrNull(TimerCommand::deviceSequence) ?: 0L
@@ -589,7 +863,7 @@ class TimerRepository(
     }
 
     private suspend fun finishLocalInitialization() {
-        val pendingMessage = "Sign in to finish the saved history choice before making more changes."
+        val pendingMessage = R.string.sign_in_to_finish_saved_history_choice
         if (local.accountDeletionState != null) {
             authStatus = AuthStatus.SignedOut
             accountAdmissionResolved = false
@@ -654,8 +928,11 @@ class TimerRepository(
         publish()
     }
 
-    override suspend fun signIn(credentialProvider: GoogleCredentialProvider) =
+    // The owner that signs in again replays the deletes it left behind.
+    override suspend fun signIn(credentialProvider: GoogleCredentialProvider) {
         accountWorkspaceController.serialize { signInInternal(credentialProvider) }
+        replayLeftoverTaskDeletion(signedInReplay())
+    }
 
     private suspend fun signInInternal(credentialProvider: GoogleCredentialProvider) {
         if (!prepareSignIn()) return
@@ -669,23 +946,24 @@ class TimerRepository(
         } catch (error: CancellationException) {
             cancelSignInAttempt()
             throw error
-        } catch (_: AuthenticationRequired) {
+        } catch (error: AuthenticationRequired) {
             // expected-silent: session expiry surfaces as a sign-in notice, not a crash.
             identity?.let {
-                handleAuthenticationRequired(it, "Session expired during sign-in bootstrap.")
+                handleAuthenticationRequired(
+                    it,
+                    R.string.session_expired_sign_in_again_history_choice,
+                    signInFailureNotice(error),
+                )
             }
         } catch (error: ProfileProtocolException) {
             // expected-silent: malformed profile surfaces as a sign-in notice, not a crash.
-            failSignIn(identity, error.message, clearCredentials = true)
+            failSignIn(identity, signInFailureNotice(error), clearCredentials = true)
         } catch (error: Exception) {
             // R50-L02: transport stays quiet with notice; credential/Core/commit
             // gets one bounded stage+cause report.
             // expected-silent: network failure surfaces as a sign-in notice, not a crash.
             reportAccountBootstrap(AccountBootstrapStage.SignIn, identity, error)
-            failSignIn(
-                identity,
-                error.message ?: appContext.getString(R.string.google_sign_in_did_not_complete),
-            )
+            failSignIn(identity, signInFailureNotice(error))
         } finally {
             accountWorkspaceController.releaseSignIn()
         }
@@ -695,10 +973,10 @@ class TimerRepository(
         initialize()
         if (actionMutex.withLock { localMutationCorrupted || accountNetworkBlocked() }) return false
         if (replicationMode() != ReplicationMode.CENTRALIZED) {
+            completePendingTaskDeletion()
             replication?.setMode(ReplicationMode.CENTRALIZED)
             if (replicationMode() != ReplicationMode.CENTRALIZED) {
-                notice = replication?.state?.value?.message
-                    ?: "Could not restore centralized workspace for sign-in."
+                notice = appContext.getString(R.string.sign_in_workspace_not_restored)
                 publish()
                 return false
             }
@@ -706,6 +984,7 @@ class TimerRepository(
         }
         return actionMutex.withLock {
             !localMutationCorrupted && !accountNetworkBlocked() &&
+                legacyDependenciesAllowEgress() &&
                 accountWorkspaceController.claimSignIn().acquired
         }
     }
@@ -759,38 +1038,67 @@ class TimerRepository(
         actionMutex.withLock {
             if (authStatus != AuthStatus.SigningIn) return@withLock
             runCatching(auth::clear)
-            resetSignedOutAuthentication(notice = null)
+            resetSignedOutAuthentication(notice = heldLegacyDependencyNotice())
         }
     }
 
     private suspend fun failSignIn(
         identity: AccountAttemptIdentity?,
-        message: String?,
+        failure: AccountFailureNotice?,
         clearCredentials: Boolean = false,
     ) = actionMutex.withLock {
         val attemptIdentity = identity ?: return@withLock
         if (!isCurrent(attemptIdentity)) return@withLock
-        if (clearCredentials) auth.clear()
+        if (clearCredentials && !retireRejectedCredentials()) {
+            resetSignedOutAuthentication(appContext.getString(R.string.unreadable_credential))
+            return@withLock
+        }
         // R51-A06: bootstrap failure re-arms restore so an explicit
         // initialize() retries instead of stranding the account.
         networkInitializationStarted.set(false)
-        resetSignedOutAuthentication(message)
+        resetSignedOutAfterAccountFailure(failure)
     }
 
-    private fun resetSignedOutAuthentication(notice: String?) {
+    // R54-A02 (R43-A11 pattern): a vault that refuses to clear still holds the rejected tokens.
+    // Retrying would replay them, so the account stays un-armed and asks for a local reset,
+    // which retries the clear. The failure reports once as CredentialClear.
+    private fun retireRejectedCredentials(): Boolean {
+        val clearError = runCatching(auth::clear).exceptionOrNull()
+        if (clearError is CancellationException) throw clearError
+        if (!StaleCredentialClearRecovery.resolve(clearError).recoveryRequired) return true
+        credentialRecoveryRequired = true
+        return false
+    }
+
+    // The sentence and its retry publish together; the raw exception text never does.
+    private fun resetSignedOutAfterAccountFailure(failure: AccountFailureNotice?) =
+        resetSignedOutAuthentication(
+            notice = failure?.let { appContext.getString(it.sentence) },
+            action = failure?.action,
+        )
+
+    private fun resetSignedOutAuthentication(notice: String?, action: NoticeAction? = null) {
         authStatus = AuthStatus.SignedOut
         user = null
         this.notice = notice
-        restorePendingResolutionForSignedOut(
-            appContext.getString(R.string.sign_in_again_to_retry_history_choice),
-        )
+        noticeAction = action
+        restorePendingResolutionForSignedOut(R.string.sign_in_again_to_retry_history_choice)
         publish()
     }
 
-    override suspend fun logout() = accountWorkspaceController.serialize { logoutInternal() }
+    // UX round 2: a task delete that waits for Undo reaches its owner's queue
+    // before the account paths below change or reset the workspace. The owner
+    // keeps its marker, because those paths can discard that queue.
+    override suspend fun logout() {
+        releasePendingTaskDeletionToOwner()
+        accountWorkspaceController.serialize { logoutInternal() }
+        replayLeftoverTaskDeletion()
+    }
 
-    override suspend fun resetLocalAccount() = accountWorkspaceController.serialize {
-        resetLocalAccountInternal()
+    override suspend fun resetLocalAccount() {
+        releasePendingTaskDeletionToOwner()
+        accountWorkspaceController.serialize { resetLocalAccountInternal() }
+        replayLeftoverTaskDeletion()
     }
 
     private suspend fun resetLocalAccountInternal() {
@@ -842,8 +1150,7 @@ class TimerRepository(
         if (failure is CancellationException) throw failure
         val nonCancel = failure ?: return true
         actionMutex.withLock {
-            notice = nonCancel.message
-                ?: appContext.getString(R.string.local_account_reset_failed_corrupt_data_was_kept)
+            notice = failureNoticeText(nonCancel, R.string.local_account_reset_failed_corrupt_data_was_kept)
             publish()
         }
         return false
@@ -873,8 +1180,7 @@ class TimerRepository(
         } catch (error: Exception) {
             // expected-silent: local reset failure surfaces as a notice with corrupt data kept, not a crash.
             actionMutex.withLock {
-                notice = error.message
-                    ?: appContext.getString(R.string.local_account_reset_failed_corrupt_data_was_kept)
+                notice = failureNoticeText(error, R.string.local_account_reset_failed_corrupt_data_was_kept)
                 publish()
             }
         }
@@ -960,7 +1266,7 @@ class TimerRepository(
         } catch (error: Exception) {
             // expected-silent: sign-out scrub failure surfaces as a notice with local data kept, not a crash.
             actionMutex.withLock {
-                notice = error.message ?: appContext.getString(R.string.sign_out_failed_local_timer_data_was_kept)
+                notice = failureNoticeText(error, R.string.sign_out_failed_local_timer_data_was_kept)
                 publish()
             }
         }
@@ -990,7 +1296,7 @@ class TimerRepository(
         } catch (error: Exception) {
             // expected-silent: remote sign-out preservation failure surfaces as a notice, not a crash.
             actionMutex.withLock {
-                notice = error.message ?: appContext.getString(R.string.could_not_preserve_remote_sign_out)
+                notice = failureNoticeText(error, R.string.could_not_preserve_remote_sign_out)
                 publish()
             }
             false
@@ -1005,9 +1311,7 @@ class TimerRepository(
         accountWorkspaceController.clearBootstrap(AccountWorkspaceReason.LogoutStarted)
         conflict = null
         terminalSyncError = null
-        restorePendingResolutionForSignedOut(
-            appContext.getString(R.string.sign_in_again_to_retry_history_choice),
-        )
+        restorePendingResolutionForSignedOut(R.string.sign_in_again_to_retry_history_choice)
         publish()
     }
 
@@ -1057,6 +1361,9 @@ class TimerRepository(
             safeBaseSelectedTaskId = null,
             safeCanonicalHeadWallMs = null,
             safeCanonicalHeadCounter = null,
+            syncNextDomain = CoreBatchPlanDispatcher.InitialCursor,
+            legacyDependencyInputJson = null,
+            legacyDependencyResultJson = null,
         )
         return if (resetSequence) cleared.copy(
             deviceSequence = 0,
@@ -1113,8 +1420,10 @@ class TimerRepository(
         accountAdmissionResolved = true
     }
 
-    override suspend fun deleteAccount(confirmation: String) =
+    override suspend fun deleteAccount(confirmation: String) {
+        completePendingTaskDeletion()
         accountWorkspaceController.serialize { deleteAccountInternal(confirmation) }
+    }
 
     private suspend fun prepareAccountDeletion(): Long? {
         try {
@@ -1217,8 +1526,11 @@ class TimerRepository(
         }
     }
 
-    override suspend fun confirmAccountSwitch() =
+    override suspend fun confirmAccountSwitch() {
+        releasePendingTaskDeletionToOwner()
         accountWorkspaceController.serialize { confirmAccountSwitchInternal() }
+        replayLeftoverTaskDeletion(signedInReplay())
+    }
 
     private suspend fun confirmAccountSwitchInternal() {
         initialize()
@@ -1248,7 +1560,7 @@ class TimerRepository(
                 if (pendingAccountSwitch !== candidate) return@withLock
                 accountSwitch = accountSwitch?.copy(
                     submitting = false,
-                    error = error.message ?: appContext.getString(R.string.could_not_switch_accounts_without_risking_local_data),
+                    error = failureNoticeText(error, R.string.could_not_switch_accounts_without_risking_local_data),
                 )
                 publish()
             }
@@ -1305,7 +1617,9 @@ class TimerRepository(
         // A61: same suspend-logout guard as resetLocalAccountInternal above;
         // cancel must propagate instead of surfacing a spurious notice.
         if (logoutError is CancellationException) throw logoutError
-        auth.clear()
+        // R54-A04: a refused clear still completes the cancellation signed out, then asks for a
+        // local reset instead of escaping with the switch left submitting.
+        val credentialsRetired = retireRejectedCredentials()
         actionMutex.withLock {
             if (pendingAccountSwitch !== candidate) return@withLock
             accountWorkspaceController.clearAccountSwitch(
@@ -1319,12 +1633,11 @@ class TimerRepository(
             user = null
             syncing = false
             retrying = false
-            restorePendingResolutionForSignedOut(
-                "Sign in with the account that owns this local data to continue syncing.",
-            )
+            restorePendingResolutionForSignedOut(R.string.sign_in_with_local_data_owner_to_continue_syncing)
             notice = logoutError?.let {
-                "New account was removed from this device, but server logout failed: ${it.message.orEmpty()}"
+                failureNoticeText(it, R.string.account_switch_cancelled_server_logout_failed)
             }
+            if (!credentialsRetired) notice = appContext.getString(R.string.unreadable_credential)
             publish()
         }
         closeRevisionStream()
@@ -1332,6 +1645,7 @@ class TimerRepository(
 
     override suspend fun toggleTimer() {
         initialize()
+        completePendingTaskDeletion()
         when (projection.timer?.status) {
             TimerStatus.Running -> issueCommand(CommandType.Pause)
             TimerStatus.Paused -> issueCommand(CommandType.Resume)
@@ -1341,6 +1655,7 @@ class TimerRepository(
 
     override suspend fun finishTimer() {
         initialize()
+        completePendingTaskDeletion()
         finishLocalTimer(onlyIfExpired = false, allowWhileLoading = false)
     }
 
@@ -1351,6 +1666,7 @@ class TimerRepository(
 
     override suspend fun cancelAndClearTimer() {
         initialize()
+        completePendingTaskDeletion()
         var saved = false
         actionMutex.withLock {
             if (mutationsBlocked()) return@withLock
@@ -1387,6 +1703,7 @@ class TimerRepository(
 
     override suspend fun clearTimer() {
         initialize()
+        completePendingTaskDeletion()
         issueCommand(CommandType.Clear)
     }
 
@@ -1400,7 +1717,7 @@ class TimerRepository(
             if (localWorkspaceAdmissionBlocked() || completedTimer?.id != timerId ||
                 completedTimer.status != TimerStatus.Completed
             ) return@withLock false
-            alarmCoordinator.markCompletionAlert(timerId)
+            if (!alarmCoordinator.markCompletionAlert(timerId).changed) return@withLock false
             try {
                 notifier().also { shown ->
                     if (!shown) alarmCoordinator.stopCompletionAlert(timerId)
@@ -1426,6 +1743,7 @@ class TimerRepository(
 
     override suspend fun selectPhase(phase: String) {
         initialize()
+        completePendingTaskDeletion()
         var saved = false
         actionMutex.withLock {
             // R49-A01: TimerPhase.all mirrors Shared Core valid phases.
@@ -1529,6 +1847,7 @@ class TimerRepository(
 
     override suspend fun selectTask(taskId: String?) {
         initialize()
+        completePendingTaskDeletion()
         var saved = false
         actionMutex.withLock {
             if (mutationsBlocked()) return@withLock
@@ -1669,6 +1988,10 @@ class TimerRepository(
 
     override suspend fun addTask(title: String): Boolean {
         initialize()
+        // R54-A09: without a local workspace the add is refused before the shared core derives
+        // the task identity, because a projection runtime that failed at startup throws there.
+        if (!::local.isInitialized) return false
+        completePendingTaskDeletion()
         val task = taskFromSharedCore(title) ?: return false
         val existing = tasks.firstOrNull { it.id == task.id }
         if (existing != null) {
@@ -1685,8 +2008,218 @@ class TimerRepository(
 
     override suspend fun deleteTask(taskId: String) {
         initialize()
+        completePendingTaskDeletion()
         val task = tasks.firstOrNull { it.id == taskId } ?: return
         issueTaskOperation(TaskOperationType.Delete, task)
+    }
+
+    override val pendingTaskDeletion: StateFlow<PendingTaskDeletion?> get() = pendingTaskDeletionWindow.pending
+
+    // UX round 2: the row hides and the durable marker is written; nothing
+    // leaves the workspace until the undo window ends.
+    override suspend fun requestTaskDeletion(taskId: String) {
+        initialize()
+        completePendingTaskDeletion()
+        if (!::local.isInitialized) return
+        val task = tasks.firstOrNull { it.id == taskId } ?: return
+        pendingTaskDeletionWindow.open(task, workspaceOwner())
+    }
+
+    override suspend fun undoTaskDeletion() = pendingTaskDeletionWindow.undo()
+
+    // Every entry point that can start a timer or change a task ends the undo
+    // window first, through the normal delete path. One rule holds for every
+    // path: a deleted task never comes back silently, and it is never deleted
+    // silently later. A refused delete shows the task again with a notice.
+    // UX round 2, S1: every workspace swap (room create, join, leave, identity
+    // recovery, a mode change and the forced mode of a sign-in) ends it too,
+    // before the swap. Home and a room can hold the same task identity, so the
+    // delete must land in the workspace it was opened in and travel with it.
+    override suspend fun completePendingTaskDeletion() {
+        val committed = actionMutex.withLock {
+            val deletion = pendingTaskDeletionWindow.take() ?: return@withLock false
+            // An owner that left keeps its marker until it signs in again.
+            if (deletion.workspaceOwner != currentWorkspaceOwner()) return@withLock false
+            finishMarkedDeletionLocked(deletion.marker, deletion.title, admitted = !mutationsBlocked())
+        }
+        if (committed) afterLocalMutation()
+    }
+
+    // Logout, reset and account switch can discard the owner's queue next, so
+    // the owner keeps its marker even when the delete was queued. The owner's
+    // next sign-in replays it against the server copy; an absent task needs nothing.
+    private suspend fun releasePendingTaskDeletionToOwner() {
+        val committed = actionMutex.withLock {
+            val deletion = pendingTaskDeletionWindow.take() ?: return@withLock false
+            deletion.workspaceOwner == currentWorkspaceOwner() &&
+                commitMarkedDeletionLocked(deletion.taskId, admitted = !mutationsBlocked()) ==
+                MarkedDeletion.Committed
+        }
+        if (committed) afterLocalMutation()
+    }
+
+    // Markers without an open window come from a process that died during the
+    // window, from an owner that left, or from a session that ended. They wait
+    // until the workspace accepts mutations, so a loading workspace drops nothing.
+    private suspend fun replayLeftoverTaskDeletion(replay: LeftoverReplay = LeftoverReplay.LocalWorkspace) {
+        val committed = actionMutex.withLock {
+            if (mutationsBlocked()) return@withLock false
+            val owner = currentWorkspaceOwner() ?: return@withLock false
+            finishLeftoverDeletionsLocked(owner, replay, admitted = true)
+        }
+        if (committed) afterLocalMutation()
+    }
+
+    private fun signedInReplay(): LeftoverReplay =
+        if (authStatus == AuthStatus.SignedIn) LeftoverReplay.ServerCopy else LeftoverReplay.LocalWorkspace
+
+    private suspend fun finishLeftoverDeletionsLocked(
+        owner: String,
+        replay: LeftoverReplay,
+        admitted: Boolean,
+    ): Boolean {
+        val refusedTitles = mutableListOf<String>()
+        val finishedTitles = mutableListOf<String>()
+        pendingTaskDeletionWindow.resolveSuperseding(owner) { taskId -> tasks.any { it.id == taskId } }
+        for (taskId in pendingTaskDeletionWindow.leftoverTaskIds(owner)) {
+            val task = tasks.firstOrNull { it.id == taskId }
+            // An account's task can be absent here only because its delete is queued, or
+            // because a discarded queue still has it on the server; the sign-in decides.
+            val waitsForServerCopy = owner != PendingTaskDeletionMarker.SignedOutWorkspaceOwner
+            if (task == null && waitsForServerCopy && replay == LeftoverReplay.LocalWorkspace) continue
+            val title = task?.title.orEmpty()
+            when (endMarkedDeletionLocked(PendingTaskDeletionMarker(taskId, owner), admitted)) {
+                MarkedDeletion.Refused -> refusedTitles += title
+                MarkedDeletion.Committed -> finishedTitles += title
+                MarkedDeletion.AlreadyGone -> Unit
+            }
+        }
+        val announcedTitles = if (replay == LeftoverReplay.ServerCopy) finishedTitles else emptyList()
+        announceLeftoverOutcomesLocked(refusedTitles, announcedTitles)
+        return finishedTitles.isNotEmpty()
+    }
+
+    // UX round 2: one replay can refuse some markers and finish others, and the notice holds one
+    // message. Every refused task gets its sentence, and the finished deletes follow on the next
+    // line, so no outcome replaces another. A task that is already gone changes nothing on screen.
+    private fun announceLeftoverOutcomesLocked(refusedTitles: List<String>, finishedTitles: List<String>) {
+        val sentences = refusedTitles.map { appContext.getString(R.string.task_deletion_refused, it) } +
+            listOfNotNull(laterDeletionSentence(finishedTitles))
+        if (sentences.isEmpty()) return
+        notice = sentences.joinToString(NoticeLineSeparator)
+        noticeAction = null
+        publish()
+    }
+
+    // A server-copy replay deletes a task the owner deleted on this device before it left the
+    // account (logout, account switch or local reset). That can be long after the delete, so the
+    // sentence names the task. Two or more finished deletes are counted; none ends silently.
+    private fun laterDeletionSentence(titles: List<String>): String? = when (titles.size) {
+        0 -> null
+        1 -> appContext.getString(R.string.task_deletion_finished_later, titles.single())
+        else -> appContext.resources.getQuantityString(
+            R.plurals.task_deletion_finished_later_many,
+            titles.size,
+            titles.size,
+        )
+    }
+
+    // A queued or absent task ends the marker. A refused delete ends it too: the
+    // task shows again with a notice, and no later replay deletes it.
+    private suspend fun finishMarkedDeletionLocked(
+        marker: PendingTaskDeletionMarker,
+        title: String,
+        admitted: Boolean,
+    ): Boolean {
+        val outcome = endMarkedDeletionLocked(marker, admitted)
+        if (outcome == MarkedDeletion.Refused) announceLeftoverOutcomesLocked(listOf(title), emptyList())
+        return outcome == MarkedDeletion.Committed
+    }
+
+    private suspend fun endMarkedDeletionLocked(
+        marker: PendingTaskDeletionMarker,
+        admitted: Boolean,
+    ): MarkedDeletion {
+        val outcome = commitMarkedDeletionLocked(marker.taskId, admitted)
+        pendingTaskDeletionWindow.forget(marker)
+        return outcome
+    }
+
+    private suspend fun commitMarkedDeletionLocked(taskId: String, admitted: Boolean): MarkedDeletion {
+        if (!::local.isInitialized) return MarkedDeletion.Refused
+        val task = tasks.firstOrNull { it.id == taskId } ?: return MarkedDeletion.AlreadyGone
+        if (!admitted) return MarkedDeletion.Refused
+        val committed = commitTaskOperationLocked(TaskOperationType.Delete, task)
+        return if (committed) MarkedDeletion.Committed else MarkedDeletion.Refused
+    }
+
+    // Session expiry and sign-in change the account state inside the action
+    // lock, so the open window settles there, before user and owner change.
+    // Only hard workspace blocks refuse it; Loading and SigningIn are the very
+    // transitions being settled. No sync is requested: the session is ending,
+    // the owner is leaving, or the sign-in syncs after its bootstrap.
+    private suspend fun settleOpenTaskDeletionLocked(change: TaskDeletionSessionChange) {
+        val deletion = pendingTaskDeletionWindow.take() ?: return
+        if (deletion.workspaceOwner != currentWorkspaceOwner()) return
+        when (commitMarkedDeletionLocked(deletion.taskId, admitted = !workspaceMutationsBlocked())) {
+            MarkedDeletion.Refused -> if (change == TaskDeletionSessionChange.AccountJoins) {
+                finishMarkedDeletionLocked(deletion.marker, deletion.title, admitted = false)
+            } else {
+                pendingTaskDeletionWindow.restore(deletion)
+            }
+            // The owner that leaves keeps its marker: confirming the switch discards its queue.
+            else -> if (change != TaskDeletionSessionChange.OwnerLeaves) {
+                pendingTaskDeletionWindow.forget(deletion.marker)
+            }
+        }
+    }
+
+    // UX round 2, L7: an account takes over the signed-out workspace, so its
+    // leftover deletes complete for the local owner first and go with the takeover.
+    // Rework2: logout clears the account's tasks from the device, so a task the
+    // signed-out workspace still holds was created after the account's kept delete.
+    // That create supersedes the delete, and the sign-in replay leaves the task alone.
+    private suspend fun settleTaskDeletionsForAccountLocked(boundOwnerId: String?, accountId: String) {
+        if (boundOwnerId != null && boundOwnerId != accountId) {
+            settleOpenTaskDeletionLocked(TaskDeletionSessionChange.OwnerLeaves)
+            return
+        }
+        settleOpenTaskDeletionLocked(TaskDeletionSessionChange.AccountJoins)
+        if (boundOwnerId != null) return
+        val owner = PendingTaskDeletionMarker.SignedOutWorkspaceOwner
+        finishLeftoverDeletionsLocked(owner, LeftoverReplay.LocalWorkspace, admitted = !workspaceMutationsBlocked())
+        pendingTaskDeletionWindow.supersedeLeftovers(accountId, tasks.map(FocusTask::id))
+    }
+
+    private fun currentWorkspaceOwner(): String? =
+        if (::local.isInitialized) workspaceOwner() else null
+
+    private fun workspaceOwner(): String = local.ownerUserId ?: PendingTaskDeletionMarker.SignedOutWorkspaceOwner
+
+    // Mirrors the Core renameTask plan: identity hashes the title, so the
+    // renamed record lands before the old one leaves, and a title that
+    // already exists merges into that task. Selection moves through
+    // selectTask so a running focus timer retargets like a manual switch.
+    // Core 0.56.0: the old record leaves through a rename operation that
+    // names the new title, so Core moves its finished history along.
+    override suspend fun renameTask(taskId: String, title: String) {
+        initialize()
+        completePendingTaskDeletion()
+        val current = tasks.firstOrNull { it.id == taskId } ?: return
+        val renamed = taskFromSharedCore(title) ?: return
+        if (renamed.id == taskId) return
+        val wasSelected = selectedTaskId == taskId
+        if (tasks.none { it.id == renamed.id }) {
+            val upserted = issueTaskOperation(TaskOperationType.Upsert, renamed, identityValidated = true)
+            if (!upserted) return
+        }
+        if (wasSelected) {
+            selectTask(renamed.id)
+            // A refused selection keeps both records rather than dropping
+            // the selected task out from under a running timer.
+            if (selectedTaskId != renamed.id) return
+        }
+        issueTaskOperation(TaskOperationType.Rename, current, renamedTitle = renamed.title)
     }
 
     override suspend fun finishExpiredTimer(): Boolean = finishExpiredTimer(expectedTimerId = null)
@@ -1697,7 +2230,7 @@ class TimerRepository(
             if (localWorkspaceAdmissionBlocked()) return@withLock null
             expirableTimer()?.takeIf { expectedTimerId == null || it.id == expectedTimerId }
         } ?: return false
-        replication?.initialize()
+        if (!initializeReplication()) return false
         if (replicationMode() != ReplicationMode.CENTRALIZED) reloadWorkspace(replicationMode())
         if (timer.status != TimerStatus.Running ||
             TimerPresentation.elapsedAt(timer) < timer.plannedDurationMs
@@ -1754,6 +2287,10 @@ class TimerRepository(
 
     suspend fun rescheduleAlarmFromLocal() {
         ensureLocalInitialized()
+        // R54-A08: a contained startup read failure, or a projection runtime that failed before
+        // the read, leaves no local workspace to schedule from. The next successful local
+        // initialization schedules the alarm.
+        if (!::local.isInitialized) return
         scheduleAlarm()
     }
 
@@ -1783,7 +2320,9 @@ class TimerRepository(
     private suspend fun setReplicationModeInternal(mode: ReplicationMode) {
         initialize()
         if (accountNetworkBlocked()) return
+        if (mode == ReplicationMode.IROH && !legacyDependenciesAllowRoomEntry()) return
         val controller = replication ?: return
+        completePendingTaskDeletion()
         accountWorkspaceController.advanceGeneration(AccountWorkspaceReason.ReplicationModeChanged)
         controller.setMode(mode)
         reloadWorkspace(mode)
@@ -1800,8 +2339,9 @@ class TimerRepository(
 
     private suspend fun createIrohRoomInternal(name: String) {
         initialize()
-        if (accountNetworkBlocked()) return
+        if (accountNetworkBlocked() || !legacyDependenciesAllowRoomEntry()) return
         val controller = replication ?: return
+        completePendingTaskDeletion()
         controller.createRoom(name)
         reloadWorkspace(ReplicationMode.IROH)
         centralizedSyncRuntime.requestRevisionClose()
@@ -1812,8 +2352,9 @@ class TimerRepository(
 
     private suspend fun joinIrohRoomInternal(invite: String) {
         initialize()
-        if (accountNetworkBlocked()) return
+        if (accountNetworkBlocked() || !legacyDependenciesAllowRoomEntry()) return
         val controller = replication ?: return
+        completePendingTaskDeletion()
         controller.joinRoom(invite)
         reloadWorkspace(controller.mode)
         if (controller.mode != ReplicationMode.CENTRALIZED) {
@@ -1828,6 +2369,7 @@ class TimerRepository(
         initialize()
         if (accountNetworkBlocked()) return
         val controller = replication ?: return
+        completePendingTaskDeletion()
         controller.leaveRoom()
         reloadWorkspace(ReplicationMode.OFFLINE)
     }
@@ -1851,6 +2393,7 @@ class TimerRepository(
         initialize()
         if (accountNetworkBlocked()) return
         val controller = replication ?: return
+        completePendingTaskDeletion()
         controller.confirmIdentityRecovery()
         reloadWorkspace(controller.mode)
         if (controller.mode != ReplicationMode.CENTRALIZED) {
@@ -1879,10 +2422,7 @@ class TimerRepository(
             throw error
         } catch (_: AuthenticationRequired) {
             // expected-silent: session expiry surfaces as resolution error, not a crash.
-            handleAuthenticationRequired(
-                identity,
-                "Session expired while refreshing remote history.",
-            )
+            handleAuthenticationRequired(identity, R.string.session_expired_sign_in_again_history_choice)
             return false
         } catch (error: Exception) {
             // R50-L02: transport stays quiet with retry; credential/Core/commit
@@ -1893,8 +2433,7 @@ class TimerRepository(
                 handleAccountBootstrapFailure(AccountBootstrapStage.ResolutionRecovery, error)
                 historyResolution = historyResolution?.copy(
                     submitting = false,
-                    error = error.message
-                        ?: appContext.getString(R.string.could_not_refresh_remote_history),
+                    error = failureNoticeText(error, R.string.could_not_refresh_remote_history),
                 )
                 publish()
             }
@@ -1927,6 +2466,7 @@ class TimerRepository(
     ): BootstrapResolutionAttempt? {
         if (authStatus != AuthStatus.SignedIn || historyResolution?.submitting == true) return null
         val profile = user ?: return null
+        if (!legacyDependenciesAllowEgress()) return null
         val stored = pendingBootstrapResolution
         if (stored == null) {
             return prepareBootstrapResolution(
@@ -2013,6 +2553,7 @@ class TimerRepository(
             resolution.recovery != ResolutionRecovery.Repreview ||
             resolution.submitting
         ) return null
+        if (!legacyDependenciesAllowEgress()) return null
         timerStore.discardBootstrapResolution()
         pendingBootstrapResolution = null
         accountWorkspaceController.beginRecovery()
@@ -2029,7 +2570,8 @@ class TimerRepository(
     private suspend fun expireResolutionRecovery(identity: AccountAttemptIdentity) {
         val shouldCloseStream = actionMutex.withLock {
             if (!isCurrent(identity)) return@withLock false
-            auth.clear()
+            // R54-A04: a refused clear expires the recovery like a clean one and asks for a reset.
+            val retired = retireRejectedCredentials()
             accountWorkspaceController.expireRecovery()
             authStatus = AuthStatus.SignedOut
             user = null
@@ -2044,6 +2586,7 @@ class TimerRepository(
                     R.string.session_expired_sign_in_again_to_recheck_history,
                 ),
             )
+            if (!retired) notice = appContext.getString(R.string.unreadable_credential)
             publish()
             true
         }
@@ -2057,7 +2600,7 @@ class TimerRepository(
         if (!isCurrent(identity)) return@withLock
         historyResolution = historyResolution?.copy(
             submitting = false,
-            error = error.message ?: appContext.getString(R.string.could_not_refresh_account_history),
+            error = failureNoticeText(error, R.string.could_not_refresh_account_history),
         )
         publish()
     }
@@ -2105,8 +2648,7 @@ class TimerRepository(
             recovery = ResolutionRecovery.KeepRemote.takeIf {
                 strategy != BootstrapStrategy.KeepRemote
             },
-            error = error.message
-                ?: appContext.getString(R.string.queued_bootstrap_resolution_is_invalid),
+            error = failureNoticeText(error, R.string.queued_bootstrap_resolution_is_invalid),
         )
         publish()
     }
@@ -2182,10 +2724,7 @@ class TimerRepository(
             handleBootstrapConflict(identity, error)
         } catch (_: AuthenticationRequired) {
             // expected-silent: session expiry surfaces as sign-in notice, not a crash.
-            handleAuthenticationRequired(
-                identity,
-                appContext.getString(R.string.session_expired_sign_in_again_history_choice),
-            )
+            handleAuthenticationRequired(identity, R.string.session_expired_sign_in_again_history_choice)
         } catch (error: ApiException) {
             // expected-silent: server rejection surfaces as resolution UI, not a crash.
             handleResolutionApiFailure(identity, error)
@@ -2193,9 +2732,7 @@ class TimerRepository(
             // expected-silent: offline failure surfaces as resolution retry, not a crash.
             failBootstrapResolution(
                 identity,
-                error.message ?: appContext.getString(
-                    R.string.could_not_finish_history_resolution_retry_same_request,
-                ),
+                failureNoticeText(error, R.string.could_not_finish_history_resolution_retry_same_request),
             )
         } catch (error: Exception) {
             // R50-A06: bounded stage+cause taxonomy; transport stays quiet.
@@ -2213,9 +2750,7 @@ class TimerRepository(
         reportAccountBootstrap(AccountBootstrapStage.ResolutionRecovery, identity, error)
         failBootstrapResolution(
             identity,
-            error.message ?: appContext.getString(
-                R.string.history_resolution_failed_without_changing_local_data,
-            ),
+            failureNoticeText(error, R.string.history_resolution_failed_without_changing_local_data),
         )
     }
 
@@ -2268,8 +2803,8 @@ class TimerRepository(
                 appContext.getString(R.string.remote_history_changed_choose_again)
             BootstrapConflictKind.RequestId ->
                 appContext.getString(R.string.server_rejected_saved_request_identity)
-            BootstrapConflictKind.Unknown -> error.message
-                ?: appContext.getString(R.string.history_resolution_conflicted_choose_again)
+            BootstrapConflictKind.Unknown ->
+                appContext.getString(R.string.history_resolution_conflicted_choose_again)
         }
         historyResolution = historyResolution?.copy(
             pendingStrategy = null,
@@ -2288,8 +2823,7 @@ class TimerRepository(
         if (error.isRetryable()) {
             historyResolution = historyResolution?.copy(
                 submitting = false,
-                error = error.message
-                    ?: "Could not finish history resolution. Retry uses the same saved request.",
+                error = appContext.getString(R.string.could_not_finish_history_resolution_retry_same_request),
             )
         } else {
             timerStore.discardBootstrapResolution()
@@ -2320,6 +2854,7 @@ class TimerRepository(
         if (!accountQuarantined) replication?.onForeground()
         if (!accountQuarantined && replicationMode() == ReplicationMode.CENTRALIZED) {
             centralizedSyncRuntime.resumeForeground()
+            requestAccountRestoreRetry()
         }
     }
 
@@ -2330,49 +2865,60 @@ class TimerRepository(
     }
 
     private suspend fun restoreProfile() {
+        connectivityRestoredDuringRestore.set(false)
         val identity = actionMutex.withLock { currentAttemptIdentity() }
         try {
             val profile = fetchValidatedProfile()
             val bootstrap = fetchTimedBootstrap()
-            completeAuthentication(profile, bootstrap.response, identity, bootstrap.clockSample)
+            if (!completeAuthentication(profile, bootstrap.response, identity, bootstrap.clockSample)) {
+                rearmHeldRestore(identity)
+            }
         } catch (error: CancellationException) {
             networkInitializationStarted.set(false) // R51-A06: re-arm restore retry.
             throw error
         } catch (error: IOException) {
             // expected-silent: offline failure surfaces as a bootstrap notice, not a crash.
-            failProfileRestore(
-                identity,
-                error.message ?: appContext.getString(R.string.could_not_verify_signed_in_account),
-            )
+            failProfileRestore(identity, accountRestoreFailureNotice(error))
         } catch (_: AuthenticationRequired) {
             // expected-silent: session expiry surfaces as a bootstrap notice, not a crash.
-            handleAuthenticationRequired(identity, "Session expired while refreshing account bootstrap.")
+            handleAuthenticationRequired(identity, R.string.session_expired_sign_in_again_history_choice)
         } catch (error: ProfileProtocolException) {
             // expected-silent: malformed profile surfaces as a bootstrap notice, not a crash.
-            failProfileRestore(identity, error.message, clearCredentials = true)
+            failProfileRestore(identity, accountRestoreFailureNotice(error), clearCredentials = true)
         } catch (error: Exception) {
             // R50-L02: transport stays quiet with notice; credential/Core/commit
             // gets one bounded stage+cause report.
             // expected-silent: bootstrap failure surfaces as a notice with retry, not a crash.
             reportAccountBootstrap(AccountBootstrapStage.Restore, identity, error)
-            failProfileRestore(
-                identity,
-                error.message ?: appContext.getString(R.string.could_not_validate_account_bootstrap),
-            )
+            failProfileRestore(identity, accountRestoreFailureNotice(error))
         }
+    }
+
+    // A legacy hold is the only Stale reason that can clear later, so the restore re-arms and
+    // the next foreground or connectivity retry runs it again once the gate opens. The other
+    // Stale reasons are terminal or belong to a newer attempt, which owns the state.
+    private suspend fun rearmHeldRestore(identity: AccountAttemptIdentity) = actionMutex.withLock {
+        val heldNotice = heldLegacyDependencyNotice()
+        if (!isCurrent(identity) || heldNotice == null) return@withLock
+        networkInitializationStarted.set(false)
+        resetSignedOutAuthentication(notice = heldNotice)
     }
 
     private suspend fun failProfileRestore(
         identity: AccountAttemptIdentity,
-        message: String?,
+        failure: AccountFailureNotice,
         clearCredentials: Boolean = false,
     ) = actionMutex.withLock {
         if (!isCurrent(identity)) return@withLock
-        if (clearCredentials) auth.clear()
+        if (clearCredentials && !retireRejectedCredentials()) {
+            resetSignedOutAuthentication(appContext.getString(R.string.unreadable_credential))
+            return@withLock
+        }
         // R51-A06: bootstrap failure re-arms restore so an explicit
         // initialize() retries instead of stranding the account.
         networkInitializationStarted.set(false)
-        resetSignedOutAuthentication(message)
+        resetSignedOutAfterAccountFailure(failure)
+        requestRetryForConnectivityRestoredDuringRestore()
     }
 
     // R50-L02: stale attempts stay quiet; infra gets one bounded report.
@@ -2418,7 +2964,9 @@ class TimerRepository(
         clockSample: ServerClockSample,
         repreviewResolution: Boolean,
     ): AuthenticationCompletion {
-        if (!isCurrent(identity) || localMutationCorrupted || accountNetworkBlocked()) {
+        if (!isCurrent(identity) || localMutationCorrupted || accountNetworkBlocked() ||
+            authenticationHeldForLegacyDependencies()
+        ) {
             return AuthenticationCompletion.Stale
         }
         TimerSyncValidation.validateUser(profile)
@@ -2429,6 +2977,7 @@ class TimerRepository(
         )
         val storedResolution = pendingBootstrapResolution
         val boundOwnerId = local.ownerUserId ?: storedResolution?.ownerUserId
+        settleTaskDeletionsForAccountLocked(boundOwnerId, profile.id)
         if (boundOwnerId != null && boundOwnerId != profile.id) {
             installPendingAccountSwitch(profile, bootstrap, clockSample, boundOwnerId)
             return AuthenticationCompletion.Complete
@@ -2455,6 +3004,16 @@ class TimerRepository(
         publish()
         scheduleAlarm()
         return resolveAuthenticationAttempt(attempt)
+    }
+
+    // A reload while the attempt was on the network can install a held queue. The recovery
+    // refresh marked the dialog submitting, so a held completion releases it.
+    private suspend fun authenticationHeldForLegacyDependencies(): Boolean {
+        if (legacyDependenciesAllowEgress()) return false
+        // The hold notice replaces the "refreshing account history" text that recovery set.
+        historyResolution = historyResolution?.copy(submitting = false, error = heldLegacyDependencyNotice())
+        publish()
+        return true
     }
 
     // R51-A06: preparation captured the attempt before fencing, so
@@ -2503,6 +3062,7 @@ class TimerRepository(
             localAccount = user?.email ?: boundOwnerId,
             incomingAccount = profile.email,
         )
+        clearAccountRetryNotice()
         user = null
         historyResolution = null
         authStatus = AuthStatus.SignedIn
@@ -2524,6 +3084,14 @@ class TimerRepository(
         accountSwitch = null
         conflict = null
         terminalSyncError = null
+        clearAccountRetryNotice()
+    }
+
+    // UX round 2, L1: Retry leaves its notice on screen until the retry has an
+    // outcome. A completed sign-in or restore is that outcome for every notice
+    // that offers an account retry.
+    private fun clearAccountRetryNotice() {
+        if (noticeAction != null) notice = null
     }
 
     private suspend fun applyAuthenticationPlan(
@@ -2641,8 +3209,6 @@ class TimerRepository(
         installCoreProjection(application.projected.projection)
     }
 
-    // size-exception: atomic reserve-plan-commit-install transaction;
-    // splitting would hide a partial durable write across Room boundaries.
     private suspend fun finishLocalTimer(
         onlyIfExpired: Boolean,
         allowWhileLoading: Boolean,
@@ -2654,18 +3220,7 @@ class TimerRepository(
             val current = (if (onlyIfExpired) expirableTimer() else projection.timer) ?: return@withLock
             if (expectedTimerId != null && current.id != expectedTimerId) return@withLock
             if (!canFinishTimer(current, onlyIfExpired)) return@withLock
-            val completionRequest = coreCompletion.commandRequest(
-                CoreCommandRequestInput(
-                    commandType = CommandType.Finish,
-                    requestedTimer = current,
-                    projectedTimer = projection.timer,
-                    automatic = onlyIfExpired,
-                    generateAutoBreak = true,
-                    autoStartBreaks = settings.autoStartBreaks,
-                    localDeviceId = local.deviceId,
-                    ownedTimerId = local.ownedTimerId,
-                ),
-            )
+            val completionRequest = finishCompletionRequest(current, automatic = onlyIfExpired) ?: return@withLock
             if (!completionRequest.eligible) return@withLock
             val reservation = reserveMutation(
                 count = if (completionRequest.reserveGeneratedBreak) 2 else 1,
@@ -2704,6 +3259,48 @@ class TimerRepository(
         return current.id == local.ownedTimerId &&
             current.status == TimerStatus.Running &&
             TimerPresentation.elapsedAt(current) >= current.plannedDurationMs
+    }
+
+    // R54-A17: rebuilds project at the deterministic horizon, the newest
+    // pending command time, so a timer whose start is still pending never
+    // completes there. Core judges an automatic finish against a projection
+    // at trusted now, as desktop does. A manual finish keeps the installed
+    // projection, which Core does not read for manual requests.
+    private fun finishCompletionRequest(
+        current: CanonicalTimer,
+        automatic: Boolean,
+    ): CoreCommandRequestDecision? {
+        val projectedTimer = if (automatic) {
+            val nowMs = completionTrustedNowMs() ?: return null
+            val projected = projectSynchronizedState(now = Instant.ofEpochMilli(nowMs))
+            localizedProjectedTimer(projected.canonicalTimer, pending)
+        } else {
+            projection.timer
+        }
+        return coreCompletion.commandRequest(
+            CoreCommandRequestInput(
+                commandType = CommandType.Finish,
+                requestedTimer = current,
+                projectedTimer = projectedTimer,
+                automatic = automatic,
+                generateAutoBreak = true,
+                autoStartBreaks = settings.autoStartBreaks,
+                localDeviceId = local.deviceId,
+                ownedTimerId = local.ownedTimerId,
+            ),
+        )
+    }
+
+    // R54-A17: without trusted now Core cannot judge expiry, so the automatic
+    // finish waits. It sets no mutation fence: admitAccountInitialization
+    // refuses while one is set, which would also block the account restore
+    // that brings a fresh server sample. A manual finish still reports the
+    // clock through reserveMutation.
+    private fun completionTrustedNowMs(): Long? = try {
+        trustedClock.now(local, retainedWallMs = retainedHlc().first)
+    } catch (_: IllegalArgumentException) {
+        // expected-silent: the foreground tick retries every 500 ms; a background alarm leaves the timer to it.
+        null
     }
 
     private suspend fun issueCommand(type: String, startingPhase: String? = null): Boolean {
@@ -2758,37 +3355,53 @@ class TimerRepository(
         task: FocusTask,
         select: Boolean = false,
         identityValidated: Boolean = false,
+        renamedTitle: String? = null,
     ): Boolean {
-        var saved = false
-        actionMutex.withLock {
-            if (mutationsBlocked() || select && projection.timer?.status in activeStatuses) return@withLock
-            val authoritativeTask = authoritativeTask(task, identityValidated) ?: return@withLock
-            val state = timerMutationState()
-            val changesSelection = select || type == TaskOperationType.Delete &&
-                selectedTaskId == authoritativeTask.id
-            val reservation = reserveMutation(
-                count = if (changesSelection) 2 else 1,
-                withDeviceSequences = false,
-            ) ?: return@withLock
-            val mutation = plannedMutation {
-                mutationCoordinator.task(
-                    TaskMutationInput(state, type, authoritativeTask, select, reservation),
-                )
-            } ?: return@withLock
-            try {
-                val event = transitionCommitter.commit(RepositoryTaskTransition(mutation))
-                clearMutationStorageNotice()
-                installTaskMutation(event.plan)
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Exception) {
-                publishMutationCommitFailure(error) // CrashReporter via MutationPersistenceReporter
-                return@withLock
-            }
-            saved = true
+        val saved = actionMutex.withLock {
+            !mutationsBlocked() && commitTaskOperationLocked(type, task, select, identityValidated, renamedTitle)
         }
         if (saved) afterLocalMutation()
         return saved
+    }
+
+    // The caller holds actionMutex and has admitted the mutation.
+    private suspend fun commitTaskOperationLocked(
+        type: String,
+        task: FocusTask,
+        select: Boolean = false,
+        identityValidated: Boolean = false,
+        renamedTitle: String? = null,
+    ): Boolean {
+        if (select && projection.timer?.status in activeStatuses) return false
+        val authoritativeTask = authoritativeTask(task, identityValidated) ?: return false
+        val state = timerMutationState()
+        val changesSelection = select || TaskOperationType.removesTask(type) &&
+            selectedTaskId == authoritativeTask.id
+        val reservation = reserveMutation(
+            count = if (changesSelection) 2 else 1,
+            withDeviceSequences = false,
+        ) ?: return false
+        val mutation = plannedMutation {
+            mutationCoordinator.task(
+                TaskMutationInput(state, type, authoritativeTask, select, reservation, renamedTitle),
+            )
+        } ?: return false
+        // UX round 2, rework2: saving a marked task supersedes its delete. A failed save keeps
+        // the intent, and the next replay decides by whether the task is present.
+        val superseded = PendingTaskDeletionMarker(authoritativeTask.id, workspaceOwner())
+            .takeIf { type == TaskOperationType.Upsert && pendingTaskDeletionWindow.beginSupersede(it) }
+        try {
+            val event = transitionCommitter.commit(RepositoryTaskTransition(mutation))
+            superseded?.let(pendingTaskDeletionWindow::supersede)
+            clearMutationStorageNotice()
+            installTaskMutation(event.plan)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            publishMutationCommitFailure(error) // CrashReporter via MutationPersistenceReporter
+            return false
+        }
+        return true
     }
 
     private fun authoritativeTask(task: FocusTask, identityValidated: Boolean): FocusTask? {
@@ -2870,6 +3483,7 @@ class TimerRepository(
             centralized = replicationMode() == ReplicationMode.CENTRALIZED,
             pendingQueuesEmpty = pendingQueuesEmpty(),
             localRevision = if (::local.isInitialized) local.revision else 0L,
+            legacyAdoptionPending = ::local.isInitialized && LegacyDependencyStartup.pending(local),
         )
 
         override fun accountGeneration(): Long = accountWorkspaceController.generation
@@ -2930,8 +3544,7 @@ class TimerRepository(
                     activeSyncAttempt = null
                     syncing = false
                     retrying = false
-                    notice = event.error.message
-                        ?: appContext.getString(R.string.sync_stopped_after_a_local_failure)
+                    notice = failureNoticeText(event.error, R.string.sync_stopped_after_a_local_failure)
                     publish()
                 }
             }
@@ -2952,6 +3565,7 @@ class TimerRepository(
 
     private suspend fun expireSyncAuthentication(identity: SyncAttemptIdentity) = actionMutex.withLock {
         if (!currentSyncAttempt(identity)) return@withLock
+        settleOpenTaskDeletionLocked(TaskDeletionSessionChange.SessionEnds)
         activeSyncAttempt = null
         accountWorkspaceController.expireAuthentication(
             AccountWorkspaceReason.SyncAuthenticationExpired,
@@ -2966,6 +3580,7 @@ class TimerRepository(
 
     private suspend fun expireRevisionAuthentication(accountGeneration: Long) = actionMutex.withLock {
         if (accountGeneration != accountWorkspaceController.generation) return@withLock
+        settleOpenTaskDeletionLocked(TaskDeletionSessionChange.SessionEnds)
         accountWorkspaceController.expireAuthentication(
             AccountWorkspaceReason.AuthenticationExpired,
             discardBootstrap = false,
@@ -3011,35 +3626,41 @@ class TimerRepository(
 
     suspend fun reloadWorkspace(mode: ReplicationMode = replicationMode()) {
         actionMutex.withLock {
-            if (!initialized.isCompleted) return@withLock
-            if (localWorkspaceAdmissionBlocked()) return@withLock
-            if (mode == ReplicationMode.CENTRALIZED && accountNetworkBlocked()) return@withLock
-            val stored = timerStore.loadWorkspace()
-            local = stored.local
-            pending = stored.pending.commands
-            commandDependencies = stored.commandDependencies
-            pendingTaskOperations = stored.pending.taskOperations
-            pendingDurationOperations = stored.pending.durationOperations
-            pendingAutoStartOperations = stored.pending.autoStartOperations
-            pendingSelectedTaskOperations = stored.pending.selectedTaskOperations
-            pendingBootstrapResolution = stored.bootstrapResolution
-            neverSentProof = stored.neverSent
-            settings = stored.settings
-            canonicalTimer = stored.canonicalTimer
-            canonicalHistory = stored.canonicalHistory
-            canonicalTasks = stored.canonicalTasks
-            canonicalAutoStartBreaks = stored.canonicalAutoStartBreaks
-            knownTasks = stored.knownTasks
-            user = stored.user
-            authStatus = if (user != null && auth.hasTokens()) AuthStatus.SignedIn else AuthStatus.SignedOut
-            conflict = networkState.conflict?.let { "Iroh room has an immutable operation conflict." }
-            rebuildProjections()
-            publish()
-            scheduleAlarm()
+            if (!workspaceReloadAdmitted(mode)) return@withLock
+            installStoredWorkspace(timerStore.loadWorkspace())
+            adoptReloadedLegacyDependencies()
         }
         if (mode == ReplicationMode.CENTRALIZED && foreground) {
             centralizedSyncRuntime.requestRevisionOpen()
         }
+    }
+
+    private fun workspaceReloadAdmitted(mode: ReplicationMode): Boolean =
+        initialized.isCompleted && !localWorkspaceAdmissionBlocked() &&
+            !(mode == ReplicationMode.CENTRALIZED && accountNetworkBlocked())
+
+    private fun installStoredWorkspace(stored: StoredTimerWorkspace) {
+        local = stored.local
+        pending = stored.pending.commands
+        commandDependencies = stored.commandDependencies
+        pendingTaskOperations = stored.pending.taskOperations
+        pendingDurationOperations = stored.pending.durationOperations
+        pendingAutoStartOperations = stored.pending.autoStartOperations
+        pendingSelectedTaskOperations = stored.pending.selectedTaskOperations
+        pendingBootstrapResolution = stored.bootstrapResolution
+        neverSentProof = stored.neverSent
+        settings = stored.settings
+        canonicalTimer = stored.canonicalTimer
+        canonicalHistory = stored.canonicalHistory
+        canonicalTasks = stored.canonicalTasks
+        canonicalAutoStartBreaks = stored.canonicalAutoStartBreaks
+        knownTasks = stored.knownTasks
+        user = stored.user
+        authStatus = if (user != null && auth.hasTokens()) AuthStatus.SignedIn else AuthStatus.SignedOut
+        conflict = networkState.conflict?.let { appContext.getString(R.string.iroh_room_immutable_operation_conflict) }
+        rebuildProjections()
+        publish()
+        scheduleAlarm()
     }
 
     fun scheduleWorkspaceReload() {
@@ -3052,6 +3673,8 @@ class TimerRepository(
             scope.launch { syncIrohNow() }
         } else if (replicationMode() == ReplicationMode.CENTRALIZED && authStatus == AuthStatus.SignedIn) {
             requestSync(force = true)
+        } else {
+            requestAccountRestoreRetry()
         }
     }
 
@@ -3067,6 +3690,15 @@ class TimerRepository(
         if (identity.accountGeneration != accountWorkspaceController.generation ||
             authStatus != AuthStatus.SignedIn || replicationMode() != ReplicationMode.CENTRALIZED
         ) return null
+        // A queue without a recorded Core decision, or with a blocked one, never leaves the device.
+        // Every held attempt retries a pending adoption and raises the notice again, so a held
+        // sync is never silent and a failed record write does not hold the queue for good.
+        val legacyGate = recordLegacyDependencyDecision()
+        if (legacyGate != LegacyDependencyGate.Open) {
+            holdLegacyDependencies(legacyGate)
+            publish()
+            return null
+        }
         activeSyncAttempt = identity
         val attempt = centralizedSyncCoordinator.prepareSyncAttempt(
             CentralizedSyncAttemptInput(
@@ -3077,9 +3709,9 @@ class TimerRepository(
                 nextDomain = syncNextDomain,
             ),
         )
-        syncNextDomain = attempt.nextDomain
+        val nextLocal = local.copy(syncNextDomain = attempt.nextDomain)
         try {
-            timerStore.retireNeverSent(attempt.request)
+            timerStore.retireNeverSent(attempt.request, nextLocal)
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
@@ -3088,6 +3720,8 @@ class TimerRepository(
             CrashReporter.report(error)
             throw error
         }
+        local = nextLocal
+        syncNextDomain = attempt.nextDomain
         neverSentProof = neverSentProof.retiredFor(attempt.request)
         syncing = true
         retrying = false
@@ -3211,6 +3845,10 @@ class TimerRepository(
         val transition = centralizedSyncRuntime.updateOnlineState(currentOnlineState())
         publish()
         centralizedSyncRuntime.resumeNetworkTransition(transition)
+        if (transition.restored) {
+            connectivityRestoredDuringRestore.set(true)
+            requestAccountRestoreRetry()
+        }
     }
 
     private fun currentOnlineState(): Boolean {
@@ -3248,6 +3886,7 @@ class TimerRepository(
         knownTasks = knownTasks,
         settings = settings,
         selectedPhaseGeneration = selectedPhaseGeneration,
+        projectionBase = currentProjectionBase(),
     )
 
     private fun timerMutationState() = TimerMutationState(
@@ -3302,15 +3941,18 @@ class TimerRepository(
     private fun projectSynchronizedState(
         base: CoreProjectionBase = currentProjectionBase(),
         queues: PendingSyncQueues = pendingSyncQueues(),
+        now: Instant? = null,
     ): CoreProjectionResult {
         // R43-A03: rebuilds rerun the authoritative Core projection over safe
         // queues only. Without a trustworthy head there is no filtering yet.
         val safe = SafeProjectionPolicy.safeQueues(queues, neverSentProof, safeHeadOrNull())
         val request = SynchronizedProjectionRequestFactory.create(base, safe, local.deviceId)
+        // R54-A17: null keeps the deterministic horizon. Only the automatic
+        // completion request passes trusted now.
         return coreProjection.apply(
             base = request.base,
             pending = request.pending,
-            now = request.horizon,
+            now = now ?: request.horizon,
         )
     }
 
@@ -3413,16 +4055,18 @@ class TimerRepository(
     // its invalid-output path; storage goes through the bounded
     // persistence reporter instead of misclassifying as Core output.
     private fun <T> mutationProjection(block: () -> T): T? = try {
-        block().also {
-            if (notice == mutationFailure) notice = null
-            mutationFailure = null
-        }
+        block().also { clearMutationFailure() }
     } catch (error: CancellationException) {
         throw error
     } catch (error: Exception) {
         publishMutationCommitFailure(error) // CrashReporter via MutationPersistenceReporter
         null
     }
+
+    // UX round 2, B3: a notice shows a typed, localized sentence. The exception
+    // message stays out of it.
+    private fun failureNoticeText(error: Throwable, @StringRes fallback: Int): String =
+        appContext.getString(failureSentence(error, fallback))
 
     private fun projectionFailureMessage(error: Throwable): String = when (error) {
         is SharedCoreException.Load, is SharedCoreException.Abi ->
@@ -3597,13 +4241,12 @@ class TimerRepository(
             TimerMutationReservation(stamps, uuids, uuids.last().toString())
         } catch (error: IllegalArgumentException) {
             // expected-silent: clock out of bounds surfaces as blocked mutation, not a crash.
-            mutationFailure = error.message ?: LocalClockRangeError
+            mutationFailure = failureNoticeText(error, R.string.local_clock_out_of_range)
             notice = mutationFailure
             publish()
             return null
         }
-        if (notice == mutationFailure) notice = null
-        mutationFailure = null
+        clearMutationFailure()
         return reservation
     }
 
@@ -3643,13 +4286,12 @@ class TimerRepository(
             TimerMutationReservation(stamps, uuids, uuids.last().toString())
         } catch (error: IllegalArgumentException) {
             // expected-silent: clock out of bounds surfaces as blocked mutation, not a crash.
-            mutationFailure = error.message ?: LocalClockRangeError
+            mutationFailure = failureNoticeText(error, R.string.local_clock_out_of_range)
             notice = mutationFailure
             publish()
             return null
         }
-        if (notice == mutationFailure) notice = null
-        mutationFailure = null
+        clearMutationFailure()
         return reservation
     }
 
@@ -4008,23 +4650,34 @@ class TimerRepository(
 
     private fun accountNetworkBlocked(): Boolean =
         !accountAdmissionResolved || accountPublication.quarantined || !::local.isInitialized ||
-            local.accountDeletionState != null || credentialRecoveryRequired
+            local.accountDeletionState != null || credentialRecoveryRequired || replicationStartupReadFailed ||
+            LegacyDependencyStartup.blocked(local)
 
     private fun localWorkspaceAdmissionBlocked(allowWhileLoading: Boolean = true): Boolean =
         !::local.isInitialized || mutationFailure != null || mutationsBlocked(allowWhileLoading) ||
             auth.credentialState() !in setOf(AuthCredentialState.Empty, AuthCredentialState.Active)
 
-    private fun mutationsBlocked(allowWhileLoading: Boolean = false): Boolean {
-        return accountPublication.quarantined ||
+    private fun mutationsBlocked(allowWhileLoading: Boolean = false): Boolean =
+        workspaceMutationsBlocked() ||
+            (!allowWhileLoading && authStatus == AuthStatus.Loading) ||
+            authStatus == AuthStatus.SigningIn
+
+    // The blocks of the workspace itself, apart from the Loading and SigningIn
+    // account transitions.
+    private fun workspaceMutationsBlocked(): Boolean {
+        // R54-A09: a contained startup read failure, or a projection runtime that failed before
+        // the read, leaves local unset; that blocks mutations.
+        return !::local.isInitialized ||
+            accountPublication.quarantined ||
             localMutationCorrupted ||
+            LegacyDependencyStartup.blocked(local) ||
             credentialRecoveryRequired ||
+            replicationStartupReadFailed ||
             local.accountDeletionState != null ||
             replication?.state?.value?.transitioning == true ||
             (replicationMode() == ReplicationMode.IROH && networkState.conflict != null) ||
             historyResolution != null ||
-            accountSwitch != null ||
-            (!allowWhileLoading && authStatus == AuthStatus.Loading) ||
-            authStatus == AuthStatus.SigningIn
+            accountSwitch != null
     }
 
     private fun PendingBootstrapResolutionEntity.toRequestStrict(): BootstrapResolutionRequest {
@@ -4133,14 +4786,20 @@ class TimerRepository(
     private fun isCurrent(identity: AccountAttemptIdentity): Boolean =
         accountWorkspaceController.owns(identity, pendingBootstrapResolution?.requestId)
 
+    // failure: the sentence and retry to show when the session ends inside an
+    // attempt the user started. Background expiry passes none and stays quiet,
+    // unless a notice still offers an account retry: that retry can no longer
+    // work, so the notice offers a new sign-in instead (UX round 2, L1).
     private suspend fun handleAuthenticationRequired(
         identity: AccountAttemptIdentity,
-        message: String,
+        @StringRes message: Int,
+        failure: AccountFailureNotice? = null,
     ) {
         var shouldCloseStream = false
         actionMutex.withLock {
             if (!isCurrent(identity)) return@withLock
-            auth.clear()
+            settleOpenTaskDeletionLocked(TaskDeletionSessionChange.SessionEnds)
+            val retired = retireRejectedCredentials()
             accountWorkspaceController.expireAuthentication(
                 AccountWorkspaceReason.AuthenticationExpired,
                 discardBootstrap = true,
@@ -4150,6 +4809,13 @@ class TimerRepository(
             syncing = false
             retrying = false
             restorePendingResolutionForSignedOut(message)
+            val shown = failure ?: SessionExpiredNotice.takeIf { noticeAction != null }
+            if (!retired) {
+                notice = appContext.getString(R.string.unreadable_credential)
+            } else if (shown != null) {
+                notice = appContext.getString(shown.sentence)
+                noticeAction = shown.action
+            }
             publish()
             shouldCloseStream = true
         }
@@ -4164,7 +4830,7 @@ class TimerRepository(
         error = appContext.getString(R.string.saved_history_resolution_corrupted_local_data_preserved),
     )
 
-    private fun restorePendingResolutionForSignedOut(message: String) {
+    private fun restorePendingResolutionForSignedOut(@StringRes message: Int) {
         // A63 (A60 pattern): toRequestStrict is pure and this caller is
         // non-suspend, so cancel cannot arise today; the onFailure rethrow
         // keeps the site consistent if either fact changes.
@@ -4176,7 +4842,7 @@ class TimerRepository(
                         remoteHistoryCount = 0,
                         pendingStrategy = request.strategy,
                         requestId = request.requestId,
-                        error = message,
+                        error = appContext.getString(message),
                     )
                 },
                 onFailure = { error ->
@@ -4197,7 +4863,9 @@ class TimerRepository(
 
     private fun publishSnapshot(accountQuarantined: Boolean) {
         statePublisher.publish(RepositoryPublication(
-            ready = initialized.isCompleted,
+            ready = initialized.isCompleted && !replicationStartupReadFailed,
+            localStorageReadFailed = (localStorageReadFailed && !initialized.isCompleted) ||
+                replicationStartupReadFailed,
             authStatus = if (accountQuarantined) AuthStatus.SignedOut else authStatus,
             localAccountResetRequired = localMutationCorrupted || credentialRecoveryRequired ||
                 accountQuarantined,
@@ -4226,12 +4894,44 @@ class TimerRepository(
             accountSwitch = accountSwitch.takeUnless { accountQuarantined },
             conflict = conflict.takeUnless { accountQuarantined },
             notice = notice,
+            noticeAction = noticeAction,
             deviceId = if (::local.isInitialized && !accountQuarantined) local.deviceId else "",
             network = if (accountQuarantined) IrohNetworkState() else networkState,
+            skipDestinationPhase = if (accountQuarantined) null else skipDestinationPhase(),
         ))
     }
 
+    // The idle hero offers "Skip to <phase>". Shared Core owns the destination
+    // through timer.completionState.v1, so the long-break cadence is never
+    // recomputed here. Publish runs often; the memo keeps one core call per
+    // distinct (selected phase, history, local day). A core failure hides the
+    // control instead of guessing.
+    private fun skipDestinationPhase(): String? {
+        if (!initialized.isCompleted || projection.timer?.status in activeStatuses) return null
+        // R54-A16: without a workspace or after a recorded projection failure, the control hides
+        // without a Core call, so a failed startup keeps its one bounded report.
+        if (!::local.isInitialized || mutationFailure != null) return null
+        val reference = Instant.ofEpochMilli(currentTimeMillis())
+        val zoneId = ZoneId.systemDefault()
+        val day = reference.atZone(zoneId).toLocalDate()
+        val memo = skipDestinationMemo
+        if (memo != null && memo.matches(settings.selectedPhase, projection.history, day)) return memo.phase
+        val phase = try {
+            coreSkipDestination.destination(
+                CoreSkipDestinationInput(settings.selectedPhase, projection.history, reference, zoneId),
+            )
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            CrashReporter.report(error)
+            null
+        }
+        skipDestinationMemo = SkipDestinationMemo(settings.selectedPhase, projection.history, day, phase)
+        return phase
+    }
+
     private companion object {
+        const val ConflictLogTag = "PomodoroughSync"
         const val MaxCommandsPerSync = 256
         const val MaxTaskOperationsPerSync = 256
         const val MaxDurationOperationsPerSync = 256
@@ -4241,12 +4941,11 @@ class TimerRepository(
         const val CompletionAlertTimerId = "timer-id"
         const val MaxBootstrapOperations = 4096
         const val MaxTimerDurationMs = 14_400_000L
-        const val LocalClockRangeError = "Local clock or sequence is outside the synchronization range."
-        const val LocalStateCorruptedError =
-            "Persisted timer state is corrupted. Sync and local mutations are blocked."
         const val AccountDeletionPrepared = "prepared"
         const val AccountDeletionRemoteCommitted = "remote_committed"
         const val AccountLocalScrubRequired = "local_scrub_required"
+        // Joins localized sentences into one notice, one per line; it carries no text of its own.
+        const val NoticeLineSeparator = "\n"
         val commandTypes = setOf(
             CommandType.Start,
             CommandType.Pause,
@@ -4284,4 +4983,14 @@ class TimerRepository(
             File("/proc/sys/kernel/random/boot_id").readText().trim().ifBlank { null }
         }.getOrNull()
     }
+}
+
+private data class SkipDestinationMemo(
+    val sourcePhase: String,
+    val history: List<HistoryItem>,
+    val day: LocalDate,
+    val phase: String?,
+) {
+    fun matches(sourcePhase: String, history: List<HistoryItem>, day: LocalDate): Boolean =
+        this.sourcePhase == sourcePhase && this.history == history && this.day == day
 }

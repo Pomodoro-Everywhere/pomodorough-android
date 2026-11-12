@@ -48,6 +48,19 @@ internal class LocalDecodingException(
     cause: Exception,
 ) : Exception(cause)
 
+/** Storage stage whose read failed during local initialization; names one bounded diagnostic. */
+internal enum class LocalStorageReadStage(val category: CorruptStateCategory) {
+    WorkspaceState(CorruptStateCategory.WorkspaceStateRead),
+    PendingQueue(CorruptStateCategory.PendingQueueRead),
+    BootstrapResolution(CorruptStateCategory.BootstrapResolutionRead),
+}
+
+/** Storage access failed before decoding; persisted rows are untouched and the load may be retried. */
+internal class LocalStorageReadException(
+    val stage: LocalStorageReadStage,
+    cause: Exception,
+) : Exception(cause)
+
 internal class TimerLocalInitializer(
     private val workspace: TimerWorkspaceDao,
     private val bootstrap: BootstrapDao,
@@ -56,13 +69,17 @@ internal class TimerLocalInitializer(
     private val validateUser: (User) -> Unit,
 ) {
     suspend fun load(): LocalInitializationData {
-        val stored = workspace.localState()
-        val local = stored ?: createLocalState()
-        val commandEntities = workspace.loadCommandsBounded()
-        val taskEntities = workspace.loadTaskOperationsBounded()
-        val durationEntities = workspace.loadDurationOperationsBounded()
-        val autoStartEntities = workspace.loadAutoStartOperationsBounded()
-        val selectedEntities = workspace.loadSelectedTaskOperationsBounded()
+        val stored = read(LocalStorageReadStage.WorkspaceState) { workspace.localState() }
+        val local = stored ?: read(LocalStorageReadStage.WorkspaceState) { createLocalState() }
+        val queue = LocalStorageReadStage.PendingQueue
+        val commandEntities = read(queue) { workspace.loadCommandsBounded() }
+        val taskEntities = read(queue) { workspace.loadTaskOperationsBounded() }
+        val durationEntities = read(queue) { workspace.loadDurationOperationsBounded() }
+        val autoStartEntities = read(queue) { workspace.loadAutoStartOperationsBounded() }
+        val selectedEntities = read(queue) { workspace.loadSelectedTaskOperationsBounded() }
+        val bootstrapResolution = read(LocalStorageReadStage.BootstrapResolution) {
+            bootstrap.pendingBootstrapResolution()
+        }
         return LocalInitializationData(
             storedLocal = stored,
             local = local,
@@ -80,7 +97,7 @@ internal class TimerLocalInitializer(
                 autoStartOperations = autoStartEntities.filter { it.neverSent }.map { it.id },
                 selectedTaskOperations = selectedEntities.filter { it.neverSent }.map { it.id },
             ),
-            bootstrapResolution = bootstrap.pendingBootstrapResolution(),
+            bootstrapResolution = bootstrapResolution,
             decoded = try {
                 decode(local)
             } catch (error: CancellationException) {
@@ -90,6 +107,14 @@ internal class TimerLocalInitializer(
                 throw LocalDecodingException(local, error)
             },
         )
+    }
+
+    private suspend fun <T> read(stage: LocalStorageReadStage, block: suspend () -> T): T = try {
+        block()
+    } catch (error: CancellationException) {
+        throw error
+    } catch (error: Exception) {
+        throw LocalStorageReadException(stage, error)
     }
 
     private suspend fun createLocalState(): LocalStateEntity = LocalStateEntity(
@@ -103,14 +128,17 @@ internal class TimerLocalInitializer(
         entity.generatedByFinishCommandId?.let { entity.id to it }
     }.toMap()
 
-    private fun decode(local: LocalStateEntity): DecodedLocalJson = DecodedLocalJson(
-        settings = json.decodeFromString(local.settingsJson),
-        canonicalTimer = local.canonicalTimerJson?.let(json::decodeFromString),
-        history = json.decodeFromString(local.historyJson),
-        tasks = json.decodeFromString(local.tasksJson),
-        knownTasks = json.decodeFromString(local.knownTasksJson),
-        user = local.userJson?.let(::decodeUser),
-    )
+    private fun decode(local: LocalStateEntity): DecodedLocalJson {
+        require(local.syncNextDomain in CoreBatchPlanDispatcher.Domains) { "Sync batch cursor is invalid" }
+        return DecodedLocalJson(
+            settings = json.decodeFromString(local.settingsJson),
+            canonicalTimer = local.canonicalTimerJson?.let(json::decodeFromString),
+            history = json.decodeFromString(local.historyJson),
+            tasks = json.decodeFromString(local.tasksJson),
+            knownTasks = json.decodeFromString(local.knownTasksJson),
+            user = local.userJson?.let(::decodeUser),
+        )
+    }
 
     private fun decodeUser(raw: String): User = requireNotNull(
         strictJson.decodeFromString<User?>(raw),

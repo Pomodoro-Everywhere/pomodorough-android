@@ -95,8 +95,8 @@ internal class IrohRoomMetadataPersistence(
                 roomId = roomId,
                 roomName = name,
                 encryptedRoomSecret = vault.encryptRoomSecret(roomId, secret),
-                returnStateJson = WorkspaceCodec.encode(returnState),
-                roomStateJson = WorkspaceCodec.encode(roomState),
+                returnStateJson = WorkspaceCodec.encodeReturnState(returnState),
+                roomStateJson = WorkspaceCodec.encodeRoomState(roomState),
                 createdAtMs = currentTimeMillis(),
                 activated = true,
             )
@@ -126,8 +126,8 @@ internal class IrohRoomMetadataPersistence(
             roomId = invite.roomId,
             roomName = invite.roomName,
             encryptedRoomSecret = vault.encryptRoomSecret(invite.roomId, invite.roomSecret),
-            returnStateJson = WorkspaceCodec.encode(returnState),
-            roomStateJson = WorkspaceCodec.encode(roomState),
+            returnStateJson = WorkspaceCodec.encodeReturnState(returnState),
+            roomStateJson = WorkspaceCodec.encodeRoomState(roomState),
             createdAtMs = currentTimeMillis(),
             activated = false,
         )
@@ -152,7 +152,7 @@ internal class IrohRoomMetadataPersistence(
         val alreadyActive = settings.mode == ReplicationMode.IROH.name &&
             settings.activeRoomId == existing.roomId
         val prepared = if (existing.activated && !alreadyActive) {
-            existing.copy(returnStateJson = WorkspaceCodec.encode(dao.localWorkspaceSnapshot()))
+            existing.copy(returnStateJson = WorkspaceCodec.encodeReturnState(dao.localWorkspaceSnapshot()))
         } else {
             existing
         }
@@ -172,9 +172,9 @@ internal class IrohRoomMetadataPersistence(
             returnStateJson = if (alreadyActive) {
                 room.returnStateJson
             } else {
-                WorkspaceCodec.encode(dao.localWorkspaceSnapshot())
+                WorkspaceCodec.encodeReturnState(dao.localWorkspaceSnapshot())
             },
-            roomStateJson = WorkspaceCodec.encode(projected.snapshot),
+            roomStateJson = WorkspaceCodec.encodeRoomState(projected.snapshot),
             activated = true,
         )
         dao.activateIrohWorkspace(
@@ -194,8 +194,8 @@ internal class IrohRoomMetadataPersistence(
         val returnState = dao.localWorkspaceSnapshot()
         val projected = projection.project(roomId)
         val updated = room.copy(
-            returnStateJson = WorkspaceCodec.encode(returnState),
-            roomStateJson = WorkspaceCodec.encode(projected.snapshot),
+            returnStateJson = WorkspaceCodec.encodeReturnState(returnState),
+            roomStateJson = WorkspaceCodec.encodeRoomState(projected.snapshot),
             activated = true,
         )
         dao.activateIrohWorkspace(
@@ -211,7 +211,7 @@ internal class IrohRoomMetadataPersistence(
         val roomId = checkNotNull(settings.activeRoomId) { "No Iroh room is active" }
         val room = checkNotNull(dao.irohRoom(roomId)) { "Active Iroh room is missing" }
         val restored = WorkspaceCodec.decode(room.returnStateJson)
-        val updated = room.copy(roomStateJson = WorkspaceCodec.encode(dao.localWorkspaceSnapshot()))
+        val updated = room.copy(roomStateJson = WorkspaceCodec.encodeRoomState(dao.localWorkspaceSnapshot()))
         dao.restoreFromIrohWorkspace(
             room = updated,
             settings = ReplicationSettingsEntity(mode = ReplicationMode.OFFLINE.name),
@@ -231,7 +231,7 @@ internal class IrohRoomMetadataPersistence(
             if (current.mode == ReplicationMode.IROH.name && current.activeRoomId != null) {
                 val room = checkNotNull(dao.irohRoom(current.activeRoomId)) { "Active Iroh room is missing" }
                 val restored = WorkspaceCodec.decode(room.returnStateJson)
-                val updated = room.copy(roomStateJson = WorkspaceCodec.encode(dao.localWorkspaceSnapshot()))
+                val updated = room.copy(roomStateJson = WorkspaceCodec.encodeRoomState(dao.localWorkspaceSnapshot()))
                 dao.restoreFromIrohWorkspace(
                     room = updated,
                     settings = ReplicationSettingsEntity(mode = mode.name),
@@ -261,10 +261,10 @@ internal class IrohRoomMetadataPersistence(
                 val returned = WorkspaceCodec.decode(room.returnStateJson)
                 val roomState = WorkspaceCodec.decode(room.roomStateJson)
                 room.copy(
-                    returnStateJson = WorkspaceCodec.encode(
+                    returnStateJson = WorkspaceCodec.encodeReturnState(
                         returned.withoutIrohAccount(preserveDomain = returned.local.ownerUserId == null),
                     ),
-                    roomStateJson = WorkspaceCodec.encode(
+                    roomStateJson = WorkspaceCodec.encodeRoomState(
                         roomState.withoutIrohAccount(preserveDomain = roomState.local.ownerUserId == null),
                     ),
                 )
@@ -332,5 +332,13 @@ private fun LocalStateEntity.withoutIrohAccount(preserveDomain: Boolean): LocalS
         serverClockSamplePhysicalMs = null,
         serverClockSampleElapsedRealtimeMs = null,
         serverClockBootId = null,
+        // The safe base describes the retained canonical domain, so a cleared domain drops it.
+        safeBaseDurationsJson = safeBaseDurationsJson.takeIf { preserveDomain },
+        safeBaseSelectedTaskId = safeBaseSelectedTaskId.takeIf { preserveDomain },
+        safeCanonicalHeadWallMs = safeCanonicalHeadWallMs.takeIf { preserveDomain },
+        safeCanonicalHeadCounter = safeCanonicalHeadCounter.takeIf { preserveDomain },
+        // The markers describe the retained queue, so they go with it.
+        legacyDependencyInputJson = legacyDependencyInputJson.takeIf { preserveDomain },
+        legacyDependencyResultJson = legacyDependencyResultJson.takeIf { preserveDomain },
     )
 }

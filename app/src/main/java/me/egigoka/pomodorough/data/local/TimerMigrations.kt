@@ -263,4 +263,24 @@ internal object TimerMigrations {
             db.execSQL("ALTER TABLE local_state ADD COLUMN safeCanonicalHeadCounter INTEGER")
         }
     }
+
+    val Migration15To16 = object : Migration(15, 16) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE local_state ADD COLUMN syncNextDomain TEXT NOT NULL DEFAULT 'commands'")
+        }
+    }
+
+    val Migration16To17 = object : Migration(16, 17) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE local_state ADD COLUMN legacyDependencyInputJson TEXT")
+            db.execSQL("ALTER TABLE local_state ADD COLUMN legacyDependencyResultJson TEXT")
+            // Rows written before this version are the only legacy dependency evidence.
+            // Startup asks Core about them once; workspaces created later keep null markers.
+            db.execSQL(
+                """UPDATE local_state SET legacyDependencyResultJson = ?
+                    WHERE EXISTS (SELECT 1 FROM pending_commands WHERE generatedByFinishCommandId IS NOT NULL)""",
+                arrayOf(LegacyDependencyAdoptionPending),
+            )
+        }
+    }
 }

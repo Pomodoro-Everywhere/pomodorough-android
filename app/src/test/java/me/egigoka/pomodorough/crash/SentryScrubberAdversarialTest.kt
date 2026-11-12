@@ -672,8 +672,9 @@ class SentryScrubberAdversarialTest {
     @Test
     fun compoundSidSsidQueryKeepsKeyButLosesValue() {
         // A64: suffix-wildcard covers compound keys (clientSid, deviceSsid)
-        // in free text; mid-word lookalikes (reside, consider, aside,
-        // inside) must survive.
+        // in free text. R54-L11: mid-word lookalikes (reside, consider,
+        // aside, inside) lose their values too, because free text now takes
+        // the desktop key rule (A59 accepts the over-filtering).
         val scrubbed = checkNotNull(
             SentryScrubber.scrubText(
                 "https://host/sync?clientSid=cs-aa&deviceSsid=ds-aa&other=1",
@@ -690,17 +691,19 @@ class SentryScrubberAdversarialTest {
                 "https://host/sync?reside=keepme&consider=keepme&aside=keepme&inside=keepme&other=1",
             ),
         )
-        assertTrue(lookalike.contains("reside=keepme"))
-        assertTrue(lookalike.contains("consider=keepme"))
-        assertTrue(lookalike.contains("aside=keepme"))
-        assertTrue(lookalike.contains("inside=keepme"))
+        assertFalse(lookalike.contains("keepme"))
+        assertTrue(lookalike.contains("reside=${SentryScrubber.REDACTED_TOKEN}"))
+        assertTrue(lookalike.contains("consider=${SentryScrubber.REDACTED_TOKEN}"))
+        assertTrue(lookalike.contains("aside=${SentryScrubber.REDACTED_TOKEN}"))
+        assertTrue(lookalike.contains("inside=${SentryScrubber.REDACTED_TOKEN}"))
         assertTrue(lookalike.contains("other=1"))
     }
 
     @Test
     fun compoundSidSsidJsonLosesValue() {
         // A64: same suffix-wildcard coverage for double- and single-quoted
-        // JSON-string forms; lookalike keys stay readable.
+        // JSON-string forms; lookalike keys stay readable. R54-L11: their
+        // values are redacted, as in the query form.
         val doubleScrubbed = checkNotNull(
             SentryScrubber.scrubText(
                 "{\"clientSsid\": \"cs-aa\", \"clientSid\": \"cs-ab\", \"ok\": true}",
@@ -723,20 +726,25 @@ class SentryScrubberAdversarialTest {
         val lookalike = checkNotNull(
             SentryScrubber.scrubText("{\"reside\": \"keepme\", \"aside\": \"keepme\", \"ok\": true}"),
         )
-        assertTrue(lookalike.contains("keepme"))
+        assertFalse(lookalike.contains("keepme"))
+        assertTrue(lookalike.contains("\"reside\": \"${SentryScrubber.REDACTED_TOKEN}\""))
+        assertTrue(lookalike.contains("\"aside\": \"${SentryScrubber.REDACTED_TOKEN}\""))
         assertTrue(lookalike.contains("\"ok\""))
         val insideLookalike = checkNotNull(
             SentryScrubber.scrubText("{\"inside\": \"keepme\", \"consider\": \"keepme\", \"ok\": true}"),
         )
-        assertTrue(insideLookalike.contains("keepme"))
+        assertFalse(insideLookalike.contains("keepme"))
+        assertTrue(insideLookalike.contains("\"inside\": \"${SentryScrubber.REDACTED_TOKEN}\""))
+        assertTrue(insideLookalike.contains("\"consider\": \"${SentryScrubber.REDACTED_TOKEN}\""))
         assertTrue(insideLookalike.contains("\"ok\""))
     }
 
     @Test
     fun hyphenatedSidSsidQueryKeepsKeyButLosesValue() {
         // A66: hyphenated compounds (`client-sid`, `device-ssid`) missed
-        // free-text while structured paths covered them; hyphen-adjacent
-        // lookalikes (`client-side`) must survive.
+        // free-text while structured paths covered them. R54-L11:
+        // hyphen-adjacent lookalikes (`client-side`) lose their values too,
+        // because free text now takes the desktop key rule.
         val scrubbed = checkNotNull(
             SentryScrubber.scrubText(
                 "https://host/sync?client-sid=cs-aa&device-ssid=ds-aa&other=1",
@@ -753,15 +761,17 @@ class SentryScrubberAdversarialTest {
                 "https://host/sync?client-side=keepme&re-side=keepme&other=1",
             ),
         )
-        assertTrue(lookalike.contains("client-side=keepme"))
-        assertTrue(lookalike.contains("re-side=keepme"))
+        assertFalse(lookalike.contains("keepme"))
+        assertTrue(lookalike.contains("client-side=${SentryScrubber.REDACTED_TOKEN}"))
+        assertTrue(lookalike.contains("re-side=${SentryScrubber.REDACTED_TOKEN}"))
         assertTrue(lookalike.contains("other=1"))
     }
 
     @Test
     fun hyphenatedSidSsidJsonLosesValue() {
         // A66: same hyphen coverage for double- and single-quoted
-        // JSON-string forms; hyphen lookalike keys stay readable.
+        // JSON-string forms; hyphen lookalike keys stay readable. R54-L11:
+        // their values are redacted, as in the query form.
         val doubleScrubbed = checkNotNull(
             SentryScrubber.scrubText(
                 "{\"client-sid\": \"cs-aa\", \"device-ssid\": \"ds-aa\", \"ok\": true}",
@@ -784,7 +794,8 @@ class SentryScrubberAdversarialTest {
         val lookalike = checkNotNull(
             SentryScrubber.scrubText("{\"client-side\": \"keepme\", \"ok\": true}"),
         )
-        assertTrue(lookalike.contains("keepme"))
+        assertFalse(lookalike.contains("keepme"))
+        assertTrue(lookalike.contains("\"client-side\": \"${SentryScrubber.REDACTED_TOKEN}\""))
         assertTrue(lookalike.contains("\"ok\""))
     }
 
@@ -792,8 +803,9 @@ class SentryScrubberAdversarialTest {
     fun kebabCompoundQueryKeepsKeyButLosesValue() {
         // A74 (A66 mirror): `_?` missed kebab-case compounds; `[-_]?`
         // closes the gap. All 15 compounds pinned in query form; the
-        // JSON tests pin 5 representatives cheaply. Hyphen-adjacent
-        // lookalikes must survive.
+        // JSON tests pin 5 representatives cheaply. R54-L11: hyphen-adjacent
+        // lookalikes lose their values too, because free text now takes the
+        // desktop key rule.
         val scrubbed = checkNotNull(
             SentryScrubber.scrubText(
                 "https://host/sync?id-token=it-ff&access-token=ac-gg&refresh-token=rf-hh&csrf-token=cf-ii&code-challenge=cch-jj&code-verifier=cv-bb&client-secret=cs-aa&session-id=si-kk&auth-token=at-cc&device-id=di-dd&room-id=ri-ee&room-secret=rs-ll&endpoint-ticket=et-mm&endpoint-id=ei-nn&peer-id=pi-oo&other=1",
@@ -817,15 +829,16 @@ class SentryScrubberAdversarialTest {
                 "https://host/sync?client-side=keepme&re-side=keepme&other=1",
             ),
         )
-        assertTrue(lookalike.contains("client-side=keepme"))
-        assertTrue(lookalike.contains("re-side=keepme"))
+        assertFalse(lookalike.contains("keepme"))
+        assertTrue(lookalike.contains("client-side=${SentryScrubber.REDACTED_TOKEN}"))
+        assertTrue(lookalike.contains("re-side=${SentryScrubber.REDACTED_TOKEN}"))
         assertTrue(lookalike.contains("other=1"))
     }
 
     @Test
     fun kebabCompoundJsonLosesValue() {
         // A74 (A66 mirror): same kebab coverage for double- and
-        // single-quoted JSON-string forms; lookalike keys stay readable.
+        // single-quoted JSON-string forms; lookalike keys stay readable. R54-L11: their values are redacted.
         // Snake/camel forms keep working through the same `[-_]?` class.
         val doubleScrubbed = checkNotNull(
             SentryScrubber.scrubText(
@@ -869,7 +882,8 @@ class SentryScrubberAdversarialTest {
         val lookalike = checkNotNull(
             SentryScrubber.scrubText("{\"client-side\": \"keepme\", \"ok\": true}"),
         )
-        assertTrue(lookalike.contains("keepme"))
+        assertFalse(lookalike.contains("keepme"))
+        assertTrue(lookalike.contains("\"client-side\": \"${SentryScrubber.REDACTED_TOKEN}\""))
         assertTrue(lookalike.contains("\"ok\""))
     }
 }

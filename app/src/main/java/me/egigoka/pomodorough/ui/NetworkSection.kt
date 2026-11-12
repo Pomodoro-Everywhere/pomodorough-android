@@ -160,7 +160,13 @@ internal fun NetworkSection(
                 !network.transitioning,
             ) { confirmRecovery = true }
         }
-        RouteSwitch(network.mode, network.roomId != null, networkActionsEnabled, actions.onSetMode)
+        RouteSwitch(
+            network.mode,
+            network.roomId != null,
+            state.authStatus == AuthStatus.SignedIn,
+            networkActionsEnabled,
+            actions.onSetMode,
+        )
         NetworkStatusCard(network, networkActionsEnabled, actions.onSyncNow) { confirmLeave = true }
         if (network.roomId == null) {
             CreateRoomCard(roomNameDraft.name, networkActionsEnabled, roomNameDraft::onChange) {
@@ -369,7 +375,7 @@ private fun NetworkStatusCard(
                         enabled = enabled,
                         modifier = Modifier.heightIn(min = 48.dp),
                     ) {
-                        Text(stringResource(R.string.leave_room), color = darkModeTextColor(Danger))
+                        Text(stringResource(R.string.leave_room), color = dangerTextColorOnInk())
                     }
                 }
             }
@@ -427,7 +433,7 @@ private fun CreateRoomCard(
                 onClick = onCreate,
                 enabled = enabled && roomName.codePointCount(0, roomName.length) <= 64,
                 modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Violet),
+                colors = ButtonDefaults.buttonColors(containerColor = Violet, contentColor = darkModeTextColor(Cloud)),
             ) { Text(stringResource(R.string.create_iroh_room)) }
         }
     }
@@ -462,7 +468,7 @@ private fun JoinRoomCard(
                 onClick = onJoin,
                 enabled = enabled && joinCode.isNotBlank(),
                 modifier = Modifier.fillMaxWidth().height(54.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Ink),
+                colors = ButtonDefaults.buttonColors(containerColor = Ink, contentColor = darkModeTextColor(Cloud)),
             ) { Text(stringResource(R.string.join_room)) }
         }
     }
@@ -537,7 +543,7 @@ private fun LeaveRoomDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
             TextButton(onClick = onConfirm, modifier = Modifier.heightIn(min = 48.dp)) {
                 Text(
                     stringResource(R.string.leave_and_restore),
-                    color = darkModeTextColor(MaterialTheme.colorScheme.error),
+                    color = dangerTextColor(),
                     fontWeight = FontWeight.Bold,
                 )
             }
@@ -554,13 +560,18 @@ private fun LeaveRoomDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
 internal fun RouteSwitch(
     active: ReplicationMode,
     hasIrohRoom: Boolean,
+    signedIn: Boolean,
     enabled: Boolean,
     onSetMode: (ReplicationMode) -> Unit,
 ) {
+    // Cloud mode stays local until sign-in; the header already says "On device", so the card must not claim a server.
+    val cloudDetail = stringResource(
+        if (signedIn) R.string.signed_in_server else R.string.sign_in_to_sync_across_devices,
+    )
     val choices = listOf(
         ReplicationMode.OFFLINE to (stringResource(R.string.on_device) to stringResource(R.string.no_remote_endpoint)),
         ReplicationMode.IROH to (stringResource(R.string.iroh_room) to stringResource(R.string.equal_peers)),
-        ReplicationMode.CENTRALIZED to (stringResource(R.string.cloud) to stringResource(R.string.signed_in_server)),
+        ReplicationMode.CENTRALIZED to (stringResource(R.string.cloud) to cloudDetail),
     )
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         choices.forEach { (mode, copy) ->

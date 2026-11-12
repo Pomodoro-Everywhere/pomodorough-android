@@ -33,6 +33,7 @@ import me.egigoka.pomodorough.data.local.PomodoroughDatabase
 import me.egigoka.pomodorough.domain.TaskReducer
 import me.egigoka.pomodorough.integration.TestAuthSession
 import me.egigoka.pomodorough.integration.TestRepositoryService
+import me.egigoka.pomodorough.integration.asCoreProjected
 import me.egigoka.pomodorough.integration.awaitState
 import me.egigoka.pomodorough.integration.repositoryJson
 import me.egigoka.pomodorough.integration.testCommand
@@ -341,7 +342,7 @@ class TimerRepositoryPositiveTest {
         awaitState {
             service.syncCalls > callsBeforeRemoteCancellation &&
                 repository.state.value.timer == null &&
-                repository.state.value.history == listOf(cancelledHistory)
+                repository.state.value.history == listOf(cancelledHistory).asCoreProjected()
         }
         assertTrue(service.syncRequests.last().commands.isEmpty())
         repository.onBackground()

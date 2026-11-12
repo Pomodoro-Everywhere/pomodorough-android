@@ -454,7 +454,7 @@ class PomodoroughRtlAccessibilityTest {
                 onDismissConflict = onDismissConflict, onDismissNotice = onDismissNotice,
                 onSetReplicationMode = {}, onCreateIrohRoom = {}, onJoinIrohRoom = {},
                 onLeaveIrohRoom = onLeaveIrohRoom, onRefreshIrohInvite = {},
-                onSyncIrohNow = {}, onShareIrohInvite = {},
+                onSyncIrohNow = {}, onShareIrohInvite = {}, onRetryStartup = {},
                 onDeleteAccount = onDeleteAccount,
                 joinInviteDraft = joinInviteDraft,
                 onJoinInviteChange = onJoinInviteChange,

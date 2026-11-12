@@ -51,6 +51,7 @@ internal class CentralizedAccountSyncAggregate(
         centralized: Boolean,
         pendingQueuesEmpty: Boolean,
         localRevision: Long,
+        legacyAdoptionPending: Boolean,
     ) = CentralizedSyncRuntimeSnapshot(
         signedIn = authStatus == AuthStatus.SignedIn,
         centralized = centralized,
@@ -59,6 +60,7 @@ internal class CentralizedAccountSyncAggregate(
         terminalSyncError = terminalSyncError != null,
         pendingQueuesEmpty = pendingQueuesEmpty,
         localRevision = localRevision,
+        legacyAdoptionPending = legacyAdoptionPending,
     )
 
     fun accept(transition: CentralizedAccountSyncTransition) {

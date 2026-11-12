@@ -958,7 +958,8 @@ class TimerRepositoryTest {
         assertEquals(account, repository.state.value.user)
         assertEquals(account.id, database.timerDao().localState()?.ownerUserId)
         assertNull(database.timerDao().localState()?.accountDeletionState)
-        assertEquals("marker write failed", repository.state.value.notice)
+        // UX round 2, B3: the notice is the localized sentence, not the exception message.
+        assertEquals(context.getString(R.string.sign_out_failed_local_timer_data_was_kept), repository.state.value.notice)
 
         repository.logout()
 

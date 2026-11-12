@@ -334,6 +334,8 @@ class TimerReducerTest {
                         plannedDurationMs = target.plannedDurationMs,
                         endedAt = replacement.occurredAt,
                         pending = true,
+                        // A paused session keeps its time; a resumed one runs until it is superseded.
+                        elapsedMs = if (reactivationType == CommandType.Pause) 120_000 else 180_000,
                     ),
                     HistoryItem(
                         id = current.id,
@@ -347,6 +349,8 @@ class TimerReducerTest {
                         },
                         endedAt = terminal.occurredAt,
                         pending = true,
+                        // Finish records the time the session ran; Cancel records the observed time.
+                        elapsedMs = if (terminalStatus == TimerStatus.Completed) 660_000 else 120_000,
                     ),
                     tiedA,
                     tiedZ,

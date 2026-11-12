@@ -5,6 +5,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -30,6 +31,21 @@ class IrohLifecycleStateTest {
 
         assertFalse(lifecycle.permitsEndpoint(foreground.snapshot.generation))
         assertTrue(lifecycle.permitsBackgroundStop(lifecycle.snapshot().generation))
+    }
+
+    @Test
+    fun repeatedForegroundKeepsTheCurrentEndpointOwner() {
+        // R54-A05: only a foreground that leaves the background renews the generation.
+        val lifecycle = IrohLifecycleState()
+        val first = checkNotNull(lifecycle.enterForegroundIfBackground())
+
+        assertNull(lifecycle.enterForegroundIfBackground())
+        assertTrue(lifecycle.permitsEndpoint(first.snapshot.generation))
+        lifecycle.enterBackground()
+        val next = checkNotNull(lifecycle.enterForegroundIfBackground())
+
+        assertEquals(first.snapshot.generation + 2, next.snapshot.generation)
+        assertTrue(lifecycle.permitsEndpoint(next.snapshot.generation))
     }
 
     @Test

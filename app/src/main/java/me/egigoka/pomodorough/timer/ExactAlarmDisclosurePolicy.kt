@@ -7,5 +7,9 @@ object ExactAlarmDisclosurePolicy {
         sdkInt: Int,
         canScheduleExactAlarms: Boolean,
         timerStatus: String? = null,
-    ): Boolean = sdkInt >= 31 && !canScheduleExactAlarms && timerStatus != TimerStatus.Running
+        fallbackAccepted: Boolean = false,
+    ): Boolean = sdkInt >= 31 &&
+        !canScheduleExactAlarms &&
+        !fallbackAccepted &&
+        timerStatus != TimerStatus.Running
 }

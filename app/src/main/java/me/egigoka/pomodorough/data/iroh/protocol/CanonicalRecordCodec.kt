@@ -215,11 +215,11 @@ data class IrohOperationRecord(
                 requireExactKeys(
                     item.jsonObject,
                     setOf("id", "timerId", "phase", "status", "plannedDurationMs"),
-                    setOf("commandId", "taskId", "completedAt", "endedAt"),
+                    setOf("commandId", "taskId", "completedAt", "endedAt", "elapsedMs"),
                 )
                 requireOmittedNulls(
                     item.jsonObject,
-                    setOf("commandId", "taskId", "completedAt", "endedAt"),
+                    setOf("commandId", "taskId", "completedAt", "endedAt", "elapsedMs"),
                 )
             } ?: throw IllegalArgumentException("Genesis history is invalid")
             (operation["tasks"] as? JsonArray)?.forEach { task ->
@@ -254,6 +254,7 @@ data class IrohOperationRecord(
                 (item.commandId?.let(IrohProtocolV1::isIdentifier) ?: true) &&
                 item.phase in TimerPhase.all && item.status in historyStatuses &&
                 item.plannedDurationMs in DurationLimits.MinMs..MaxTimerDurationMs &&
+                (item.elapsedMs?.let { it in 0..item.plannedDurationMs } ?: true) &&
                 !item.pending && (item.taskId?.let(IrohProtocolV1::isIdentifier) ?: true)
             ) { "Genesis history is invalid" }
             require(item.completedAt?.let(::parseInstant) ?: (item.status != TimerStatus.Completed)) {
@@ -295,9 +296,9 @@ data class IrohOperationRecord(
 
         private fun validateTask(value: TaskOperation) {
             require(IrohProtocolV1.isIdentifier(value.id) && IrohProtocolV1.isIdentifier(value.taskId) &&
-                value.type in setOf(TaskOperationType.Upsert, TaskOperationType.Delete) &&
+                value.type in TaskOperationType.all &&
                 when (value.type) {
-                    TaskOperationType.Upsert -> value.title != null
+                    TaskOperationType.Upsert, TaskOperationType.Rename -> value.title != null
                     else -> value.title == null
                 }
             ) { "Task operation is invalid" }

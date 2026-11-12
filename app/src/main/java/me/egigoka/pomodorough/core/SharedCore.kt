@@ -12,6 +12,7 @@ import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets.UTF_8
 import java.security.MessageDigest
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
@@ -47,7 +48,7 @@ class SharedCore internal constructor(
     /** Dispatches UTF-8 JSON and returns successful envelope value. */
     fun dispatch(operation: String, inputJson: String): JsonElement = synchronized(lock) {
         unusableCause?.let { cause ->
-            throw SharedCoreException.Abi("shared-core instance is unusable after cleanup failure", cause)
+            throw SharedCoreException.Abi("shared-core instance is unusable after an earlier failure", cause)
         }
         val operationBytes = operation.toByteArray(UTF_8)
         val inputBytes = inputJson.toByteArray(UTF_8)
@@ -55,13 +56,36 @@ class SharedCore internal constructor(
         require(inputBytes.isNotEmpty()) { "shared-core input JSON must not be empty" }
         require(operationBytes.size <= MAX_OPERATION_BYTES) { "shared-core operation is too large" }
         require(inputBytes.size <= MAX_TRANSFER_BYTES) { "shared-core input is too large" }
+        try {
+            transfer(operation, operationBytes, inputBytes)
+        } catch (cause: SharedCoreException) {
+            throw cause
+        } catch (cause: CancellationException) {
+            // Guard-first (A60 pattern): the exports run synchronously, so cancellation cannot
+            // arise inside a transfer today; the rethrow keeps it off the runtime-failure path.
+            throw cause
+        } catch (cause: RuntimeException) {
+            // R54-A15: a Chicory trap, interruption or exhausted call stack stops the module
+            // mid-call and leaves its linear memory and allocator in an unknown state. The
+            // instance takes no further calls, and callers get the typed ABI failure.
+            unusableCause = cause
+            throw SharedCoreException.Abi("shared-core runtime failed during $operation", cause)
+        }
+    }
+
+    /** Copies both buffers in, runs the dispatch export, and frees every buffer it owns. */
+    private fun transfer(
+        operation: String,
+        operationBytes: ByteArray,
+        inputBytes: ByteArray,
+    ): JsonElement {
         var operationPointer = 0
         var inputPointer = 0
         var resultPointer = 0
         var resultLength = 0L
         var failure: Throwable? = null
 
-        try {
+        return try {
             operationPointer = allocate(operationBytes)
             inputPointer = allocate(inputBytes)
             val packedResult = dispatchResultOverride?.invoke() ?: callSingle(
@@ -249,8 +273,8 @@ class SharedCore internal constructor(
 
     companion object {
         const val ASSET_NAME = "pomodorough_core.wasm"
-        const val CORE_COMMIT = "0f52a27aa24941bf873bda65612f2c9ede43825f"
-        const val CORE_SHA256 = "1e72c2bbc178b077fdcc98210f06f66f4bc5332b77be5de83be19792376f4bd4"
+        const val CORE_COMMIT = "f3ab43a348d4e17bb32b61b8325664351e2ed70e"
+        const val CORE_SHA256 = "f57b411f47ef614e78ebb1ed4aea9ae58e0f1156b385c25222ee5c006837ebfd"
 
         private const val MAX_OPERATION_BYTES = 256
         private const val MAX_TRANSFER_BYTES = 16 * 1024 * 1024

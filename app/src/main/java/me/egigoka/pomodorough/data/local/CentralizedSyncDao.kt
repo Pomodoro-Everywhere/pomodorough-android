@@ -119,6 +119,19 @@ interface CentralizedSyncDao : TimerWorkspaceDao, BootstrapDao {
     }
 
     @Transaction
+    suspend fun retireNeverSentWithCursor(
+        state: LocalStateEntity,
+        commandIds: List<String>,
+        taskIds: List<String>,
+        durationIds: List<String>,
+        autoStartIds: List<String>,
+        selectedIds: List<String>,
+    ) {
+        retireNeverSent(commandIds, taskIds, durationIds, autoStartIds, selectedIds)
+        updateState(state)
+    }
+
+    @Transaction
     suspend fun applyBootstrapResolution(
         state: LocalStateEntity,
         clearAutoStartOperations: Boolean = true,

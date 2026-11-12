@@ -5,6 +5,7 @@ import android.content.Context
 import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.credentials.exceptions.GetCredentialInterruptedException
 import androidx.credentials.exceptions.GetCredentialProviderConfigurationException
+import androidx.credentials.exceptions.NoCredentialException
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import io.sentry.JsonSerializer
@@ -13,6 +14,7 @@ import io.sentry.SentryOptions
 import io.sentry.protocol.Message
 import java.io.IOException
 import java.io.StringWriter
+import java.net.UnknownHostException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
@@ -23,6 +25,7 @@ import me.egigoka.pomodorough.crash.CrashReportingRuntime
 import me.egigoka.pomodorough.crash.SentryScrubber
 import me.egigoka.pomodorough.data.api.PomodoroughService
 import me.egigoka.pomodorough.data.auth.AuthRepository
+import me.egigoka.pomodorough.data.auth.AuthenticationRequired
 import me.egigoka.pomodorough.data.auth.GoogleCredentialProvider
 import me.egigoka.pomodorough.data.auth.TokenStore
 import me.egigoka.pomodorough.data.local.LocalStateEntity
@@ -121,7 +124,10 @@ class R52L01AccountBootstrapProviderTest {
         harness.provider.failure = GetCredentialCancellationException("R52L01-dismissed")
         val before = harness.localState()
         harness.repo.signIn(harness.provider)
-        assertFailureNotice(harness)
+        // The user closed the Google prompt: there is nothing to explain.
+        assertEquals(AuthStatus.SignedOut, harness.repo.state.value.authStatus)
+        assertNull(harness.repo.state.value.notice)
+        assertNull(harness.repo.state.value.noticeAction)
         assertEquals(before, harness.localState())
         assertTrue(reported.isEmpty())
         assertEquals(0, harness.service.exchangeCalls)
@@ -159,6 +165,55 @@ class R52L01AccountBootstrapProviderTest {
         harness.service.challengeFailure = null
         harness.repo.signIn(harness.provider)
         awaitSignedIn(harness.repo)
+    }
+
+    // AND-17: the notice is one localized sentence with a retry, never the
+    // exception text. These are the two messages the audit saw on a device.
+    @Test
+    fun missingGoogleAccountShowsSentenceWithRetryNotExceptionText() = runBlocking {
+        val harness = harness()
+        harness.repo.initialize()
+        harness.provider.failure = NoCredentialException("No credentials available")
+        harness.repo.signIn(harness.provider)
+        assertSignInNotice(
+            harness,
+            "No Google account is available on this device. Add one in system settings, then try again.",
+        )
+    }
+
+    @Test
+    fun offlineSignInShowsSentenceWithRetryNotExceptionText() = runBlocking {
+        val harness = harness()
+        harness.repo.initialize()
+        harness.service.challengeFailure = UnknownHostException(
+            "Unable to resolve host \"pomodorough.egigoka.me\": No address associated with hostname",
+        )
+        harness.repo.signIn(harness.provider)
+        assertSignInNotice(harness, "Could not reach the server. Check your connection, then try again.")
+    }
+
+    // UX round 2, B3: a session the server refuses during sign-in is a failed
+    // sign-in. It used to end signed out with no word and no way to retry.
+    @Test
+    fun sessionRefusedDuringSignInShowsTheSignInFailureWithRetry() = runBlocking {
+        val harness = harness()
+        harness.repo.initialize()
+        harness.service.bootstrapFailure = AuthenticationRequired("R52L01-SENTINEL session expired")
+        harness.repo.signIn(harness.provider)
+        assertSignInNotice(harness, "Sign-in did not finish. Try again.")
+        assertFalse(harness.hasTokens())
+    }
+
+    @Test
+    fun plainNoticeDropsTheRetryOfAnEarlierFailure() = runBlocking {
+        val harness = harness()
+        harness.repo.initialize()
+        harness.service.challengeFailure = IOException("R52L01-offline")
+        harness.repo.signIn(harness.provider)
+        assertEquals(NoticeAction.RetrySignIn, harness.repo.state.value.noticeAction)
+        harness.repo.dismissNotice()
+        assertNull(harness.repo.state.value.notice)
+        assertNull(harness.repo.state.value.noticeAction)
     }
 
     @Test
@@ -208,6 +263,13 @@ class R52L01AccountBootstrapProviderTest {
     private fun assertFailureNotice(harness: Harness) {
         assertEquals(AuthStatus.SignedOut, harness.repo.state.value.authStatus)
         assertNotNull(harness.repo.state.value.notice)
+    }
+
+    private fun assertSignInNotice(harness: Harness, sentence: String) {
+        val state = harness.repo.state.value
+        assertEquals(AuthStatus.SignedOut, state.authStatus)
+        assertEquals(sentence, state.notice)
+        assertEquals(NoticeAction.RetrySignIn, state.noticeAction)
     }
 
     private fun assertSingleFixedReport(reported: List<Throwable>, fixed: String) {
@@ -308,6 +370,7 @@ class R52L01AccountBootstrapProviderTest {
         var challengeCalls = 0
         var challengeFailure: Throwable? = null
         var exchangeCalls = 0
+        var bootstrapFailure: Throwable? = null
         private val empty = SyncResponse(
             acknowledgements = emptyList(),
             revision = 0,
@@ -335,7 +398,10 @@ class R52L01AccountBootstrapProviderTest {
 
         override suspend fun refresh(refreshToken: String): TokenPair = error("unused")
         override suspend fun me(accessToken: String) = MeResponse(profile, "")
-        override suspend fun bootstrap(accessToken: String) = empty
+        override suspend fun bootstrap(accessToken: String): SyncResponse {
+            bootstrapFailure?.let { throw it }
+            return empty
+        }
         override suspend fun resolveBootstrap(accessToken: String, request: BootstrapResolutionRequest) = empty
         override suspend fun sync(accessToken: String, request: SyncRequest) = empty
         override suspend fun logout(accessToken: String) = Unit

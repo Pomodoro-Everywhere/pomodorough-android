@@ -85,10 +85,12 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.progressBarRangeInfo
@@ -130,6 +132,8 @@ import me.egigoka.pomodorough.data.SyncStatus
 import me.egigoka.pomodorough.data.TimerPhase
 import me.egigoka.pomodorough.data.TimerSettings
 import me.egigoka.pomodorough.data.TimerStatus
+import me.egigoka.pomodorough.domain.elapsedMinutes
+import me.egigoka.pomodorough.domain.finishedEarly
 import me.egigoka.pomodorough.data.iroh.IrohConnectionStatus
 import me.egigoka.pomodorough.data.iroh.ReplicationMode
 
@@ -140,6 +144,7 @@ internal fun MessageCard(
     containerColor: Color,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
+    onRetry: (() -> Unit)? = null,
 ) {
     Surface(
         modifier = modifier.fillMaxWidth(),
@@ -155,17 +160,36 @@ internal fun MessageCard(
                 Text(title, style = MaterialTheme.typography.titleLarge)
                 Text(message, style = MaterialTheme.typography.bodyMedium)
             }
-            TextButton(onClick = onDismiss, modifier = Modifier.heightIn(min = 48.dp)) {
-                Text(stringResource(R.string.dismiss), color = contentColorForContainer(containerColor))
+            MessageCardButtons(contentColorForContainer(containerColor), onDismiss, onRetry)
+        }
+    }
+}
+
+// Retry sits above Dismiss, so a second button never narrows the message.
+@Composable
+private fun MessageCardButtons(labelColor: Color, onDismiss: () -> Unit, onRetry: (() -> Unit)?) {
+    Column(horizontalAlignment = Alignment.End) {
+        if (onRetry != null) {
+            TextButton(onClick = onRetry, modifier = Modifier.heightIn(min = 48.dp)) {
+                Text(stringResource(R.string.retry), color = labelColor)
             }
+        }
+        TextButton(onClick = onDismiss, modifier = Modifier.heightIn(min = 48.dp)) {
+            Text(stringResource(R.string.dismiss), color = labelColor)
         }
     }
 }
 
 @Composable
-internal fun NoticeCard(message: String, onDismiss: () -> Unit, modifier: Modifier = Modifier) {
+internal fun NoticeCard(
+    message: String,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+    onRetry: (() -> Unit)? = null,
+) {
     val description = stringResource(R.string.heads_up_message, message)
     val dismissLabel = stringResource(R.string.dismiss)
+    val retryLabel = stringResource(R.string.retry)
     MessageCard(
         title = stringResource(R.string.heads_up),
         message = message,
@@ -178,12 +202,25 @@ internal fun NoticeCard(message: String, onDismiss: () -> Unit, modifier: Modifi
                 onDismiss()
                 true
             }
+            // The card is one node for a screen reader, so Retry is a named
+            // action on it. The visible button stays for touch and keyboard.
+            if (onRetry != null) {
+                customActions = listOf(
+                    CustomAccessibilityAction(retryLabel) {
+                        onRetry()
+                        true
+                    },
+                )
+            }
         },
+        onRetry = onRetry,
     )
 }
 
+// A notice that offers Retry stays until the user chooses Retry or Dismiss.
+// Every other notice goes away after the display time.
 @Composable
-internal fun AutoDismissNotice(notice: String?, onDismiss: () -> Unit) {
+internal fun AutoDismissNotice(notice: String?, onDismiss: () -> Unit, offersRetry: Boolean = false) {
     val accessibilityManager = LocalAccessibilityManager.current
     val timeoutMillis = accessibilityManager?.calculateRecommendedTimeoutMillis(
         originalTimeoutMillis = 7_000,
@@ -191,8 +228,8 @@ internal fun AutoDismissNotice(notice: String?, onDismiss: () -> Unit) {
         containsText = true,
         containsControls = true,
     ) ?: 7_000
-    LaunchedEffect(notice, timeoutMillis) {
-        if (notice != null) {
+    LaunchedEffect(notice, timeoutMillis, offersRetry) {
+        if (notice != null && !offersRetry) {
             delay(timeoutMillis)
             onDismiss()
         }
@@ -229,7 +266,8 @@ internal fun BrandOrb(size: androidx.compose.ui.unit.Dp) {
             ),
         contentAlignment = Alignment.Center,
     ) {
-        Box(Modifier.size(size * 0.4f).background(DangerAccent, CircleShape))
+        val lamp = if (LocalPomodoroughDarkTheme.current) Danger else DangerAccent
+        Box(Modifier.size(size * 0.4f).background(lamp, CircleShape))
     }
 }
 
@@ -242,10 +280,24 @@ internal fun SectionLabel(text: String) {
 internal fun darkModeTextColor(lightColor: Color): Color =
     if (LocalPomodoroughDarkTheme.current) Color.White else lightColor
 
+// Destructive labels and error text keep a danger colour in both themes.
+// The error role follows the theme: dark red on light surfaces, light red
+// on dark ones. White would read as an ordinary action.
+@Composable
+internal fun dangerTextColor(): Color = MaterialTheme.colorScheme.error
+
+// Ink stays dark in both themes, so the light error role (dark red,
+// 1.44:1 on Ink) cannot label it. Coral reads on Ink in the light theme;
+// the dark error role already does.
+@Composable
+internal fun dangerTextColorOnInk(): Color =
+    if (LocalPomodoroughDarkTheme.current) MaterialTheme.colorScheme.error else Danger
+
 // A77: Lavender keeps Ink text in both themes. White-on-Lavender is
-// 2.48:1 (WCAG AA fail); Ink-on-Lavender is 7.13:1. Other containers
-// keep the dark-mode inversion (light Butter needs Ink, dark brown
-// tertiary needs White).
+// 2.48:1 (WCAG AA fail); Ink-on-Lavender is 7.13:1. The navy focus card
+// keeps Cloud text in both themes (11.5:1). Other containers keep the
+// dark-mode inversion (light Butter needs Ink, dark navy tertiary needs
+// White).
 internal fun textColorOnLavender(): Color = Ink
 
 internal fun contrastRatio(foreground: Color, background: Color): Double {
@@ -267,8 +319,11 @@ internal fun linearChannel(value: Float): Double {
 }
 
 @Composable
-internal fun contentColorForContainer(container: Color): Color =
-    if (container == Lavender) textColorOnLavender() else darkModeTextColor(Ink)
+internal fun contentColorForContainer(container: Color): Color = when (container) {
+    Lavender -> textColorOnLavender()
+    Violet -> darkModeTextColor(Cloud)
+    else -> darkModeTextColor(Ink)
+}
 
 internal data class PhasePalette(
     val container: Color,
@@ -279,8 +334,15 @@ internal data class PhasePalette(
 @Composable
 internal fun phasePalette(phase: String): PhasePalette = when (phase) {
     TimerPhase.ShortBreak, TimerPhase.LongBreak -> PhasePalette(container = Lavender, accent = DangerAccent)
-    else -> PhasePalette(container = MaterialTheme.colorScheme.tertiaryContainer, accent = DangerAccent)
+    else -> focusPalette()
 }
+
+// The focus card is platform navy in both themes, the same surface the
+// web and Apple dials sit on: the progress arc lights up in signal red,
+// the ticks read in Cloud, and ticket gold stays for digits and accents.
+@Composable
+private fun focusPalette(): PhasePalette =
+    PhasePalette(container = Violet, accent = Danger, onContainer = Cloud)
 
 @Composable
 internal fun syncLabel(state: AppState): String {
@@ -460,16 +522,33 @@ internal fun historyDescription(item: HistoryItem, taskTitle: String?, showPendi
         item.taskId != null -> stringResource(R.string.deleted_task_2)
         else -> stringResource(R.string.unassigned_2)
     }
+    val elapsedMinutes = item.elapsedMinutes()
+    val duration = formatTaskDuration(elapsedMinutes?.let { it * 60_000L } ?: item.plannedDurationMs)
     return stringResource(
         R.string.history_accessibility,
         phaseLabel(item.phase),
-        statusLabel(item.status),
+        historyStatusLabel(item),
         pending,
         formatHistoryDate(item),
         task,
-        formatTaskDuration(item.plannedDurationMs),
+        if (elapsedMinutes == null && showsPlannedDuration(item.status)) {
+            stringResource(R.string.history_planned_duration, duration)
+        } else {
+            duration
+        },
     )
 }
+
+// A completed session that Core recorded as shorter than its plan says so.
+@Composable
+internal fun historyStatusLabel(item: HistoryItem): String =
+    if (item.finishedEarly()) stringResource(R.string.finished_early) else statusLabel(item.status)
+
+// UX round 2, B5 (AND-23) and C: a row written by Core 0.55.0 or later carries
+// `elapsedMs` and shows the minutes the session ran. A row stored before then
+// has only its planned length; a session that did not complete did not run
+// that length, so such a row says the minutes were planned.
+internal fun showsPlannedDuration(status: String): Boolean = status != TimerStatus.Completed
 
 @Composable
 internal fun formatHistoryDate(item: HistoryItem): String {

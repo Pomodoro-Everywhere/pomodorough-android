@@ -43,7 +43,8 @@ internal fun CrashReportingCard(modifier: Modifier = Modifier) {
         shape = MaterialTheme.shapes.large,
         modifier = modifier.testTag("crash_reporting_card"),
     ) {
-        Row(
+        LabelledSwitchLayout(
+            spacing = 12.dp,
             modifier = Modifier
                 .toggleable(value = checked, role = Role.Switch, onValueChange = {
                     checked = it
@@ -54,19 +55,23 @@ internal fun CrashReportingCard(modifier: Modifier = Modifier) {
                     stateDescription = state
                 }
                 .padding(horizontal = 18.dp, vertical = 16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    stringResource(R.string.crash_reporting_title),
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-                Text(stringResource(R.string.crash_reporting_body), style = MaterialTheme.typography.bodyMedium)
-            }
-            Spacer(Modifier.width(12.dp))
-            Switch(checked = checked, onCheckedChange = null, modifier = Modifier.testTag("crash_reporting_switch"))
-        }
+            label = { CrashReportingLabel() },
+            switch = {
+                Switch(checked = checked, onCheckedChange = null, modifier = Modifier.testTag("crash_reporting_switch"))
+            },
+        )
+    }
+}
+
+@Composable
+private fun CrashReportingLabel() {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            stringResource(R.string.crash_reporting_title),
+            style = MaterialTheme.typography.titleLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        Text(stringResource(R.string.crash_reporting_body), style = MaterialTheme.typography.bodyMedium)
     }
 }
 

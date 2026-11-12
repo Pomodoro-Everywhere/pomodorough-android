@@ -87,6 +87,7 @@ internal class SystemTimerCompletionNotifier(
     private val appContext = context.applicationContext
 
     override suspend fun show(): Boolean {
+        PhaseEndHaptics(appContext).play()
         if (!canPostNotification(
                 sdkInt = Build.VERSION.SDK_INT,
                 permissionGranted = ContextCompat.checkSelfPermission(
@@ -99,31 +100,7 @@ internal class SystemTimerCompletionNotifier(
         val manager = appContext.getSystemService(NotificationManager::class.java)
         val chime = completionChimeUri(appContext)
         ensureCompletionChannel(manager, appContext, chime)
-        val contentIntent = PendingIntent.getActivity(
-            appContext,
-            0,
-            Intent(appContext, MainActivity::class.java),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-        val stopSoundIntent = PendingIntent.getBroadcast(
-            appContext,
-            1,
-            Intent(appContext, TimerAlarmReceiver::class.java).setAction(
-                TimerAlarmReceiver.StopSoundAction,
-            ).putExtra(TimerAlarmReceiver.TimerIdExtra, timerId),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-        val notification = NotificationCompat.Builder(appContext, ChannelId)
-            .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
-            .setContentTitle(appContext.getString(R.string.timer_complete_title))
-            .setContentText(appContext.getString(R.string.timer_complete_body))
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setSound(chime)
-            .setContentIntent(contentIntent)
-            .addAction(0, appContext.getString(R.string.stop_sound), stopSoundIntent)
-            .build()
-            .apply { flags = flags or Notification.FLAG_INSISTENT }
-        manager.notify(NotificationId, notification)
+        manager.notify(NotificationId, completionNotification(appContext, timerId, chime))
         return true
     }
 
@@ -164,6 +141,54 @@ internal class SystemTimerCompletionNotifier(
         internal fun canPostNotification(sdkInt: Int, permissionGranted: Boolean): Boolean {
             return sdkInt < 33 || permissionGranted
         }
+
+        /** Stop sound, Start next, and Skip next all broadcast to [TimerAlarmReceiver]. */
+        internal fun completionNotification(context: Context, timerId: String, chime: Uri): Notification {
+            val contentIntent = PendingIntent.getActivity(
+                context,
+                0,
+                Intent(context, MainActivity::class.java),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            return NotificationCompat.Builder(context, ChannelId)
+                .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
+                .setContentTitle(context.getString(R.string.timer_complete_title))
+                .setContentText(context.getString(R.string.timer_complete_body))
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setSound(chime)
+                .setContentIntent(contentIntent)
+                .addAction(
+                    0,
+                    context.getString(R.string.stop_sound),
+                    receiverIntent(context, 1, TimerAlarmReceiver.StopSoundAction, timerId),
+                )
+                .addAction(
+                    0,
+                    context.getString(R.string.start_next),
+                    receiverIntent(context, 2, TimerAlarmReceiver.StartNextAction, timerId),
+                )
+                .addAction(
+                    0,
+                    context.getString(R.string.skip_next),
+                    receiverIntent(context, 3, TimerAlarmReceiver.SkipNextAction, timerId),
+                )
+                .build()
+                .apply { flags = flags or Notification.FLAG_INSISTENT }
+        }
+
+        private fun receiverIntent(
+            context: Context,
+            requestCode: Int,
+            action: String,
+            timerId: String,
+        ): PendingIntent = PendingIntent.getBroadcast(
+            context,
+            requestCode,
+            Intent(context, TimerAlarmReceiver::class.java)
+                .setAction(action)
+                .putExtra(TimerAlarmReceiver.TimerIdExtra, timerId),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
     }
 }
 
@@ -191,24 +216,20 @@ internal suspend fun deliverTimerAlarm(
 
 class TimerAlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        val application = context.applicationContext as PomodoroughApplication
         if (isStopSoundAction(intent.action)) {
-            val application = context.applicationContext as PomodoroughApplication
             application.timerRepository.stopCompletionAlert(timerId(intent))
             return
         }
+        val completionAction = CompletionNotificationAction.fromIntentAction(intent.action)
         val pendingResult = goAsync()
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             try {
-                val application = context.applicationContext as PomodoroughApplication
-                val timerId = timerId(intent) ?: application.timerRepository.state.value.timer?.id
-                if (timerId == null) return@launch
-                val result = deliverTimerAlarm(
-                    repository = application.timerRepository,
-                    timerId = timerId,
-                    notifier = SystemTimerCompletionNotifier(context, timerId),
-                )
-                if (result == TimerAlarmDeliveryResult.CompletedWithoutNotification) {
-                    Log.w(Tag, "Timer completed without posting a notification")
+                if (completionAction != null) {
+                    completionActionHandler(context, application)
+                        .handle(completionAction, timerId(intent))
+                } else {
+                    deliverExpiredTimer(context, application, timerId(intent))
                 }
             } catch (error: CancellationException) {
                 throw error
@@ -221,8 +242,35 @@ class TimerAlarmReceiver : BroadcastReceiver() {
         }
     }
 
+    private suspend fun deliverExpiredTimer(
+        context: Context,
+        application: PomodoroughApplication,
+        requestedTimerId: String?,
+    ) {
+        val timerId = requestedTimerId ?: application.timerRepository.state.value.timer?.id ?: return
+        val result = deliverTimerAlarm(
+            repository = application.timerRepository,
+            timerId = timerId,
+            notifier = SystemTimerCompletionNotifier(context, timerId),
+        )
+        if (result == TimerAlarmDeliveryResult.CompletedWithoutNotification) {
+            Log.w(Tag, "Timer completed without posting a notification")
+        }
+    }
+
+    private fun completionActionHandler(
+        context: Context,
+        application: PomodoroughApplication,
+    ) = CompletionNotificationActionHandler(
+        repository = application.timerRepository,
+        stopAlert = { application.timerRepository.stopCompletionAlert(it) },
+        cancelNotification = { SystemTimerCompletionNotifier.cancel(context) },
+    )
+
     companion object {
         internal const val StopSoundAction = "me.egigoka.pomodorough.STOP_TIMER_SOUND"
+        internal const val StartNextAction = "me.egigoka.pomodorough.START_NEXT_TIMER"
+        internal const val SkipNextAction = "me.egigoka.pomodorough.SKIP_NEXT_TIMER"
         internal const val TimerIdExtra = "me.egigoka.pomodorough.TIMER_ID"
         private const val Tag = "PomodoroughAlarm"
 

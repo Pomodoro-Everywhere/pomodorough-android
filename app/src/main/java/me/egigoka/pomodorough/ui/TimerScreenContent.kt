@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -52,11 +53,14 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.NavigationRailItemDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -68,6 +72,7 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -80,9 +85,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalAccessibilityManager
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.takeOrElse
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
@@ -124,6 +132,7 @@ import me.egigoka.pomodorough.data.BootstrapStrategy
 import me.egigoka.pomodorough.data.CanonicalTimer
 import me.egigoka.pomodorough.data.FocusTask
 import me.egigoka.pomodorough.data.HistoryItem
+import me.egigoka.pomodorough.data.NoticeAction
 import me.egigoka.pomodorough.data.ResolutionRecovery
 import me.egigoka.pomodorough.data.TaskDailySummary
 import me.egigoka.pomodorough.data.SyncStatus
@@ -142,30 +151,52 @@ internal fun PortraitTimerScreen(
 ) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val fontScale = LocalConfiguration.current.fontScale
-        val hasMessages = state.conflict != null || state.notice != null
-        val orbitSize = portraitOrbitSize(maxHeight, maxWidth, fontScale, hasMessages)
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-            AppHeader(state, actions.header)
-            TimerScreenMessages(state, actions, Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                TimerHero(
-                    state = timerHeroState(state, mutationsEnabled),
-                    actions = actions.hero,
-                    orbitMaxSize = orbitSize,
-                )
-            }
+        // UX round 2, M2: the dial gives up the height the message cards really
+        // take. A notice with Retry is taller than a plain one.
+        var messagesHeightPx by remember { mutableIntStateOf(0) }
+        val messagesHeight = with(LocalDensity.current) { messagesHeightPx.toDp() }
+        val viewportHeight = maxHeight
+        val orbitSize = portraitOrbitSize(viewportHeight, maxWidth, fontScale, messagesHeight)
+        Box(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+            PortraitFirstViewport(
+                viewportHeight = viewportHeight,
+                header = { AppHeader(state, actions.header) },
+                messages = { PortraitMessages(state, actions) { messagesHeightPx = it } },
+                hero = { PortraitHero(state, mutationsEnabled, actions, orbitSize) },
+            )
         }
     }
 }
 
+// The cards report their full height. They do not scroll on their own: the
+// outer screen is the only portrait scroll container (R43-A01).
+@Composable
+private fun PortraitMessages(state: AppState, actions: TimerContentActions, onMessagesHeight: (Int) -> Unit) {
+    Column(Modifier.onSizeChanged { onMessagesHeight(it.height) }) {
+        TimerScreenMessages(state, actions, Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
+    }
+}
+
+@Composable
+private fun PortraitHero(state: AppState, mutationsEnabled: Boolean, actions: TimerContentActions, orbitSize: Dp) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        TimerHero(
+            state = timerHeroState(state, mutationsEnabled),
+            actions = actions.hero,
+            orbitMaxSize = orbitSize,
+        )
+    }
+}
+
 // Header-aware deduction replaces the fixed 230.dp: base chrome plus
-// fontScale growth (header/buttons wrap taller) plus message cards.
-internal fun portraitOrbitDeduction(fontScale: Float, hasMessages: Boolean): Dp {
+// fontScale growth (header/buttons wrap taller) plus the measured height
+// of the message cards.
+internal fun portraitOrbitDeduction(fontScale: Float, messagesHeight: Dp): Dp {
     val base = 230.dp
     val fontExtra = when {
         fontScale >= 2f -> 72.dp
@@ -173,17 +204,16 @@ internal fun portraitOrbitDeduction(fontScale: Float, hasMessages: Boolean): Dp 
         fontScale >= 1.15f -> 20.dp
         else -> 0.dp
     }
-    val messagesExtra = if (hasMessages) 64.dp else 0.dp
-    return base + fontExtra + messagesExtra
+    return base + fontExtra + messagesHeight
 }
 
 internal fun portraitOrbitSize(
     availableHeight: Dp,
     availableWidth: Dp,
     fontScale: Float,
-    hasMessages: Boolean,
+    messagesHeight: Dp,
 ): Dp {
-    val deduced = availableHeight - portraitOrbitDeduction(fontScale, hasMessages)
+    val deduced = availableHeight - portraitOrbitDeduction(fontScale, messagesHeight)
     val byWidth = availableWidth - 24.dp
     return minOf(deduced, byWidth).coerceIn(132.dp, 318.dp)
 }
@@ -204,15 +234,41 @@ internal fun LandscapeTimerScreen(
         if (state.localAccountResetRequired) {
             ResetLocalAccountButton(actions.header.onResetLocalAccount, Modifier.align(Alignment.End))
         }
-        TimerScreenMessages(state, actions)
+        LandscapeMessagesAndHero(state, mutationsEnabled, actions, Modifier.weight(1f))
+    }
+}
+
+// B1: a landscape viewport is too short to stack a message card above the
+// hero and still show the primary timer control. Messages take a scrolling
+// column beside the hero, which keeps the full height.
+@Composable
+private fun LandscapeMessagesAndHero(
+    state: AppState,
+    mutationsEnabled: Boolean,
+    actions: TimerContentActions,
+    modifier: Modifier,
+) {
+    val hasMessages = state.conflict != null || state.notice != null
+    Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (hasMessages) {
+            Column(
+                modifier = Modifier
+                    .weight(LandscapeMessagesWidthShare)
+                    .fillMaxHeight()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) { TimerScreenMessages(state, actions) }
+        }
         TimerHero(
             state = timerHeroState(state, mutationsEnabled),
             actions = actions.hero,
             landscape = true,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.weight(1f - LandscapeMessagesWidthShare).fillMaxHeight(),
         )
     }
 }
+
+private const val LandscapeMessagesWidthShare = 0.4f
 
 internal data class AppHeaderActions(
     val onSignIn: () -> Unit,
@@ -225,7 +281,12 @@ internal data class TimerContentActions(
     val hero: TimerHeroActions,
     val onDismissConflict: () -> Unit,
     val onDismissNotice: () -> Unit,
+    val onRetryNotice: (NoticeAction) -> Unit = {},
 )
+
+// Null when the notice offers no retry, so the card shows Dismiss only.
+internal fun noticeRetry(state: AppState, actions: TimerContentActions): (() -> Unit)? =
+    state.noticeAction?.let { retry -> { actions.onRetryNotice(retry) } }
 
 internal fun timerHeroState(state: AppState, mutationsEnabled: Boolean) = TimerHeroState(
     timer = state.timer,
@@ -238,20 +299,31 @@ internal fun timerHeroState(state: AppState, mutationsEnabled: Boolean) = TimerH
     tasks = state.tasks,
     selectedTaskId = state.selectedTaskId,
     mutationsEnabled = mutationsEnabled,
+    skipDestinationPhase = state.skipDestinationPhase,
 )
 
 @Composable
 internal fun TimerScreenMessages(state: AppState, actions: TimerContentActions, modifier: Modifier = Modifier) {
-    state.conflict?.let {
-        MessageCard(
-            title = stringResource(R.string.changes_resolved_on_another_device),
-            message = it,
-            containerColor = Lavender,
-            onDismiss = actions.onDismissConflict,
-            modifier = modifier.semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
+    if (state.conflict != null) {
+        ConflictCard(
+            actions.onDismissConflict,
+            modifier.semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
         )
     }
-    state.notice?.let { NoticeCard(it, actions.onDismissNotice, modifier) }
+    state.notice?.let { NoticeCard(it, actions.onDismissNotice, modifier, noticeRetry(state, actions)) }
+}
+
+// UX round 2, L5: AppState.conflict is a diagnostic (the repository logs it).
+// The card never renders it; it shows one authored sentence instead.
+@Composable
+internal fun ConflictCard(onDismiss: () -> Unit, modifier: Modifier = Modifier) {
+    MessageCard(
+        title = stringResource(R.string.changes_resolved_on_another_device),
+        message = stringResource(R.string.conflict_card_sentence),
+        containerColor = Lavender,
+        onDismiss = onDismiss,
+        modifier = modifier,
+    )
 }
 
 @Composable
@@ -259,7 +331,7 @@ private fun ResetLocalAccountButton(onClick: () -> Unit, modifier: Modifier = Mo
     TextButton(onClick = onClick, modifier = modifier.heightIn(min = 48.dp)) {
         Text(
             stringResource(R.string.reset_local_account),
-            color = darkModeTextColor(MaterialTheme.colorScheme.error),
+            color = dangerTextColor(),
             fontWeight = FontWeight.Bold,
         )
     }
@@ -327,7 +399,9 @@ private fun HeaderAuthAction(state: AppState, actions: AppHeaderActions) {
             ) {
                 Text(
                     stringResource(if (reset) R.string.reset_local_account else R.string.sign_in),
-                    color = darkModeTextColor(if (reset) MaterialTheme.colorScheme.error else Butter),
+                    // The header is Ink in both themes, so the light error
+                    // role (dark red, 1.44:1 on Ink) cannot label it.
+                    color = if (reset) dangerTextColorOnInk() else darkModeTextColor(Butter),
                     fontWeight = FontWeight.Bold,
                 )
             }
@@ -406,14 +480,33 @@ private fun mainTabIcon(tab: MainTab): ImageVector = when (tab) {
 
 internal const val RailListTag = "landscapeRailList"
 
+// Station chrome: bar and rail share the header's Ink so the screen is
+// framed top and bottom, and the live destination lights in ticket gold.
+@Composable
+private fun stationBarItemColors() = NavigationBarItemDefaults.colors(
+    selectedIconColor = Ink,
+    selectedTextColor = Butter,
+    indicatorColor = Butter,
+    unselectedIconColor = Lavender,
+    unselectedTextColor = Lavender,
+)
+
+@Composable
+private fun stationRailItemColors() = NavigationRailItemDefaults.colors(
+    selectedIconColor = Ink,
+    selectedTextColor = Butter,
+    indicatorColor = Butter,
+    unselectedIconColor = Lavender,
+    unselectedTextColor = Lavender,
+)
+
 @Composable
 internal fun MainNavigationRail(
     active: MainTab,
     onSelect: (MainTab) -> Unit,
 ) {
     val fontScale = LocalConfiguration.current.fontScale
-    val labelFontSize = navLabelFontSize(fontScale)
-    NavigationRail {
+    NavigationRail(containerColor = Ink, contentColor = Cloud) {
         // The rail column is fixed-height and unscrollable, so short
         // landscape clips trailing destinations. Weight bounds this list
         // to the remaining rail height and scrolls it without touching
@@ -424,20 +517,14 @@ internal fun MainNavigationRail(
                 NavigationRailItem(
                     selected = tab == active,
                     onClick = { onSelect(tab) },
+                    colors = stationRailItemColors(),
                     icon = {
                         Icon(
                             imageVector = mainTabIcon(tab),
                             contentDescription = label,
                         )
                     },
-                    label = {
-                        Text(
-                            label,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            fontSize = labelFontSize,
-                        )
-                    },
+                    label = navLabel(label, fontScale),
                 )
             }
         }
@@ -450,28 +537,43 @@ internal fun MainNavigationBar(
     onSelect: (MainTab) -> Unit,
 ) {
     val fontScale = LocalConfiguration.current.fontScale
-    val labelFontSize = navLabelFontSize(fontScale)
-    NavigationBar {
+    NavigationBar(containerColor = Ink, contentColor = Cloud) {
         MainTab.entries.forEach { tab ->
             val label = stringResource(tab.labelRes)
             NavigationBarItem(
                 selected = tab == active,
                 onClick = { onSelect(tab) },
+                colors = stationBarItemColors(),
                 icon = {
                     Icon(
                         imageVector = mainTabIcon(tab),
                         contentDescription = label,
                     )
                 },
-                label = {
-                    Text(
-                        label,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        fontSize = labelFontSize,
-                    )
-                },
+                label = navLabel(label, fontScale),
             )
         }
+    }
+}
+
+internal const val NavigationLabelTag = "navigationLabel"
+
+// Shared by the bar and the rail. Labels stay visible at every font scale
+// (v0.42.0 always-visible navigation labels). They compact from 1.3x, and a
+// name wider than its item scales down to fit instead of being cut to "Patt…".
+private fun navLabel(label: String, fontScale: Float): @Composable () -> Unit = {
+    BoxWithConstraints {
+        val style = LocalTextStyle.current
+        val compact = style.copy(fontSize = navLabelFontSize(fontScale).takeOrElse { style.fontSize })
+        Text(
+            label,
+            modifier = Modifier.testTag(NavigationLabelTag),
+            style = fittedSingleLineStyle(label, compact, constraints.maxWidth),
+            maxLines = 1,
+            softWrap = false,
+            // Only a label still too wide at the smallest size, such as a long
+            // translation, reaches the ellipsis.
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }

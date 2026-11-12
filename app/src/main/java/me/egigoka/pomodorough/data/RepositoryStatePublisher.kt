@@ -9,6 +9,7 @@ import me.egigoka.pomodorough.domain.TaskReducer
 /** Immutable input for one complete AppState publication. */
 internal data class RepositoryPublication(
     val ready: Boolean,
+    val localStorageReadFailed: Boolean = false,
     val authStatus: AuthStatus,
     val localAccountResetRequired: Boolean,
     val user: User?,
@@ -28,6 +29,8 @@ internal data class RepositoryPublication(
     val notice: String?,
     val deviceId: String,
     val network: IrohNetworkState,
+    val skipDestinationPhase: String? = null,
+    val noticeAction: NoticeAction? = null,
 )
 
 internal class AccountPublicationLinearizer {
@@ -61,6 +64,7 @@ internal class RepositoryStatePublisher {
     fun publish(value: RepositoryPublication) {
         mutableState.value = AppState(
             ready = value.ready,
+            localStorageReadFailed = value.localStorageReadFailed,
             authStatus = value.authStatus,
             localAccountResetRequired = value.localAccountResetRequired,
             user = value.user,
@@ -80,6 +84,8 @@ internal class RepositoryStatePublisher {
             notice = value.notice,
             deviceId = value.deviceId,
             network = value.network,
+            skipDestinationPhase = value.skipDestinationPhase,
+            noticeAction = value.noticeAction,
         )
     }
 

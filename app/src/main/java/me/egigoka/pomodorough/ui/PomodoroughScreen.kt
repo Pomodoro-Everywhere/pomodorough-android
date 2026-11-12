@@ -24,21 +24,14 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.History
@@ -46,8 +39,6 @@ import androidx.compose.material.icons.outlined.Hub
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ContainedLoadingIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -90,7 +81,6 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
-import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
@@ -150,15 +140,17 @@ fun PomodoroughScreen(
     onRefreshIrohInvite: () -> Unit, onSyncIrohNow: () -> Unit,
     onConfirmIrohIdentityRecovery: () -> Unit = {},
     onShareIrohInvite: (String) -> Unit,
+    onRetryStartup: () -> Unit,
     onDeleteAccount: (String) -> Unit = {},
     onOpenPrivacy: () -> Unit = {},
     onStopSound: () -> Unit = {},
     joinInviteDraft: String = "",
     onJoinInviteChange: (String) -> Unit = {},
+    taskEditing: TaskEditingActions = TaskEditingActions(),
 ) {
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         if (!state.ready) {
-            LoadingScreen()
+            if (state.localStorageReadFailed) LocalStorageFailureScreen(onRetryStartup) else LoadingScreen()
         } else {
             TimerScreen(state, TimerScreenActions(
                 onSignIn, onLogout, onResetLocalAccount, onRefresh, onToggleTimer,
@@ -170,7 +162,7 @@ fun PomodoroughScreen(
                 onRefreshIrohInvite, onSyncIrohNow, onConfirmIrohIdentityRecovery,
                 onShareIrohInvite,
                 onDeleteAccount, onOpenPrivacy,
-                joinInviteDraft, onJoinInviteChange,
+                joinInviteDraft, onJoinInviteChange, taskEditing,
             ))
         }
     }
@@ -202,96 +194,6 @@ private fun LoadingScreen() {
     }
 }
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
-@Composable
-private fun SignInScreen(
-    signingIn: Boolean,
-    notice: String?,
-    onSignIn: () -> Unit,
-    onDismissNotice: () -> Unit,
-) {
-    AutoDismissNotice(notice, onDismissNotice)
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Ink)
-            .systemBarsPadding()
-            .padding(20.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .widthIn(max = 520.dp)
-                .verticalScroll(rememberScrollState()),
-        ) {
-            BrandMark()
-            Spacer(Modifier.height(30.dp))
-            Text(
-                text = stringResource(R.string.make_time_feel_yours),
-                color = darkModeTextColor(Cloud),
-                style = MaterialTheme.typography.headlineLarge,
-            )
-            Spacer(Modifier.height(10.dp))
-            Text(
-                text = stringResource(R.string.one_focused_clock_in_sync_everywhere),
-                color = darkModeTextColor(Lavender),
-                style = MaterialTheme.typography.bodyLarge,
-            )
-            Spacer(Modifier.height(30.dp))
-            SignInCard(signingIn, onSignIn)
-            if (notice != null) {
-                Spacer(Modifier.height(16.dp))
-                NoticeCard(notice, onDismissNotice)
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
-@Composable
-private fun SignInCard(signingIn: Boolean, onSignIn: () -> Unit) {
-    Surface(
-        color = MaterialTheme.colorScheme.tertiaryContainer,
-        contentColor = darkModeTextColor(Ink),
-        shape = RoundedCornerShape(48.dp, 20.dp, 48.dp, 20.dp),
-    ) {
-        Column(Modifier.padding(24.dp)) {
-            SectionLabel(stringResource(R.string.your_clock_anywhere))
-            Spacer(Modifier.height(10.dp))
-            Text(stringResource(R.string.pick_up_where_you_left_off), style = MaterialTheme.typography.headlineMedium)
-            Spacer(Modifier.height(10.dp))
-            Text(
-                stringResource(R.string.google_sign_in_keeps_timers_and_completed_sessions),
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(24.dp))
-            SignInButton(signingIn, onSignIn)
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
-@Composable
-private fun SignInButton(signingIn: Boolean, onSignIn: () -> Unit) {
-    Button(
-        onClick = onSignIn,
-        enabled = !signingIn,
-        modifier = Modifier.fillMaxWidth().height(64.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = Violet, contentColor = darkModeTextColor(Cloud)),
-    ) {
-        if (signingIn) {
-            ContainedLoadingIndicator(Modifier.size(36.dp), Cloud, Violet)
-            Spacer(Modifier.width(12.dp))
-            Text(stringResource(R.string.contacting_google))
-        } else {
-            Text(stringResource(R.string.sign_in_with_google))
-        }
-    }
-}
-
 internal data class TimerScreenActions(
     val onSignIn: () -> Unit, val onLogout: () -> Unit, val onResetLocalAccount: () -> Unit,
     val onRefresh: () -> Unit, val onToggleTimer: () -> Unit, val onFinishTimer: () -> Unit,
@@ -310,4 +212,5 @@ internal data class TimerScreenActions(
     val onDeleteAccount: (String) -> Unit, val onOpenPrivacy: () -> Unit,
     val joinInviteDraft: String = "",
     val onJoinInviteChange: (String) -> Unit = {},
+    val taskEditing: TaskEditingActions = TaskEditingActions(),
 )

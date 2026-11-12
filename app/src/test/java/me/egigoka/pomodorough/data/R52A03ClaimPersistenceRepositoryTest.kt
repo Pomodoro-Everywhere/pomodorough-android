@@ -88,6 +88,61 @@ class R52A03ClaimPersistenceRepositoryTest {
         assertEquals("R52A03-retire-refused", thrown?.message)
     }
 
+    @Test
+    fun repositoryPersistsCoreCursorAndRefusedNextPlanKeepsExactState() = runBlocking {
+        database.close()
+        val name = "repository-cursor.db"
+        context.deleteDatabase(name)
+        database = Room.databaseBuilder(context, PomodoroughDatabase::class.java, name).build()
+        val dao = RetireRefusingDao(database.timerDao())
+        val repo = repository(dao)
+        repo.initialize()
+        awaitSignedIn(repo)
+        repo.addTask("cursor task")
+        repo.changeDuration(TimerPhase.Focus, 1)
+        seedCursorBoundary(dao)
+        repo.reloadWorkspace()
+        val before = checkNotNull(dao.localState())
+        val host = repo.centralizedSyncRuntimeHost()
+        val first = checkNotNull(host.prepareSyncAttempt(SyncAttemptIdentity(host.accountGeneration(), "cursor-first")))
+        assertTrue("Core must move the cursor", first.nextDomain != before.syncNextDomain)
+        assertEquals(before.copy(syncNextDomain = first.nextDomain), dao.localState())
+        val sentTasks = first.request.taskOperations.map { it.id }.toSet()
+        val sentDurations = first.request.durationOperations.map { it.id }.toSet()
+        assertEquals(sentTasks, dao.pendingTaskOperations().filter { !it.neverSent }.map { it.id }.toSet())
+        assertEquals(sentDurations, dao.pendingDurationOperations().filter { !it.neverSent }.map { it.id }.toSet())
+        val durable = dao.legacyDependencySnapshot()
+        dao.refuse = true
+        assertTrue(runCatching {
+            host.prepareSyncAttempt(SyncAttemptIdentity(host.accountGeneration(), "cursor-refused"))
+        }.exceptionOrNull() is IOException)
+        assertEquals(durable, dao.legacyDependencySnapshot())
+        val cursorField = TimerRepository::class.java.getDeclaredField("syncNextDomain").apply { isAccessible = true }
+        assertEquals(first.nextDomain, cursorField.get(repo))
+        repo.shutdownForTest()
+        repositories.remove(repo)
+        database.close()
+        database = Room.databaseBuilder(context, PomodoroughDatabase::class.java, name).build()
+        val reopenedDao = database.timerDao()
+        assertEquals(durable, reopenedDao.legacyDependencySnapshot())
+        val reopened = repository(reopenedDao)
+        reopened.initialize()
+        awaitSignedIn(reopened)
+        assertEquals(first.nextDomain, cursorField.get(reopened))
+        val nextHost = reopened.centralizedSyncRuntimeHost()
+        val next = checkNotNull(nextHost.prepareSyncAttempt(SyncAttemptIdentity(nextHost.accountGeneration(), "cursor-reopen")))
+        assertEquals(checkNotNull(reopenedDao.localState()).syncNextDomain, next.nextDomain)
+    }
+
+    private suspend fun seedCursorBoundary(dao: TimerDao) {
+        val task = dao.pendingTaskOperations().single()
+        val duration = dao.pendingDurationOperations().single()
+        dao.insertTaskOperations((1..260).map { task.copy(id = "task-cursor-$it", hlcCounter = task.hlcCounter + it) })
+        for (index in 1..260) dao.upsertDurationOperations(listOf(
+            duration.copy(id = "duration-cursor-$index", hlcCounter = duration.hlcCounter + index),
+        ))
+    }
+
     private fun repository(dao: TimerDao): TimerRepository {
         val account = User("account-1", "a1@example.test", "A", "")
         runBlocking {
@@ -130,6 +185,18 @@ class R52A03ClaimPersistenceRepositoryTest {
 
     private class RetireRefusingDao(val delegate: TimerDao) : TimerDao by delegate {
         var refuse = false
+
+        override suspend fun retireNeverSentWithCursor(
+            state: me.egigoka.pomodorough.data.local.LocalStateEntity,
+            commandIds: List<String>,
+            taskIds: List<String>,
+            durationIds: List<String>,
+            autoStartIds: List<String>,
+            selectedIds: List<String>,
+        ) {
+            if (refuse) throw IOException("R52A03-retire-refused")
+            delegate.retireNeverSentWithCursor(state, commandIds, taskIds, durationIds, autoStartIds, selectedIds)
+        }
 
         override suspend fun retireNeverSent(
             commandIds: List<String>,

@@ -1,5 +1,6 @@
 package me.egigoka.pomodorough.timer
 
+import me.egigoka.pomodorough.data.TimerStatus
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -21,7 +22,34 @@ class ExactAlarmDisclosurePolicyTest {
         ExactAlarmDisclosurePolicy.usesInexactFallback(
             sdkInt = 36,
             canScheduleExactAlarms = false,
-            timerStatus = me.egigoka.pomodorough.data.TimerStatus.Running,
+            timerStatus = TimerStatus.Running,
+        ),
+    )
+
+    @Test fun resumingPausedTimerDisclosesUntilFallbackAccepted() = assertTrue(
+        ExactAlarmDisclosurePolicy.usesInexactFallback(
+            sdkInt = 36,
+            canScheduleExactAlarms = false,
+            timerStatus = TimerStatus.Paused,
+            fallbackAccepted = false,
+        ),
+    )
+
+    @Test fun acceptedFallbackSilencesDisclosureOnResume() = assertFalse(
+        ExactAlarmDisclosurePolicy.usesInexactFallback(
+            sdkInt = 36,
+            canScheduleExactAlarms = false,
+            timerStatus = TimerStatus.Paused,
+            fallbackAccepted = true,
+        ),
+    )
+
+    @Test fun acceptedFallbackSilencesDisclosureOnFreshStart() = assertFalse(
+        ExactAlarmDisclosurePolicy.usesInexactFallback(
+            sdkInt = 36,
+            canScheduleExactAlarms = false,
+            timerStatus = null,
+            fallbackAccepted = true,
         ),
     )
 }

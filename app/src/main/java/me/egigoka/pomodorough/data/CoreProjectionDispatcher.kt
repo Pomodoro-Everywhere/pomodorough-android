@@ -270,6 +270,9 @@ internal class CoreProjectionDispatcher(
     private fun validHistory(item: HistoryItem): Boolean =
         item.id.isNotBlank() && item.timerId.isNotBlank() && item.phase in TimerPhase.all &&
             item.status in TerminalStatuses && validDuration(item.plannedDurationMs) &&
+            // Core 0.55.0 fills elapsedMs on every projected row, old rows included; the
+            // history views count only this value, so a row without it fails closed.
+            item.elapsedMs?.let { it in 0..item.plannedDurationMs } == true &&
             listOfNotNull(item.completedAt, item.endedAt).all { runCatching { Instant.parse(it) }.isSuccess }
 
     private fun validDuration(value: Long): Boolean = value in CoreMinDurationMs..CoreMaxDurationMs

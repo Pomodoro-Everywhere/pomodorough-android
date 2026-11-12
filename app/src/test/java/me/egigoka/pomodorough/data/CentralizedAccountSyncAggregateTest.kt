@@ -21,6 +21,7 @@ class CentralizedAccountSyncAggregateTest {
             centralized = true,
             pendingQueuesEmpty = false,
             localRevision = 7,
+            legacyAdoptionPending = true,
         )
 
         assertTrue(snapshot.signedIn)
@@ -30,6 +31,7 @@ class CentralizedAccountSyncAggregateTest {
         assertTrue(snapshot.terminalSyncError)
         assertFalse(snapshot.pendingQueuesEmpty)
         assertEquals(7, snapshot.localRevision)
+        assertTrue(snapshot.legacyAdoptionPending)
     }
 
     @Test

@@ -8,6 +8,7 @@ import java.io.IOException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import me.egigoka.pomodorough.R
 import me.egigoka.pomodorough.data.Acknowledgement
 import me.egigoka.pomodorough.data.AuthStatus
 import me.egigoka.pomodorough.data.DurationAcknowledgement
@@ -98,7 +99,8 @@ class TimerRepositoryNegativeTest {
         assertTrue(repository.state.value.ready)
         assertEquals(0, repository.state.value.pendingCount)
         assertEquals(initial, database.timerDao().localState())
-        assertTrue(repository.state.value.notice?.contains("UUID", ignoreCase = true) == true)
+        // UX round 2, B3: the notice is the localized sentence, not the exception message.
+        assertEquals(context.getString(R.string.local_clock_out_of_range), repository.state.value.notice)
     }
 
     @Test
@@ -121,7 +123,8 @@ class TimerRepositoryNegativeTest {
         assertEquals(initial, database.timerDao().localState())
         assertTrue(database.timerDao().pendingCommands().isEmpty())
         assertEquals(operation.id, database.timerDao().pendingDurationOperations().single().id)
-        assertTrue(repository.state.value.notice?.contains("behind", ignoreCase = true) == true)
+        // UX round 2, B3: the notice is the localized sentence, not the exception message.
+        assertEquals(context.getString(R.string.local_clock_out_of_range), repository.state.value.notice)
     }
 
     @Test
@@ -145,7 +148,8 @@ class TimerRepositoryNegativeTest {
         assertTrue(database.timerDao().pendingCommands().isEmpty())
         assertEquals(0, repository.state.value.pendingCount)
         assertEquals(TimerPhase.Focus, repository.state.value.settings.selectedPhase)
-        assertTrue(repository.state.value.notice?.contains("UUID", ignoreCase = true) == true)
+        // UX round 2, B3: the notice is the localized sentence, not the exception message.
+        assertEquals(context.getString(R.string.local_clock_out_of_range), repository.state.value.notice)
     }
 
     @Test
@@ -731,7 +735,11 @@ class TimerRepositoryNegativeTest {
 
         assertEquals(AuthStatus.SignedOut, repository.state.value.authStatus)
         assertNull(repository.state.value.user)
-        assertEquals("profile unavailable", repository.state.value.notice)
+        // The notice is the localized sentence, never the exception text.
+        assertEquals(
+            context.getString(R.string.account_restore_failed_offline),
+            repository.state.value.notice,
+        )
         assertEquals(0, service.syncCalls)
         assertEquals(command.id, database.timerDao().pendingCommands().single().id)
     }

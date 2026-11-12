@@ -8,13 +8,16 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import me.egigoka.pomodorough.data.BootstrapStrategy
+import me.egigoka.pomodorough.data.PendingTaskDeletion
 import me.egigoka.pomodorough.data.TimerRepositoryContract
 import me.egigoka.pomodorough.data.TimerStatus
 import me.egigoka.pomodorough.data.iroh.ReplicationMode
@@ -49,6 +52,9 @@ class PomodoroughViewModel(
         viewModelScope.launch { repository.initialize() }
     }
 
+    // R54-A02: a startup storage-read failure leaves initialization open; this reads again.
+    fun retryStartup() = launch { repository.initialize() }
+
     suspend fun signIn(credentialProvider: GoogleCredentialProvider) {
         repository.signIn(credentialProvider)
     }
@@ -66,10 +72,61 @@ class PomodoroughViewModel(
     }
     fun setAutoStart(enabled: Boolean) = launch { repository.setAutoStart(enabled) }
     fun selectTask(taskId: String?) = launch { repository.selectTask(taskId) }
-    fun addTask(title: String, onResult: (Boolean) -> Unit) = launch {
-        onResult(repository.addTask(title))
+    fun addTask(title: String, onResult: (Boolean) -> Unit) {
+        launch { onResult(repository.addTask(title)) }
     }
     fun deleteTask(taskId: String) = launch { repository.deleteTask(taskId) }
+
+    // The task board defers a delete until the undo snackbar settles, so the
+    // row hides while nothing has left the workspace yet. At most one deletion
+    // waits: a second request flushes the first. deleteTask stays immediate
+    // for callers that need the repository write right away.
+    // UX round 2: the repository owns the pending deletion, so the tile and the
+    // notification actions see it too. This mirrors it for the task board.
+    var pendingTaskDeletion by mutableStateOf<PendingTaskDeletion?>(null)
+        private set
+
+    init {
+        viewModelScope.launch { repository.pendingTaskDeletion.collect { pendingTaskDeletion = it } }
+    }
+
+    fun requestTaskDeletion(taskId: String) {
+        if (editingTaskId == taskId) editingTaskId = null
+        launch { repository.requestTaskDeletion(taskId) }
+    }
+
+    fun undoTaskDeletion() = launch { repository.undoTaskDeletion() }
+
+    // Only the snackbar for the still-pending deletion may confirm it; a
+    // late dismissal from a replaced snackbar must not delete the newer task.
+    fun confirmTaskDeletion(taskId: String) {
+        if (pendingTaskDeletion?.taskId == taskId) flushTaskDeletion()
+    }
+
+    // UX round 2, B4: rotation and other configuration changes stop the
+    // activity but bring the screen straight back with this view model, so
+    // the undo window stays open. Only a real stop commits the delete.
+    fun endUndoWindowOnStop(changingConfigurations: Boolean) {
+        if (!changingConfigurations) flushTaskDeletion()
+    }
+
+    fun flushTaskDeletion() = launch { repository.completePendingTaskDeletion() }
+
+    var editingTaskId by mutableStateOf<String?>(null)
+        private set
+
+    fun beginTaskRename(taskId: String) {
+        editingTaskId = taskId
+    }
+
+    fun cancelTaskRename() {
+        editingTaskId = null
+    }
+
+    fun renameTask(taskId: String, title: String) {
+        editingTaskId = null
+        launch { repository.renameTask(taskId, title) }
+    }
     fun resolveHistory(strategy: BootstrapStrategy) = launch { repository.resolveHistory(strategy) }
     fun recoverHistoryResolution() = launch { repository.recoverCorruptedResolution() }
     fun confirmAccountSwitch() = launch { repository.confirmAccountSwitch() }
@@ -93,10 +150,7 @@ class PomodoroughViewModel(
                 if (timerId == null) return@collectLatest
                 while (isActive) {
                     delay(500)
-                    if (repository.finishExpiredTimer()) {
-                        deliverCompletionAlert(timerId)
-                        return@collectLatest
-                    }
+                    if (finishExpiredTimerAndAlert(timerId)) return@collectLatest
                 }
             }
         }
@@ -111,6 +165,17 @@ class PomodoroughViewModel(
     private fun launch(block: suspend () -> Unit) {
         viewModelScope.launch { block() }
     }
+
+    // R54-A17: the finish publishes the completed timer before it returns, and
+    // collectLatest cancels this tick for that change. The finish has already
+    // cancelled the exact alarm by then, so the tick is the only alert left:
+    // the finish and its alert run to the end.
+    private suspend fun finishExpiredTimerAndAlert(timerId: String): Boolean =
+        withContext(NonCancellable) {
+            repository.finishExpiredTimer().also { finished ->
+                if (finished) deliverCompletionAlert(timerId)
+            }
+        }
 
     private suspend fun deliverCompletionAlert(timerId: String) {
         val notify = completionAlert ?: return

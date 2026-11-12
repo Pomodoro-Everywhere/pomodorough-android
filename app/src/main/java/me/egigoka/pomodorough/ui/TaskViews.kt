@@ -39,8 +39,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Checklist
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Hub
 import androidx.compose.material.icons.outlined.Timer
@@ -48,6 +51,7 @@ import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.ContainedLoadingIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -55,6 +59,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -82,6 +87,8 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalAccessibilityManager
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -100,6 +107,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
@@ -176,7 +184,11 @@ private fun TaskSelectorButton(state: TaskSelectorPresentation, onClick: () -> U
         // R52-A05: minimum touch target only. The button grows with
         // enlarged text instead of clipping it inside a fixed height.
         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-        border = BorderStroke(1.dp, Ink.copy(alpha = 0.35f)),
+        // The hero surface supplies the legible color for its card (Cloud
+        // on the navy focus card, Ink on Lavender breaks); the outlined
+        // default primary would vanish on navy.
+        colors = ButtonDefaults.outlinedButtonColors(contentColor = LocalContentColor.current),
+        border = BorderStroke(1.dp, LocalContentColor.current.copy(alpha = 0.35f)),
     ) {
         Text(stringResource(R.string.focus_task), style = MaterialTheme.typography.labelMedium)
         Spacer(Modifier.width(10.dp))
@@ -222,6 +234,8 @@ internal fun TaskBoardHeader(
     val validationErrorKey = TaskDraftPolicy.validate(draftState.draft, summaries.map { it.task.title })
     val validationError = if (validationErrorKey == null) null else stringResource(validationErrorKey.messageRes)
     val submissionFailureCopy = stringResource(R.string.task_could_not_be_saved_try_again)
+    val focusManager = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
     Column(modifier) {
         TaskBoardSummary(summaries)
         Spacer(Modifier.height(16.dp))
@@ -234,6 +248,13 @@ internal fun TaskBoardHeader(
             onSubmit = {
                 onAddTask(draftState.draft) { accepted ->
                     draftState.onSubmissionResult(accepted, submissionFailureCopy)
+                    // An accepted task closes the composer so the keyboard
+                    // stops covering the tab bar. A rejected draft keeps
+                    // focus for an immediate correction.
+                    if (accepted) {
+                        focusManager.clearFocus()
+                        keyboard?.hide()
+                    }
                 }
             },
         )
@@ -284,6 +305,9 @@ private fun TaskDraftCard(
                 enabled = enabled,
                 isError = draft.isNotEmpty() && !valid,
                 supportingText = { error?.let { Text(it) } },
+                // The keyboard's Done key adds the task under the same gate as the button.
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { if (enabled && valid) onSubmit() }),
             )
             Spacer(Modifier.height(10.dp))
             Button(
@@ -293,7 +317,7 @@ private fun TaskDraftCard(
                 // with enlarged text instead of clipping it inside a
                 // fixed height.
                 modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Ink),
+                colors = ButtonDefaults.buttonColors(containerColor = Ink, contentColor = darkModeTextColor(Cloud)),
             ) { Text(stringResource(R.string.add_task)) }
         }
     }
@@ -341,12 +365,21 @@ internal fun TaskColumnLabels(modifier: Modifier = Modifier) {
     }
 }
 
+/** Row callbacks the task board hands each summary row. */
+internal data class TaskRowActions(
+    val onDelete: () -> Unit,
+    val onBeginRename: () -> Unit = {},
+    val onCancelRename: () -> Unit = {},
+    val onRename: (String) -> Unit = {},
+)
+
 @Composable
 internal fun TaskSummaryRow(
     summary: TaskDailySummary,
     mutationsEnabled: Boolean,
-    onDelete: () -> Unit,
+    actions: TaskRowActions,
     modifier: Modifier = Modifier,
+    editing: Boolean = false,
 ) {
     val useStackedLayout = LocalConfiguration.current.fontScale >= 1.3f
     val summaryDescription = taskSummaryDescription(summary)
@@ -356,10 +389,15 @@ internal fun TaskSummaryRow(
         contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
         shape = MaterialTheme.shapes.large,
     ) {
-        if (useStackedLayout) {
-            StackedTaskSummary(summary, summaryDescription, mutationsEnabled, onDelete)
-        } else {
-            WideTaskSummary(summary, summaryDescription, mutationsEnabled, onDelete)
+        when {
+            editing -> TaskTitleEditor(
+                summary.task.title,
+                actions.onRename,
+                actions.onCancelRename,
+                Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            )
+            useStackedLayout -> StackedTaskSummary(summary, summaryDescription, mutationsEnabled, actions)
+            else -> WideTaskSummary(summary, summaryDescription, mutationsEnabled, actions)
         }
     }
 }
@@ -369,7 +407,7 @@ private fun StackedTaskSummary(
     summary: TaskDailySummary,
     description: String,
     enabled: Boolean,
-    onDelete: () -> Unit,
+    actions: TaskRowActions,
 ) {
     Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
         Column(Modifier.clearAndSetSemantics { contentDescription = description }) {
@@ -390,7 +428,7 @@ private fun StackedTaskSummary(
                 style = MaterialTheme.typography.labelLarge,
             )
         }
-        DeleteTaskButton(summary.task.title, onDelete, enabled, Modifier.align(Alignment.End))
+        TaskRowButtons(summary, actions, enabled, Modifier.align(Alignment.End))
     }
 }
 
@@ -399,7 +437,7 @@ private fun WideTaskSummary(
     summary: TaskDailySummary,
     description: String,
     enabled: Boolean,
-    onDelete: () -> Unit,
+    actions: TaskRowActions,
 ) {
     BoxWithConstraints(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
         val weights = taskRowWeights(isNarrow = maxWidth < 360.dp)
@@ -428,7 +466,7 @@ private fun WideTaskSummary(
                     false,
                 )
             }
-            DeleteTaskButton(summary.task.title, onDelete, enabled, Modifier.weight(weights.action).widthIn(min = 64.dp))
+            TaskRowButtons(summary, actions, enabled, Modifier.weight(weights.action).widthIn(min = 64.dp))
         }
     }
 }
@@ -444,10 +482,12 @@ internal data class TaskRowWeights(
 // Rebalanced from 4.55f/2f/1.2f/1.35f/0.9f: title keeps flex but metrics
 // hold minimum widths so long titles ellipsize instead of squeezing
 // counts at 320dp. Narrow screens grant metrics a larger relative share.
+// The action column holds the rename icon and the Delete text side by
+// side, so it takes a larger share than a lone Delete button needed.
 internal fun taskRowWeights(isNarrow: Boolean): TaskRowWeights = if (isNarrow) {
-    TaskRowWeights(content = 1f, title = 1f, finished = 0.7f, time = 0.85f, action = 0.7f)
+    TaskRowWeights(content = 1f, title = 1f, finished = 0.7f, time = 0.85f, action = 0.85f)
 } else {
-    TaskRowWeights(content = 1f, title = 1f, finished = 0.55f, time = 0.65f, action = 0.6f)
+    TaskRowWeights(content = 1f, title = 1f, finished = 0.55f, time = 0.65f, action = 0.7f)
 }
 
 @Composable
@@ -481,6 +521,22 @@ private fun TaskSummaryMetric(text: String, modifier: Modifier, monospace: Boole
 internal fun deleteTaskAccessibilityLabel(template: String, taskTitle: String): String =
     template.format(taskTitle)
 
+// Rename sits beside Delete so both task mutations share one enable rule.
+@Composable
+private fun TaskRowButtons(summary: TaskDailySummary, actions: TaskRowActions, enabled: Boolean, modifier: Modifier) {
+    Row(modifier, horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+        RenameTaskButton(summary.task.title, actions.onBeginRename, enabled)
+        DeleteTaskButton(summary.task.title, actions.onDelete, enabled, Modifier)
+    }
+}
+
+@Composable
+private fun RenameTaskButton(taskTitle: String, onBeginRename: () -> Unit, enabled: Boolean) {
+    IconButton(onClick = onBeginRename, enabled = enabled) {
+        Icon(Icons.Outlined.Edit, contentDescription = stringResource(R.string.rename_task, taskTitle))
+    }
+}
+
 @Composable
 private fun DeleteTaskButton(taskTitle: String, onDelete: () -> Unit, enabled: Boolean, modifier: Modifier) {
     val deleteLabel = deleteTaskAccessibilityLabel(stringResource(R.string.delete_task), taskTitle)
@@ -491,6 +547,6 @@ private fun DeleteTaskButton(taskTitle: String, onDelete: () -> Unit, enabled: B
             contentDescription = deleteLabel
         },
     ) {
-        Text(stringResource(R.string.delete), color = darkModeTextColor(MaterialTheme.colorScheme.error))
+        Text(stringResource(R.string.delete), color = dangerTextColor())
     }
 }

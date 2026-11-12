@@ -1,10 +1,12 @@
 package me.egigoka.pomodorough.integration
 
 import android.content.Context
+import androidx.annotation.StringRes
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.runBlocking
+import me.egigoka.pomodorough.R
 import me.egigoka.pomodorough.data.CommandType
 import me.egigoka.pomodorough.data.BootstrapStrategy
 import me.egigoka.pomodorough.data.DurationAcknowledgement
@@ -55,7 +57,8 @@ class TrustedTimeContractTest {
 
         repository.toggleTimer()
 
-        assertTrue(repository.state.value.notice?.contains("Device sequence overflow") == true)
+        // UX round 2, B3: the notice is the localized sentence, not the exception message.
+        assertEquals(context.getString(R.string.local_clock_out_of_range), repository.state.value.notice)
         assertTrue(database.timerDao().pendingCommands().isEmpty())
         assertEquals(initial, database.timerDao().localState())
     }
@@ -154,7 +157,10 @@ class TrustedTimeContractTest {
         awaitState { repository.state.value.historyResolution?.submitting == false }
 
         assertEquals(1, service.resolveCalls)
-        assertTrue(repository.state.value.historyResolution?.error?.contains("uncertainty") == true)
+        assertRejectedSampleNotice(
+            R.string.device_clock_changed_during_request,
+            repository.state.value.historyResolution?.error,
+        )
         assertEquals(0L, database.timerDao().localState()?.revision)
         assertEquals(0L, database.timerDao().localState()?.serverClockOffsetMs)
         assertEquals(0L, database.timerDao().localState()?.serverClockUncertaintyMs)
@@ -173,7 +179,8 @@ class TrustedTimeContractTest {
 
         repository.changeDuration(TimerPhase.Focus, 1)
 
-        assertTrue(repository.state.value.notice?.contains("Retained hybrid clock") == true)
+        // UX round 2, B3: the notice is the localized sentence, not the exception message.
+        assertEquals(context.getString(R.string.local_clock_out_of_range), repository.state.value.notice)
         assertTrue(database.timerDao().pendingDurationOperations().isEmpty())
         assertEquals(initial, database.timerDao().localState())
 
@@ -515,7 +522,10 @@ class TrustedTimeContractTest {
 
         repository.initialize()
 
-        assertTrue(repository.state.value.notice?.contains("uncertainty") == true)
+        // The round trip is 1 s, within the bound; only the wall-clock jump term pushes the
+        // uncertainty over it. excessiveClockUncertaintyRejectsSampleWithoutPersistingIt reaches
+        // the same typed reason through the round-trip term alone, so both inputs stay covered.
+        assertRejectedSampleNotice(R.string.device_clock_changed_during_request, repository.state.value.notice)
         assertNull(database.timerDao().localState()?.serverClockOffsetMs)
     }
 
@@ -584,7 +594,8 @@ class TrustedTimeContractTest {
 
         repository.initialize()
 
-        assertTrue(repository.state.value.notice?.contains("uncertainty") == true)
+        // Wall and elapsed clocks agree; the 60_002 ms round trip alone exceeds the bound.
+        assertRejectedSampleNotice(R.string.device_clock_changed_during_request, repository.state.value.notice)
         assertNull(database.timerDao().localState()?.serverClockOffsetMs)
         assertNull(database.timerDao().localState()?.serverClockUncertaintyMs)
         assertEquals(0, service.syncCalls)
@@ -610,7 +621,7 @@ class TrustedTimeContractTest {
 
         repository.initialize()
 
-        assertTrue(repository.state.value.notice?.contains("disagrees") == true)
+        assertRejectedSampleNotice(R.string.server_time_unusable, repository.state.value.notice)
         assertNull(database.timerDao().localState()?.serverClockOffsetMs)
         assertEquals(0, service.syncCalls)
     }
@@ -633,7 +644,7 @@ class TrustedTimeContractTest {
 
         repository.initialize()
 
-        assertTrue(repository.state.value.notice?.contains("timing") == true)
+        assertRejectedSampleNotice(R.string.device_clock_unusable, repository.state.value.notice)
         assertNull(database.timerDao().localState()?.serverClockOffsetMs)
         assertEquals(0, service.syncCalls)
     }
@@ -1127,6 +1138,14 @@ class TrustedTimeContractTest {
         taskAcknowledgements = taskAcks,
         tasks = tasks,
     )
+
+    // A rejected time sample shows one localized sentence. The rejection
+    // reason is internal detail and is no longer user text (UX round 2, A2).
+    // The sentence is chosen by the typed rejection reason, so it tells the
+    // reasons apart without reading the exception message.
+    private fun assertRejectedSampleNotice(@StringRes reasonSentence: Int, notice: String?) {
+        assertEquals(context.getString(reasonSentence), notice)
+    }
 
     private fun repository() = testRepository(
         context = context,

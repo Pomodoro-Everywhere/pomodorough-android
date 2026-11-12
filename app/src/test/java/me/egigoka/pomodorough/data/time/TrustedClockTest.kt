@@ -3,7 +3,6 @@ package me.egigoka.pomodorough.data.time
 import java.time.Instant
 import me.egigoka.pomodorough.data.DurationsMs
 import me.egigoka.pomodorough.data.ServerClockSample
-import me.egigoka.pomodorough.data.SyncProtocolException
 import me.egigoka.pomodorough.data.SyncResponse
 import me.egigoka.pomodorough.data.SyncWireBounds
 import me.egigoka.pomodorough.data.local.LocalStateEntity
@@ -33,7 +32,7 @@ class TrustedClockTest {
 
     @Test
     fun sampleValidatesServerBeforeReceiptTiming() {
-        val error = assertThrows(SyncProtocolException::class.java) {
+        val error = assertThrows(TrustedClockRejectedException::class.java) {
             clock().sample(
                 response = response(serverTime = "bad"),
                 sentPhysicalMs = -1L,
@@ -43,8 +42,35 @@ class TrustedClockTest {
             )
         }
 
+        assertEquals(TrustedClockRejectionReason.InvalidServerTimestamp, error.reason)
         assertEquals("Server returned an invalid server timestamp", error.message)
     }
+
+    // UX round 2, B3: a refused sample carries a typed reason, so the notice
+    // can say whether the device clock or the server reply was at fault.
+    @Test
+    fun refusedSampleNamesItsReason() {
+        val slowRequest = rejectionReason(receivedElapsedRealtimeMs = 100L + 60_001L)
+        val receiptBeforeSend = rejectionReason(receivedElapsedRealtimeMs = 99L)
+        val serverDisagrees = rejectionReason(response().copy(serverHlcWallMs = 10_010L + SyncWireBounds.MaxClockSkewMs + 1L))
+
+        assertEquals(TrustedClockRejectionReason.ClockSampleUncertaintyTooHigh, slowRequest)
+        assertEquals(TrustedClockRejectionReason.LocalReceiptTimingOutOfRange, receiptBeforeSend)
+        assertEquals(TrustedClockRejectionReason.ServerHlcDisagreesWithTimestamp, serverDisagrees)
+    }
+
+    private fun rejectionReason(
+        response: SyncResponse = response(),
+        receivedElapsedRealtimeMs: Long = 110L,
+    ): TrustedClockRejectionReason = assertThrows(TrustedClockRejectedException::class.java) {
+        clock().sample(
+            response = response,
+            sentPhysicalMs = 10_000L,
+            sentElapsedRealtimeMs = 100L,
+            receivedPhysicalMs = 10_020L,
+            receivedElapsedRealtimeMs = receivedElapsedRealtimeMs,
+        )
+    }.reason
 
     @Test
     fun trustedTimeContinuesFromElapsedAnchorAcrossWallClockChange() {

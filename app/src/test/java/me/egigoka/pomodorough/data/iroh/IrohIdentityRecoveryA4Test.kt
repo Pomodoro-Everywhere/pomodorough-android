@@ -1,9 +1,18 @@
 package me.egigoka.pomodorough.data.iroh
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.encodeToString
 import me.egigoka.pomodorough.data.TimerSettings
 import me.egigoka.pomodorough.data.local.IrohRoomEntity
@@ -46,6 +55,47 @@ class IrohIdentityRecoveryA4Test {
         assertEquals(0, fixture.resetCount)
         assertNull(fixture.state.value.identityRecovery)
         assertFalse(fixture.state.value.recoveryAttemptFailed)
+        fixture.orchestration.close()
+    }
+
+    @Test
+    fun endpointRepairConfirmedInForegroundRestartsTheEndpoint() = runTest {
+        // R54-A05: repair runs while foreground, where a plain foreground replay starts nothing.
+        val fixture = RecoveryFixture(IrohIdentityRecoveryKind.ENDPOINT_CORRUPTED)
+        fixture.enterForegroundWithoutAction()
+
+        fixture.orchestration.confirmIdentityRecovery()
+        withContext(Dispatchers.IO) {
+            withTimeout(5_000) { while (fixture.startCount == 0) delay(1) }
+        }
+
+        assertEquals(1, fixture.replaceCount)
+        assertNull(fixture.state.value.identityRecovery)
+        fixture.orchestration.close()
+    }
+
+    @Test
+    fun endpointRepairInterruptedByBackgroundRestartsOnlyAtTheNextForeground() = runTest {
+        // R54-A05 X2: a background that lands during the repair stays in force; the restart must
+        // neither force the lifecycle foreground nor read the room secret behind the app.
+        val fixture = RecoveryFixture(IrohIdentityRecoveryKind.ENDPOINT_CORRUPTED)
+        fixture.enterForegroundWithoutAction()
+        fixture.onReplace = { fixture.orchestration.onBackground() }
+
+        fixture.orchestration.confirmIdentityRecovery()
+        assertFalse(fixture.lifecycleForeground())
+        withContext(Dispatchers.IO) {
+            withTimeoutOrNull(1_000) { while (fixture.secretReads == 0) delay(1) }
+        }
+        assertEquals(0, fixture.secretReads)
+        assertEquals(0, fixture.startCount)
+
+        fixture.orchestration.onForeground()
+        withContext(Dispatchers.IO) {
+            withTimeout(5_000) { while (fixture.startCount == 0) delay(1) }
+        }
+        assertEquals(1, fixture.replaceCount)
+        assertNull(fixture.state.value.identityRecovery)
         fixture.orchestration.close()
     }
 
@@ -97,6 +147,40 @@ class IrohIdentityRecoveryA4Test {
         assertTrue(fixture.state.value.recoveryAttemptFailed)
         fixture.orchestration.close()
     }
+
+    @Test
+    fun cancelledResetReturnsToTheRecoveryPromptAndRetries() = runTest {
+        // R54-A06: a cancelled confirmation must not leave the prompt disabled behind
+        // `transitioning`. The cancellation still reaches the caller.
+        val fixture = RecoveryFixture(IrohIdentityRecoveryKind.KEY_INVALIDATED_OR_MISSING)
+        fixture.resetGate = CompletableDeferred()
+        // The stored room snapshot carries no recovery prompt, so it must not replace the prompt.
+        fixture.storedSnapshot = IrohNetworkState(mode = ReplicationMode.IROH, roomId = "room-a4-test")
+        val outcome = CompletableDeferred<Throwable?>()
+
+        val recovery = launch {
+            try {
+                fixture.orchestration.confirmIdentityRecovery()
+                outcome.complete(null)
+            } catch (error: Throwable) {
+                outcome.complete(error)
+                throw error
+            }
+        }
+        fixture.resetStarted.await()
+        assertTrue(fixture.state.value.transitioning)
+        recovery.cancelAndJoin()
+
+        assertTrue(outcome.await() is CancellationException)
+        assertEquals(IrohIdentityRecoveryKind.KEY_INVALIDATED_OR_MISSING, fixture.state.value.identityRecovery)
+        assertFalse(fixture.state.value.transitioning)
+        assertFalse(fixture.state.value.recoveryAttemptFailed)
+        fixture.resetGate = null
+        fixture.orchestration.confirmIdentityRecovery()
+        assertEquals(listOf("stop", "begin", "reset", "stop", "begin", "reset", "complete"), fixture.events)
+        assertNull(fixture.state.value.identityRecovery)
+        fixture.orchestration.close()
+    }
 }
 
 private class RecoveryFixture(
@@ -110,12 +194,15 @@ private class RecoveryFixture(
     var resetGate: CompletableDeferred<Unit>? = null
     var validateFailure: Exception? = null
     var resetFailure: Exception? = null
+    var onReplace: (() -> Unit)? = null
+    var storedSnapshot: IrohNetworkState? = null
     var discardCount = 0
     var startCount = 0
     var stopCount = 0
     var replaceCount = 0
     var resetCount = 0
     var actionCount = 0
+    var secretReads = 0
     private val local = LocalStateEntity(
         deviceId = "device-a4-test",
         settingsJson = IrohJson.strict.encodeToString(TimerSettings()),
@@ -132,9 +219,21 @@ private class RecoveryFixture(
     )
     val orchestration = IrohRoomOrchestration(servicePort(), persistencePort())
 
+    // The recovery screen is foreground before the user confirms; no foreground action runs.
+    fun enterForegroundWithoutAction() {
+        lifecycle().enterForeground()
+    }
+
+    fun lifecycleForeground() = lifecycle().snapshot().foreground
+
+    private fun lifecycle() = IrohRoomOrchestration::class.java.getDeclaredField("lifecycle")
+        .apply { isAccessible = true }
+        .get(orchestration) as IrohLifecycleState
+
     private fun servicePort() = IrohRoomServicePort(
         state = state,
         publishState = { state.value = it },
+        transformState = { transform -> state.update(transform) },
         start = { _, _ -> startCount += 1; "ticket-a4" },
         stop = { stopCount += 1; events += "stop" },
         close = {},
@@ -143,7 +242,7 @@ private class RecoveryFixture(
         endpointIdForTicket = { "endpoint-a4" },
         syncNow = { actionCount += 1 },
         pendingIdentityRecovery = { pendingRecovery },
-        replaceEndpointIdentity = { replaceCount += 1; events += "replace" },
+        replaceEndpointIdentity = { replaceCount += 1; events += "replace"; onReplace?.invoke() },
         beginIdentityReset = { events += "begin"; pendingRecovery = recoveryKind() },
         completeIdentityReset = { events += "complete"; pendingRecovery = null },
     )
@@ -156,11 +255,11 @@ private class RecoveryFixture(
         },
         discardIncompleteRooms = { discardCount += 1 },
         setMode = { actionCount += 1 },
-        snapshot = { state.value },
+        snapshot = { storedSnapshot ?: state.value },
         captureLocalOperations = { projection() },
         createRoom = { actionCount += 1; room to projection() },
         activeRoom = { room },
-        activeRoomSecret = { ByteArray(32) },
+        activeRoomSecret = { secretReads += 1; ByteArray(32) },
         prepareJoinedRoom = { _, _ -> actionCount += 1; room to false },
         discardIncompleteInactiveRoom = {},
         leaveActiveRoom = {},

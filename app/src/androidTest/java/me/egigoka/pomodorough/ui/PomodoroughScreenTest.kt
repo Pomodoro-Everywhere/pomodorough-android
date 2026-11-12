@@ -112,7 +112,7 @@ class PomodoroughScreenTest {
         )
 
         composeRule.onNodeWithText("Sign in").assertExists()
-        composeRule.onNodeWithText("Local only").assertExists()
+        composeRule.onNodeWithText("On device").assertExists()
         composeRule.onNodeWithText("Local clock · sign in to sync").assertDoesNotExist()
         composeRule.onNode(hasText("Arrivals") or hasContentDescription("Arrivals")).performClick()
         composeRule.onNodeWithText("Recent arrivals").assertExists()
@@ -407,6 +407,7 @@ class PomodoroughScreenTest {
                     onRefreshIrohInvite = {},
                     onSyncIrohNow = {},
                     onShareIrohInvite = {},
+                    onRetryStartup = {},
                 )
             }
         }
@@ -586,6 +587,7 @@ class PomodoroughScreenTest {
                     onRefreshIrohInvite = {},
                     onSyncIrohNow = {},
                     onShareIrohInvite = {},
+                    onRetryStartup = {},
                 )
             }
         }

@@ -27,15 +27,18 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableIntState
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.Saver
@@ -47,8 +50,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -69,6 +74,8 @@ import me.egigoka.pomodorough.data.AuthStatus
 import me.egigoka.pomodorough.data.BootstrapStrategy
 import me.egigoka.pomodorough.data.HistoryItem
 import me.egigoka.pomodorough.data.HistoryResolutionState
+import me.egigoka.pomodorough.data.NoticeAction
+import me.egigoka.pomodorough.data.PendingTaskDeletion
 import me.egigoka.pomodorough.data.ResolutionRecovery
 import me.egigoka.pomodorough.data.SyncStatus
 
@@ -78,7 +85,14 @@ internal fun TimerScreen(state: AppState, actions: TimerScreenActions) {
     val ui = rememberTimerScreenUiState(state)
     val mutationsEnabled = mutationsEnabled(state)
     val recentHistory = remember(state.history) { state.history.sortedByDescending(::historyEpoch) }
-    AutoDismissNotice(state.notice, actions.onDismissNotice)
+    AutoDismissNotice(state.notice, actions.onDismissNotice, offersRetry = state.noticeAction != null)
+    TaskDeletionUndoSnackbar(
+        actions.taskEditing.pendingDeletion,
+        ui.snackbarHost,
+        actions.taskEditing.onUndoDeletion,
+        actions.taskEditing.onConfirmDeletion,
+        onTasksScreen = ui.navigation.activeTab == MainTab.Tasks,
+    )
     TimerScreenLayout(state, actions, ui, mutationsEnabled, recentHistory)
     TimerScreenDialogs(state, actions, ui)
 }
@@ -149,6 +163,11 @@ private data class TimerScreenUiState(
     val confirmationStrategy: MutableState<BootstrapStrategy?>,
     val taskDraft: TaskDraftUiState,
     val roomNameDraft: RoomNameDraftState,
+    val snackbarHost: SnackbarHostState,
+    // Measured height of the shown snackbar, zero when none is up. The
+    // secondary lists add it to their end padding so the undo snackbar,
+    // which has no time limit, never keeps the last rows out of reach.
+    val snackbarHeightPx: MutableIntState,
 )
 
 @Composable
@@ -159,6 +178,8 @@ private fun rememberTimerScreenUiState(state: AppState): TimerScreenUiState {
     // them. Non-sensitive drafts use SavedState to survive recreation.
     val taskDraft = rememberSaveable(saver = TaskDraftSaver) { TaskDraftUiState() }
     val roomNameDraft = rememberSaveable(saver = RoomNameDraftSaver) { RoomNameDraftState() }
+    val snackbarHost = remember { SnackbarHostState() }
+    val snackbarHeightPx = remember { mutableIntStateOf(0) }
     val tasks = rememberLazyListState()
     val pattern = rememberLazyListState()
     val arrivals = rememberLazyListState()
@@ -177,8 +198,10 @@ private fun rememberTimerScreenUiState(state: AppState): TimerScreenUiState {
         state.historyResolution?.pendingStrategy,
         state.historyResolution?.recovery,
     ) { mutableStateOf<BootstrapStrategy?>(null) }
-    return remember(dialogs, navigation, confirmation, taskDraft, roomNameDraft) {
-        TimerScreenUiState(dialogs, navigation, confirmation, taskDraft, roomNameDraft)
+    return remember(dialogs, navigation, confirmation, taskDraft, roomNameDraft, snackbarHost) {
+        TimerScreenUiState(
+            dialogs, navigation, confirmation, taskDraft, roomNameDraft, snackbarHost, snackbarHeightPx,
+        )
     }
 }
 
@@ -215,6 +238,7 @@ private fun TimerScreenLayout(
                 foldState,
                 ui.navigation.activeTab,
                 onSelectTab = { ui.navigation.activeTab = it },
+                snackbarHost = ui.snackbarHost,
             )
             TimerLayoutDecision.Landscape -> LandscapeTimerScaffold(
                 state,
@@ -224,6 +248,7 @@ private fun TimerScreenLayout(
                 onSelectTab = { ui.navigation.activeTab = it },
                 maxWidth = maxWidth,
                 maxHeight = maxHeight,
+                snackbarHost = ui.snackbarHost,
             )
             TimerLayoutDecision.Portrait -> PortraitScreenScaffold(
                 state,
@@ -250,6 +275,7 @@ private fun LandscapeTimerScaffold(
     onSelectTab: (MainTab) -> Unit,
     maxWidth: Dp,
     maxHeight: Dp,
+    snackbarHost: SnackbarHostState,
 ) {
     val style = landscapeNavigationStyle(maxWidth, maxHeight)
     Scaffold(
@@ -259,6 +285,7 @@ private fun LandscapeTimerScaffold(
                 MainNavigationBar(activeTab, onSelectTab)
             }
         },
+        snackbarHost = { UndoSnackbarHost(snackbarHost) },
     ) { padding ->
         if (style == LandscapeNavigationStyle.Rail) {
             Row(Modifier.fillMaxSize().padding(padding)) {
@@ -328,12 +355,14 @@ internal fun HalfOpenTimerScreen(
     foldState: FoldWindowState,
     activeTab: MainTab,
     onSelectTab: (MainTab) -> Unit,
+    snackbarHost: SnackbarHostState = remember { SnackbarHostState() },
 ) {
     Scaffold(
         modifier = Modifier.fillMaxSize().systemBarsPadding(),
         bottomBar = {
             Box(Modifier.testTag("timer_fold_navigation")) { MainNavigationBar(activeTab, onSelectTab) }
         },
+        snackbarHost = { UndoSnackbarHost(snackbarHost) },
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             MeasuredFoldContent(state, mutationsEnabled, actions, foldState)
@@ -458,10 +487,7 @@ private fun FoldSinglePane(
     }
 }
 
-private fun timerContentActions(
-    actions: TimerScreenActions,
-    dialogs: TimerDialogState,
-) = TimerContentActions(
+private fun timerContentActions(actions: TimerScreenActions, dialogs: TimerDialogState) = TimerContentActions(
     header = AppHeaderActions(
         onSignIn = actions.onSignIn,
         onLogout = { dialogs.showAccount = true },
@@ -473,10 +499,21 @@ private fun timerContentActions(
         onCancelTimer = actions.onCancelTimer,
         onStopSound = actions.onStopSound,
         onSelectTask = actions.onSelectTask,
+        onSelectPhase = actions.onSelectPhase,
     ),
     onDismissConflict = actions.onDismissConflict,
     onDismissNotice = actions.onDismissNotice,
+    onRetryNotice = { retry -> retryNotice(actions, retry) },
 )
+
+// UX round 2, L1: the notice stays until the retry has an outcome. A retry
+// the repository refuses leaves it on screen; a finished retry replaces it.
+private fun retryNotice(actions: TimerScreenActions, retry: NoticeAction) {
+    when (retry) {
+        NoticeAction.RetrySignIn -> actions.onSignIn()
+        NoticeAction.RetryAccountRestore -> actions.onRefresh()
+    }
+}
 
 @Composable
 private fun PortraitScreenScaffold(
@@ -491,6 +528,9 @@ private fun PortraitScreenScaffold(
         modifier = Modifier.fillMaxSize().systemBarsPadding(),
         bottomBar = {
             MainNavigationBar(ui.navigation.activeTab) { ui.navigation.activeTab = it }
+        },
+        snackbarHost = {
+            UndoSnackbarHost(ui.snackbarHost, Modifier.onSizeChanged { ui.snackbarHeightPx.intValue = it.height })
         },
     ) { padding ->
         if (ui.navigation.activeTab == MainTab.Timer) {
@@ -540,15 +580,16 @@ private fun SecondaryTabList(
 ) {
     val navigation = ui.navigation
     val activeTab = navigation.activeTab
+    val snackbarInset = with(LocalDensity.current) { ui.snackbarHeightPx.intValue.toDp() }
     key(activeTab) {
         Box(
-            modifier = Modifier.fillMaxSize().padding(padding),
+            modifier = Modifier.fillMaxSize().scaffoldContentAboveKeyboard(padding),
             contentAlignment = Alignment.TopCenter,
         ) {
             LazyColumn(
                 state = navigation.listState(),
                 modifier = Modifier.widthIn(max = SecondaryTabMaxWidth).fillMaxSize(),
-                contentPadding = PaddingValues(bottom = 20.dp),
+                contentPadding = PaddingValues(bottom = 20.dp + snackbarInset),
             ) {
                 secondaryHeader(state, contentActions)
                 when (activeTab) {
@@ -565,16 +606,8 @@ private fun SecondaryTabList(
 
 private fun LazyListScope.secondaryHeader(state: AppState, actions: TimerContentActions) {
     item { AppHeader(state, actions.header) }
-    state.conflict?.let { conflict ->
-        item {
-            MessageCard(
-                stringResource(R.string.changes_resolved_on_another_device),
-                conflict,
-                Lavender,
-                actions.onDismissConflict,
-                Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-            )
-        }
+    if (state.conflict != null) {
+        item { ConflictCard(actions.onDismissConflict, Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) }
     }
     state.notice?.let { notice ->
         item {
@@ -582,6 +615,7 @@ private fun LazyListScope.secondaryHeader(state: AppState, actions: TimerContent
                 notice,
                 actions.onDismissNotice,
                 Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                noticeRetry(state, actions),
             )
         }
     }
@@ -593,16 +627,18 @@ private fun LazyListScope.taskTab(
     mutationsEnabled: Boolean,
     taskDraft: TaskDraftUiState,
 ) {
+    val editing = actions.taskEditing
+    val summaries = visibleTaskSummaries(state.taskSummaries, editing.pendingDeletion)
     item {
         TaskBoardHeader(
-            state.taskSummaries,
+            summaries,
             mutationsEnabled,
             actions.onAddTask,
             taskDraft,
             Modifier.padding(horizontal = 16.dp, vertical = 16.dp),
         )
     }
-    if (state.taskSummaries.isEmpty()) {
+    if (summaries.isEmpty()) {
         item {
             EmptyTabCard(
                 stringResource(R.string.no_tasks_yet),
@@ -612,16 +648,24 @@ private fun LazyListScope.taskTab(
         }
     } else {
         item { TaskColumnLabels(Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) }
-        items(state.taskSummaries, key = { it.task.id }) { summary ->
+        items(summaries, key = { it.task.id }) { summary ->
             TaskSummaryRow(
                 summary,
                 mutationsEnabled,
-                { actions.onDeleteTask(summary.task.id) },
+                taskRowActions(actions, summary.task.id),
                 Modifier.padding(horizontal = 16.dp, vertical = 5.dp),
+                editing = editing.editingTaskId == summary.task.id,
             )
         }
     }
 }
+
+private fun taskRowActions(actions: TimerScreenActions, taskId: String) = TaskRowActions(
+    onDelete = { actions.onDeleteTask(taskId) },
+    onBeginRename = { actions.taskEditing.onBeginRename(taskId) },
+    onCancelRename = actions.taskEditing.onCancelRename,
+    onRename = { title -> actions.taskEditing.onRename(taskId, title) },
+)
 
 private fun LazyListScope.patternTab(
     state: AppState,
@@ -732,7 +776,8 @@ private fun TimerScreenDialogs(state: AppState, actions: TimerScreenActions, ui:
         DeleteAccountDialog(actions, dialogs)
     }
     if (dialogs.showLogout && state.authStatus == AuthStatus.SignedIn) {
-        LogoutDialog(state.pendingCount, actions.onLogout) { dialogs.showLogout = false }
+        val unsyncedWork = signOutPendingWork(state.pendingCount, actions.taskEditing.pendingDeletion)
+        LogoutDialog(unsyncedWork, actions.onLogout) { dialogs.showLogout = false }
     }
     if (dialogs.showLocalReset && state.localAccountResetRequired) {
         LocalResetDialog(actions.onResetLocalAccount) { dialogs.showLocalReset = false }
@@ -811,7 +856,7 @@ private fun AccountLink(labelRes: Int, destructive: Boolean = false, onClick: ()
     TextButton(onClick = onClick, modifier = Modifier.heightIn(min = 48.dp)) {
         Text(
             stringResource(labelRes),
-            color = if (destructive) darkModeTextColor(MaterialTheme.colorScheme.error) else androidx.compose.ui.graphics.Color.Unspecified,
+            color = if (destructive) dangerTextColor() else androidx.compose.ui.graphics.Color.Unspecified,
         )
     }
 }
@@ -834,7 +879,7 @@ private fun DeleteAccountDialog(actions: TimerScreenActions, dialogs: TimerDialo
             ) {
                 Text(
                     stringResource(R.string.delete_forever),
-                    color = darkModeTextColor(MaterialTheme.colorScheme.error),
+                    color = dangerTextColor(),
                 )
             }
         },
@@ -867,6 +912,11 @@ private fun DeleteAccountContent(dialogs: TimerDialogState) {
     }
 }
 
+// UX round 2: sign-out completes a task delete that waits for Undo, so the
+// warning counts it with the changes that have not synced.
+internal fun signOutPendingWork(pendingCount: Int, pendingDeletion: PendingTaskDeletion?): Int =
+    pendingCount + if (pendingDeletion != null) 1 else 0
+
 @Composable
 private fun LogoutDialog(pendingCount: Int, onLogout: () -> Unit, onDismiss: () -> Unit) {
     AlertDialog(
@@ -883,7 +933,7 @@ private fun LogoutDialog(pendingCount: Int, onLogout: () -> Unit, onDismiss: () 
             ) {
                 Text(
                     stringResource(R.string.sign_out),
-                    color = darkModeTextColor(MaterialTheme.colorScheme.error),
+                    color = dangerTextColor(),
                     fontWeight = FontWeight.Bold,
                 )
             }
@@ -922,7 +972,7 @@ private fun LocalResetDialog(onReset: () -> Unit, onDismiss: () -> Unit) {
             ) {
                 Text(
                     stringResource(R.string.reset_and_sign_out),
-                    color = darkModeTextColor(MaterialTheme.colorScheme.error),
+                    color = dangerTextColor(),
                     fontWeight = FontWeight.Bold,
                 )
             }
@@ -955,7 +1005,7 @@ private fun AccountSwitchDialog(
             ) {
                 Text(
                     stringResource(R.string.switch_and_remove_local_data),
-                    color = darkModeTextColor(MaterialTheme.colorScheme.error),
+                    color = dangerTextColor(),
                     fontWeight = FontWeight.Bold,
                 )
             }
@@ -983,7 +1033,7 @@ private fun AccountSwitchContent(accountSwitch: AccountSwitchState) {
             ),
         )
         accountSwitch.error?.let {
-            Text(it, color = darkModeTextColor(MaterialTheme.colorScheme.error), fontWeight = FontWeight.Bold)
+            Text(it, color = dangerTextColor(), fontWeight = FontWeight.Bold)
         }
     }
 }
@@ -1050,7 +1100,7 @@ private fun HistoryResolutionContent(
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(historyResolutionMessage(resolution, selected, confirmingKeepRemote))
         resolution.error?.let {
-            Text(it, color = darkModeTextColor(MaterialTheme.colorScheme.error), fontWeight = FontWeight.Bold)
+            Text(it, color = dangerTextColor(), fontWeight = FontWeight.Bold)
         }
         if (resolution.pendingStrategy != null) {
             Text(stringResource(R.string.retry_sends_the_exact_saved_request_id_and))

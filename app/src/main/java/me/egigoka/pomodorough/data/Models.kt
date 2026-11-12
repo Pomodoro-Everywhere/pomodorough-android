@@ -204,6 +204,10 @@ data class HistoryItem(
     val endedAt: String? = null,
     val pending: Boolean = false,
     val taskId: String? = null,
+    // The time the session really ran, pauses excluded, in 0..plannedDurationMs.
+    // Core 0.55.0 records it on every row it writes. A row stored before then
+    // has no value; it stays null and is never written back with a default.
+    val elapsedMs: Long? = null,
 )
 
 @Serializable
@@ -343,6 +347,16 @@ data class SelectedTaskAcknowledgement(
 object TaskOperationType {
     const val Upsert = "upsert"
     const val Delete = "delete"
+
+    // Core 0.56.0: removes the old identity like delete, carries the title it
+    // was renamed to, and moves finished history to that task.
+    const val Rename = "rename"
+
+    val all = setOf(Upsert, Delete, Rename)
+
+    // A winning delete or rename leaves no task under its ID, so either one
+    // clears a selection that still points there.
+    fun removesTask(type: String): Boolean = type == Delete || type == Rename
 }
 
 @Serializable

@@ -46,6 +46,7 @@ class TimerAccessibilityFixesTest {
         assertTrue(!shouldCompactNavLabels(1f))
         assertTrue(navLabelFontSize(1.3f) == 10.sp)
         assertTrue(navLabelFontSize(1f) == androidx.compose.ui.unit.TextUnit.Unspecified)
+        assertTrue(navLabelFontSize(2f) == 10.sp)
     }
 
     @Test

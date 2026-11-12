@@ -44,7 +44,10 @@ class TimerReducerPositiveTest {
         )
 
         assertEquals(TimerStatus.Completed, projection.timer?.status)
-        assertEquals(300_000L, projection.timer?.elapsedAtAnchorMs)
+        // Core 0.55.0 records the time the session ran, the paused minute excluded,
+        // not the observed time on the Finish command.
+        assertEquals(240_000L, projection.timer?.elapsedAtAnchorMs)
+        assertEquals(240_000L, projection.history.single().elapsedMs)
         assertEquals(
             TimerIntent(CommandType.Finish, "command-4", "2026-01-01T00:05:00Z"),
             projection.timer?.lastIntent,

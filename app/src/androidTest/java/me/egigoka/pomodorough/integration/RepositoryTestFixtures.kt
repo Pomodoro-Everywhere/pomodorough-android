@@ -1,6 +1,7 @@
 package me.egigoka.pomodorough.integration
 
 import android.content.Context
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.encodeToString
@@ -298,6 +299,14 @@ internal fun testHistory(id: String, phase: String = TimerPhase.Focus) = History
     endedAt = "2026-01-01T00:25:00Z",
 )
 
+// Core 0.55.0 writes elapsedMs on every history row it projects. A row without
+// the field, as testHistory builds it, counts its plan when completed and zero
+// otherwise when no terminal timer in the workspace matches it. Assertions on
+// repository.state.history compare against this projected form.
+internal fun List<HistoryItem>.asCoreProjected(): List<HistoryItem> = map { row ->
+    row.copy(elapsedMs = row.elapsedMs ?: if (row.status == TimerStatus.Completed) row.plannedDurationMs else 0L)
+}
+
 internal fun testCommand(
     id: String,
     sequence: Long,
@@ -346,8 +355,18 @@ internal fun testAutoStartOperation(
     hlcCounter = counter,
 )
 
-internal suspend fun awaitState(timeoutMs: Long = 5_000, condition: () -> Boolean) {
-    withTimeout(timeoutMs) {
-        while (!condition()) delay(10)
+// A timeout names the observed state. Coroutine stacks lose the caller's
+// line, so a bare TimeoutCancellationException cannot say which wait failed.
+internal suspend fun awaitState(
+    timeoutMs: Long = 5_000,
+    describe: () -> String = { "" },
+    condition: () -> Boolean,
+) {
+    try {
+        withTimeout(timeoutMs) {
+            while (!condition()) delay(10)
+        }
+    } catch (timeout: TimeoutCancellationException) {
+        throw AssertionError("State not reached within $timeoutMs ms. ${describe()}".trimEnd(), timeout)
     }
 }

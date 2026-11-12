@@ -114,6 +114,7 @@ class R43A03SafeProjectionTest {
             knownTasks = emptyMap(),
             settings = TimerSettings(),
             selectedPhaseGeneration = 1,
+            projectionBase = CoreProjectionBase(durationsMs = TimerSettings().effectiveDurationsMs()),
         )
         return coordinator.applyBootstrapInstallation(
             CentralizedBootstrapInstallationInput(

@@ -41,6 +41,8 @@ class R53A01RepositoryBoundaryTest {
             repeat(2) { attempt ->
                 fixture.repository.syncIrohNow()
                 fixture.awaitNetwork { it.message == RecoveryMessage }
+                fixture.settle()
+                assertEquals(RecoveryMessage, fixture.repository.state.value.network.message)
                 assertEquals(attempt + 1, fixture.binds)
                 assertEquals(List(attempt + 1) { failure }, fixture.reports)
                 assertEquals(IrohConnectionStatus.UNAVAILABLE, fixture.repository.state.value.network.status)
@@ -51,11 +53,33 @@ class R53A01RepositoryBoundaryTest {
     }
 
     @Test
+    fun realRepositoryForegroundBindFailurePublishesNoticeWithoutExceptionText() = runBlocking {
+        // R54-A05: the foreground action's start failure carries the Sync now notice. The
+        // lifecycle and the orchestration may both report it, so every report must be the fault.
+        withBoundary { fixture ->
+            val failure = IOException("synthetic secret invite and user text")
+            fixture.failure = failure
+            fixture.repository.onBackground()
+            fixture.repository.onForeground()
+            fixture.awaitNetwork { it.status == IrohConnectionStatus.UNAVAILABLE }
+            fixture.settle()
+            val network = fixture.repository.state.value.network
+            assertEquals(RecoveryMessage, network.message)
+            assertEquals(1, fixture.binds)
+            assertTrue(fixture.reports.isNotEmpty())
+            assertTrue("reports carry only the injected bind fault", fixture.reports.all { it === failure })
+            assertFalse(network.transitioning)
+            assertNull(network.identityRecovery)
+        }
+    }
+
+    @Test
     fun realRepositoryPropagatesNativeCancellationWithoutCrashOrRecoveryMessage() = runBlocking {
         withBoundary { fixture ->
             val cancellation = CancellationException("cancel native bind")
             fixture.failure = cancellation
             assertSame(cancellation, runCatching { fixture.repository.syncIrohNow() }.exceptionOrNull())
+            fixture.settle()
             assertEquals(1, fixture.binds)
             assertTrue(fixture.reports.isEmpty())
             assertNull(fixture.service.state.value.identityRecovery)
@@ -75,6 +99,7 @@ class R53A01RepositoryBoundaryTest {
             assertNull(fixture.service.state.value.message)
             assertEquals(IrohConnectionStatus.UNAVAILABLE, fixture.service.state.value.status)
             fixture.repository.syncIrohNow()
+            fixture.settle()
             assertEquals("quarantine must reject a second bind", 1, fixture.binds)
         }
     }
@@ -143,7 +168,8 @@ class R53A01RepositoryBoundaryTest {
             override suspend fun refreshInvite() = error("unexpected refresh")
             override suspend fun afterLocalMutation() = Unit
             override suspend fun clearAccountData() = error("unexpected wipe")
-            override fun onForeground() = Unit
+            override fun onForeground() = orchestration.onForeground()
+            override fun onBackground() = orchestration.onBackground()
         }
         val repository = TimerRepository(
             context, dao, unusedApi(), OfflineAuth(), IrohJson.strict,
@@ -163,7 +189,8 @@ class R53A01RepositoryBoundaryTest {
             repository.initialize()
             repository.toggleTimer()
             // Admit foreground before arming the native fault; setup must not consume the failure.
-            orchestration.onForeground()
+            // The repository owns foreground, so every later initialize() replays it (R54-A05).
+            repository.onForeground()
             awaitNetwork { it.status == IrohConnectionStatus.LISTENING }
             orchestration.initialize()
             orchestration.refreshInvite()
@@ -175,8 +202,13 @@ class R53A01RepositoryBoundaryTest {
             while (!predicate(repository.state.value.network)) delay(1)
         }
 
+        // A replayed foreground start runs on the orchestration's IO scope after the action
+        // returns. On a fixed tree nothing is left to run, so waiting cannot flake green.
+        suspend fun settle() = delay(SettleMillis)
+
         private fun servicePort() = IrohRoomServicePort(
             state = service.state, publishState = service::replaceState,
+            transformState = service::transformState,
             start = { context, periodic ->
                 if (armed) service.start(context, periodic) else {
                     service.replaceState(service.state.value.copy(status = IrohConnectionStatus.LISTENING))
@@ -215,6 +247,7 @@ class R53A01RepositoryBoundaryTest {
     companion object {
         private val RoomId = IrohProtocolV1.roomId(ByteArray(32) { (it + 1).toByte() })
         private const val RecoveryMessage = "Iroh sync could not be completed. Try again."
+        private const val SettleMillis = 300L
 
         private fun unusedApi() = Proxy.newProxyInstance(
             PomodoroughService::class.java.classLoader, arrayOf(PomodoroughService::class.java),

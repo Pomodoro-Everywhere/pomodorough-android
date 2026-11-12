@@ -146,6 +146,17 @@ class IrohPeerSynchronizationTimeoutTest {
     }
 
     @Test
+    fun peerStorageFailurePublishesBoundedUnavailableText() = runTest {
+        // R54-A13: the status reaches UI state, so it never carries the storage error's text.
+        val fixture = PeerFixture {}
+        fixture.peersFailure = IOException("peer table at /data/user/0/secret-path is corrupt")
+        fixture.sync.syncNow()
+        assertEquals(listOf(IrohConnectionStatus.UNAVAILABLE), fixture.statuses)
+        assertEquals(listOf("Saved Iroh peers could not be read"), fixture.messages)
+        assertTrue(fixture.attempts.isEmpty())
+    }
+
+    @Test
     fun perPeerTimeoutSwallowIsPinnedWhilePlainCancellationPropagates() = runTest {
         // A49 pinned: TimeoutCancellationException from syncPeer withTimeout(45s)
         // is a per-peer deadline and continues across peers; plain
@@ -242,12 +253,13 @@ private class PeerFixture(
     exchange: suspend (IrohPeerEntity) -> Unit,
 ) : IrohEndpointSessionSource {
     var owner = 1L
-    var peersFailure: CancellationException? = null
+    var peersFailure: Throwable? = null
     var snapshotFailure: Throwable? = null
     var snapshotTimeout = false
     private var snapshotCalls = 0
     val attempts = mutableListOf<String>()
     val statuses = mutableListOf<IrohConnectionStatus>()
+    val messages = mutableListOf<String?>()
     private val endpoint = IrohSyncTestEndpoint()
     private val context = IrohServiceContext("room", ByteArray(32) { 42 }, "device", null)
     private val transport = IrohEndpointTransport()
@@ -261,7 +273,13 @@ private class PeerFixture(
     )
     val sync = IrohPeerSynchronization(
         this, transport, authentication, incoming, dependencies(),
-        { event -> if (event is IrohPeerSyncEvent.Status) statuses += event.status }, Random(1),
+        { event ->
+            if (event is IrohPeerSyncEvent.Status) {
+                statuses += event.status
+                messages += event.message
+            }
+        },
+        Random(1),
         exchangePeer = { _, _, _, peer ->
             attempts += peer.endpointId
             exchange(peer)

@@ -247,6 +247,89 @@ private data class CoreCompletionOutput(
     val sourceAlreadyAccepted: Boolean = false,
 )
 
+// Local calendar day that contains the reference instant, as the ISO
+// bounds Shared Core expects for completion counting.
+private fun dayBounds(reference: Instant, zoneId: ZoneId): Pair<String, String> {
+    val start = reference.atZone(zoneId).toLocalDate().atStartOfDay(zoneId).toInstant()
+    val end = reference.atZone(zoneId).toLocalDate().plusDays(1).atStartOfDay(zoneId).toInstant()
+    return start.toString() to end.toString()
+}
+
+internal data class CoreSkipDestinationInput(
+    val sourcePhase: String,
+    val history: List<HistoryItem>,
+    val reference: Instant,
+    val zoneId: ZoneId,
+)
+
+@Serializable
+private data class CoreSkipSelectionWire(
+    val phase: String,
+    val generation: String,
+    val explicit: Boolean,
+)
+
+@Serializable
+private data class CoreCalendarIntervalWire(val start: String, val end: String)
+
+@Serializable
+private data class CoreSkipWireInput(
+    val kind: String = "skip",
+    val selection: CoreSkipSelectionWire,
+    val sourcePhase: String,
+    val history: List<HistoryItem>,
+    val referenceTime: String,
+    val calendarIntervals: List<CoreCalendarIntervalWire>,
+)
+
+@Serializable
+private data class CoreSkipOutput(val selection: CoreSkipSelectionWire)
+
+// Asks Shared Core which phase a manual skip from the selected phase
+// lands on. The idle hero offers that phase as "Skip to ..."; the core
+// owns the long-break cadence, so no client-side modulo lives here.
+internal class CoreSkipDestinationDispatcher(
+    private val dispatch: (String, String) -> JsonElement,
+) {
+    private val wireJson = Json { explicitNulls = false; encodeDefaults = true }
+
+    // The output also carries advance bookkeeping that only replication
+    // consumers read, so this reader tolerates those fields.
+    private val outputJson = Json { ignoreUnknownKeys = true }
+
+    fun destination(input: CoreSkipDestinationInput): String {
+        val (dayStart, dayEnd) = dayBounds(input.reference, input.zoneId)
+        val wire = CoreSkipWireInput(
+            selection = CoreSkipSelectionWire(
+                phase = input.sourcePhase,
+                generation = "0",
+                explicit = false,
+            ),
+            sourcePhase = input.sourcePhase,
+            history = input.history,
+            referenceTime = input.reference.toString(),
+            calendarIntervals = listOf(CoreCalendarIntervalWire(dayStart, dayEnd)),
+        )
+        val phase = decode(wireJson.encodeToString(wire)).selection.phase
+        if (phase !in TimerPhase.all) {
+            throw CoreProjectionException.InvalidOutput("Shared Core returned invalid skip destination")
+        }
+        return phase
+    }
+
+    private fun decode(input: String): CoreSkipOutput = try {
+        outputJson.decodeFromJsonElement(CoreSkipOutput.serializer(), dispatch(Operation, input))
+    } catch (error: CancellationException) {
+        throw error
+    } catch (error: Exception) {
+        throw CoreProjectionException.InvalidOutput("Could not decode Shared Core skip destination", error)
+    }
+
+    private companion object {
+        const val Operation = "timer.completionState.v1"
+    }
+}
+
 internal class CoreCompletionDispatcher(
     private val dispatch: (String, String) -> JsonElement,
 ) {
@@ -372,12 +455,6 @@ internal class CoreCompletionDispatcher(
             "Could not decode Shared Core completion plan",
             error,
         )
-    }
-
-    private fun dayBounds(reference: Instant, zoneId: ZoneId): Pair<String, String> {
-        val start = reference.atZone(zoneId).toLocalDate().atStartOfDay(zoneId).toInstant()
-        val end = reference.atZone(zoneId).toLocalDate().plusDays(1).atStartOfDay(zoneId).toInstant()
-        return start.toString() to end.toString()
     }
 
     private fun TimerProjection.toCoreProjection() =

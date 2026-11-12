@@ -14,6 +14,8 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.DeviceFontFamilyName
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -27,6 +29,15 @@ val Cloud = Color(0xFFE8F0F1)
 val Danger = Color(0xFFFF604F)
 val DangerAccent = Color(0xFF8F2424)
 val DangerText = Color(0xFF681515)
+
+// Railway signage face. Android ships Roboto Condensed as the
+// "sans-serif-condensed" system family, so headings get the narrow
+// station-board look without bundled font assets. A device without
+// the family falls through to the default sans face.
+internal val Signage = FontFamily(
+    Font(DeviceFontFamilyName("sans-serif-condensed"), weight = FontWeight.Normal),
+    Font(DeviceFontFamilyName("sans-serif-condensed"), weight = FontWeight.Bold),
+)
 
 internal val LocalPomodoroughDarkTheme = staticCompositionLocalOf { false }
 
@@ -55,11 +66,18 @@ private val lightColors = lightColorScheme(
     onError = Cloud,
     errorContainer = Danger,
     onErrorContainer = Ink,
+    // Snackbars paint the inverse roles. Left unset they fall back to
+    // the Material baseline purple-greys, which are not app colours.
+    inverseSurface = Ink,
+    inverseOnSurface = Cloud,
+    inversePrimary = Butter,
 )
 
 private val darkColors = darkColorScheme(
+    // Dark primary is a light blue, so content on it is Ink (9.0:1).
+    // White on it is 2.0:1.
     primary = Color(0xFF9CB8FF),
-    onPrimary = Color.White,
+    onPrimary = Ink,
     primaryContainer = Color(0xFF243F73),
     onPrimaryContainer = Color.White,
     secondary = Color(0xFFFFB4AA),
@@ -68,7 +86,9 @@ private val darkColors = darkColorScheme(
     onSecondaryContainer = Color.White,
     tertiary = Butter,
     onTertiary = Color.White,
-    tertiaryContainer = Color(0xFF5A4700),
+    // Dark focus cards sit on platform navy, the same station wall
+    // the web and Apple clients paint behind the timer.
+    tertiaryContainer = Violet,
     onTertiaryContainer = Color.White,
     background = Color(0xFF0D1722),
     onBackground = Color.White,
@@ -82,32 +102,35 @@ private val darkColors = darkColorScheme(
     onError = Color.White,
     errorContainer = Color(0xFF93000A),
     onErrorContainer = Color.White,
+    inverseSurface = Cloud,
+    inverseOnSurface = Ink,
+    inversePrimary = Violet,
 )
 
 private val typography = Typography(
     displayLarge = TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = Signage,
         fontWeight = FontWeight.Black,
         fontSize = 58.sp,
         lineHeight = 56.sp,
         letterSpacing = (-2.2).sp,
     ),
     headlineLarge = TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = Signage,
         fontWeight = FontWeight.Black,
         fontSize = 40.sp,
         lineHeight = 40.sp,
         letterSpacing = (-1.2).sp,
     ),
     headlineMedium = TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = Signage,
         fontWeight = FontWeight.ExtraBold,
         fontSize = 28.sp,
         lineHeight = 30.sp,
         letterSpacing = (-0.5).sp,
     ),
     titleLarge = TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = Signage,
         fontWeight = FontWeight.ExtraBold,
         fontSize = 22.sp,
         lineHeight = 26.sp,
@@ -136,24 +159,6 @@ private val typography = Typography(
     ),
 )
 
-private val darkTypography = Typography(
-    displayLarge = typography.displayLarge.copy(color = Color.White),
-    displayMedium = typography.displayMedium.copy(color = Color.White),
-    displaySmall = typography.displaySmall.copy(color = Color.White),
-    headlineLarge = typography.headlineLarge.copy(color = Color.White),
-    headlineMedium = typography.headlineMedium.copy(color = Color.White),
-    headlineSmall = typography.headlineSmall.copy(color = Color.White),
-    titleLarge = typography.titleLarge.copy(color = Color.White),
-    titleMedium = typography.titleMedium.copy(color = Color.White),
-    titleSmall = typography.titleSmall.copy(color = Color.White),
-    bodyLarge = typography.bodyLarge.copy(color = Color.White),
-    bodyMedium = typography.bodyMedium.copy(color = Color.White),
-    bodySmall = typography.bodySmall.copy(color = Color.White),
-    labelLarge = typography.labelLarge.copy(color = Color.White),
-    labelMedium = typography.labelMedium.copy(color = Color.White),
-    labelSmall = typography.labelSmall.copy(color = Color.White),
-)
-
 private val shapes = Shapes(
     extraSmall = RoundedCornerShape(8.dp),
     small = RoundedCornerShape(14.dp),
@@ -173,7 +178,9 @@ fun PomodoroughTheme(
     CompositionLocalProvider(LocalPomodoroughDarkTheme provides darkTheme) {
         MaterialExpressiveTheme(
             colorScheme = if (darkTheme) darkColors else lightColors,
-            typography = if (darkTheme) darkTypography else typography,
+            // Styles carry no colour: text takes the content colour of the
+            // surface it sits on, so one typography serves both themes.
+            typography = typography,
             shapes = shapes,
             content = content,
         )

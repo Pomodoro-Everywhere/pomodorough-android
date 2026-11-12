@@ -28,7 +28,7 @@ class SharedCoreTest {
         assertEquals(
             buildJsonObject {
                 put("schemaVersion", JsonPrimitive(1))
-                put("coreVersion", JsonPrimitive("0.53.0"))
+                put("coreVersion", JsonPrimitive("0.56.0"))
             },
             core.dispatch("core.version", "{}"),
         )
@@ -110,7 +110,7 @@ class SharedCoreTest {
             core.dispatch("core.version", "{}")
             fail("invalidated shared core must reject reuse")
         } catch (error: SharedCoreException.Abi) {
-            assertTrue(error.message.orEmpty().contains("unusable after cleanup failure"))
+            assertTrue(error.message.orEmpty().contains("unusable after an earlier failure"))
         }
     }
 
@@ -131,7 +131,7 @@ class SharedCoreTest {
             malformed.dispatch("core.version", "{}")
             fail("ownership uncertainty must invalidate the instance")
         } catch (error: SharedCoreException.Abi) {
-            assertTrue(error.message.orEmpty().contains("unusable after cleanup failure"))
+            assertTrue(error.message.orEmpty().contains("unusable after an earlier failure"))
         }
     }
 
@@ -149,7 +149,7 @@ class SharedCoreTest {
             rejected.dispatch("core.version", "{}")
             fail("cleanup uncertainty must invalidate the instance")
         } catch (error: SharedCoreException.Abi) {
-            assertTrue(error.message.orEmpty().contains("unusable after cleanup failure"))
+            assertTrue(error.message.orEmpty().contains("unusable after an earlier failure"))
         }
     }
 

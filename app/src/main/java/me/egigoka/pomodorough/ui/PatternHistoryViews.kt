@@ -125,6 +125,7 @@ import me.egigoka.pomodorough.data.AppState
 import me.egigoka.pomodorough.data.AuthStatus
 import me.egigoka.pomodorough.data.BootstrapStrategy
 import me.egigoka.pomodorough.data.CanonicalTimer
+import me.egigoka.pomodorough.data.DurationLimits
 import me.egigoka.pomodorough.data.FocusTask
 import me.egigoka.pomodorough.data.HistoryItem
 import me.egigoka.pomodorough.data.ResolutionRecovery
@@ -133,6 +134,8 @@ import me.egigoka.pomodorough.data.SyncStatus
 import me.egigoka.pomodorough.data.TimerPhase
 import me.egigoka.pomodorough.data.TimerSettings
 import me.egigoka.pomodorough.data.TimerStatus
+import me.egigoka.pomodorough.domain.countedElapsedMs
+import me.egigoka.pomodorough.domain.elapsedMinutes
 import me.egigoka.pomodorough.data.iroh.IrohConnectionStatus
 import me.egigoka.pomodorough.data.iroh.ReplicationMode
 
@@ -198,7 +201,8 @@ private fun AutoStartBreaksCard(checked: Boolean, enabled: Boolean, onCheckedCha
         contentColor = darkModeTextColor(Cloud),
         shape = MaterialTheme.shapes.large,
     ) {
-        Row(
+        LabelledSwitchLayout(
+            spacing = 12.dp,
             modifier = Modifier
                 .toggleable(value = checked, enabled = enabled, role = Role.Switch, onValueChange = onCheckedChange)
                 .semantics(mergeDescendants = true) {
@@ -206,19 +210,21 @@ private fun AutoStartBreaksCard(checked: Boolean, enabled: Boolean, onCheckedCha
                     stateDescription = state
                 }
                 .padding(horizontal = 18.dp, vertical = 16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(stringResource(R.string.auto_start_breaks), style = MaterialTheme.typography.titleLarge)
-                Text(
-                    stringResource(R.string.short_after_focus_long_every_fourth_completed_focus),
-                    color = darkModeTextColor(Lavender),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            }
-            Spacer(Modifier.width(12.dp))
-            Switch(checked = checked, onCheckedChange = null, enabled = enabled)
-        }
+            label = { AutoStartBreaksLabel() },
+            switch = { Switch(checked = checked, onCheckedChange = null, enabled = enabled) },
+        )
+    }
+}
+
+@Composable
+private fun AutoStartBreaksLabel() {
+    Column {
+        Text(stringResource(R.string.auto_start_breaks), style = MaterialTheme.typography.titleLarge)
+        Text(
+            stringResource(R.string.short_after_focus_long_every_fourth_completed_focus),
+            color = darkModeTextColor(Lavender),
+            style = MaterialTheme.typography.bodyMedium,
+        )
     }
 }
 
@@ -333,7 +339,8 @@ internal fun PhaseDurationControls(
     onChangeDuration: (String, Int) -> Unit,
 ) {
     val durationDescription = pluralStringResource(R.plurals.minutes_long, minutes, minutes)
-    StepButton("−", stringResource(R.string.decrease_phase_duration, phaseLabel(phase)), enabled) {
+    val canDecrease = enabled && canDecreaseDuration(minutes)
+    StepButton("−", stringResource(R.string.decrease_phase_duration, phaseLabel(phase)), canDecrease) {
         onChangeDuration(phase, -1)
     }
     Text(
@@ -347,10 +354,17 @@ internal fun PhaseDurationControls(
         fontSize = 22.sp,
         textAlign = TextAlign.Center,
     )
-    StepButton("+", stringResource(R.string.increase_phase_duration, phaseLabel(phase)), enabled) {
+    val canIncrease = enabled && canIncreaseDuration(minutes)
+    StepButton("+", stringResource(R.string.increase_phase_duration, phaseLabel(phase)), canIncrease) {
         onChangeDuration(phase, 1)
     }
 }
+
+// UX round 2, B5 (AND-22): a step past a bound changes nothing, so the
+// control that would take it is disabled. The bounds are the ones Core enforces.
+internal fun canDecreaseDuration(minutes: Int): Boolean = minutes > DurationLimits.MinMs / DurationLimits.MinuteMs
+
+internal fun canIncreaseDuration(minutes: Int): Boolean = minutes < DurationLimits.MaxMs / DurationLimits.MinuteMs
 
 @Composable
 internal fun StepButton(
@@ -402,7 +416,7 @@ private fun completedFocusTotals(history: List<HistoryItem>, tasks: List<FocusTa
             taskNames[taskId] != null -> taskNames.getValue(taskId)
             else -> stringResource(R.string.deleted_task)
         }
-        CompletedFocusTotal(title, items.size, items.sumOf { it.plannedDurationMs })
+        CompletedFocusTotal(title, items.size, items.sumOf { it.countedElapsedMs() })
     }.sortedBy { it.title.lowercase(Locale.getDefault()) }
 }
 
@@ -445,7 +459,9 @@ internal fun HistoryTitle(count: Int, modifier: Modifier = Modifier) {
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.Bottom,
     ) {
-        Column {
+        // The title column yields width so the count badge stays on screen at
+        // large font scales instead of being pushed past the trailing edge.
+        Column(modifier = Modifier.weight(1f, fill = false)) {
             SectionLabel(stringResource(R.string.run_log_this_account))
             Text(stringResource(R.string.recent_arrivals), style = MaterialTheme.typography.headlineMedium)
         }
@@ -498,7 +514,7 @@ private fun HistoryRowContent(
         HistoryPhaseStamp(item.phase, palette)
         Spacer(Modifier.width(13.dp))
         HistoryDetails(item, taskTitle, showPending, Modifier.weight(1f))
-        HistoryDuration(item.plannedDurationMs)
+        HistoryDuration(item)
     }
 }
 
@@ -528,6 +544,7 @@ private fun HistoryDetails(item: HistoryItem, taskTitle: String?, showPending: B
             phaseLabel(item.phase) + if (item.pending && showPending) stringResource(R.string.queued) else "",
             style = MaterialTheme.typography.titleLarge,
         )
+        Text(historyStatusLabel(item), style = MaterialTheme.typography.labelLarge)
         Text(
             formatHistoryDate(item),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -542,10 +559,13 @@ private fun HistoryDetails(item: HistoryItem, taskTitle: String?, showPending: B
 }
 
 @Composable
-private fun HistoryDuration(durationMs: Long) {
-    val minutes = (durationMs / 60_000).coerceAtLeast(1)
+private fun HistoryDuration(item: HistoryItem) {
+    val elapsedMinutes = item.elapsedMinutes()
+    val minutes = elapsedMinutes ?: (item.plannedDurationMs / 60_000).coerceAtLeast(1)
+    val duration = pluralStringResource(R.plurals.minutes_short, minutes.toInt(), minutes)
+    val planned = elapsedMinutes == null && showsPlannedDuration(item.status)
     Text(
-        pluralStringResource(R.plurals.minutes_short, minutes.toInt(), minutes),
+        if (planned) stringResource(R.string.history_planned_duration, duration) else duration,
         color = darkModeTextColor(MaterialTheme.colorScheme.primary),
         style = MaterialTheme.typography.labelLarge,
     )

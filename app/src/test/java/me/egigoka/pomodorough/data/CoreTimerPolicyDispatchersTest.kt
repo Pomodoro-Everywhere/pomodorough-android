@@ -4,7 +4,11 @@ import java.time.Instant
 import java.time.ZoneId
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
@@ -213,6 +217,56 @@ class CoreTimerPolicyDispatchersTest {
         }
         assertEquals(2, calls)
     }
+
+    @Test
+    fun skipDestinationDispatcherAsksSharedCoreWithLocalDayInterval() {
+        var captured: JsonElement? = null
+        val dispatcher = CoreSkipDestinationDispatcher { operation, input ->
+            assertEquals("timer.completionState.v1", operation)
+            captured = json.parseToJsonElement(input)
+            buildJsonObject {
+                put("selection", skipSelection(TimerPhase.LongBreak))
+                put("reason", "skipSelected")
+                put("advances", buildJsonArray {})
+            }
+        }
+
+        val phase = dispatcher.destination(skipInput())
+
+        assertEquals(TimerPhase.LongBreak, phase)
+        val wire = captured!!.jsonObject
+        assertEquals("skip", wire.getValue("kind").jsonPrimitive.content)
+        assertEquals(TimerPhase.Focus, wire.getValue("sourcePhase").jsonPrimitive.content)
+        assertEquals(TimerPhase.Focus, wire.getValue("selection").jsonObject.getValue("phase").jsonPrimitive.content)
+        assertEquals("2024-05-01T12:00:00Z", wire.getValue("referenceTime").jsonPrimitive.content)
+        val interval = wire.getValue("calendarIntervals").jsonArray.single().jsonObject
+        assertEquals("2024-05-01T00:00:00Z", interval.getValue("start").jsonPrimitive.content)
+        assertEquals("2024-05-02T00:00:00Z", interval.getValue("end").jsonPrimitive.content)
+    }
+
+    @Test
+    fun skipDestinationDispatcherRejectsUnknownPhase() {
+        val dispatcher = CoreSkipDestinationDispatcher { _, _ ->
+            buildJsonObject { put("selection", skipSelection("nap")) }
+        }
+
+        assertThrows(CoreProjectionException.InvalidOutput::class.java) {
+            dispatcher.destination(skipInput())
+        }
+    }
+
+    private fun skipSelection(phase: String) = buildJsonObject {
+        put("phase", phase)
+        put("generation", "0")
+        put("explicit", false)
+    }
+
+    private fun skipInput() = CoreSkipDestinationInput(
+        sourcePhase = TimerPhase.Focus,
+        history = emptyList(),
+        reference = Instant.parse("2024-05-01T12:00:00Z"),
+        zoneId = ZoneId.of("UTC"),
+    )
 
     private fun finishInput() = CoreFinishAppliedInput(
         commandId = "finish-4",

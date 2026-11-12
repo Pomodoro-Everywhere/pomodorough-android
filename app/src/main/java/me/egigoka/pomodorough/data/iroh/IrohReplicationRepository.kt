@@ -9,6 +9,7 @@ interface IrohReplicationController {
     val mode: ReplicationMode
         get() = state.value.mode
 
+    // Throws IrohRouteReadException when the startup route read fails; nothing is published then.
     suspend fun initialize()
     suspend fun setMode(mode: ReplicationMode)
     suspend fun createRoom(name: String)
@@ -54,6 +55,7 @@ class IrohReplicationRepository(
         service = IrohRoomServicePort(
             state = service.state,
             publishState = service::replaceState,
+            transformState = service::transformState,
             start = service::start,
             stop = service::stop,
             close = service::close,

@@ -44,8 +44,8 @@ android {
         applicationId = "me.egigoka.pomodorough"
         minSdk = 26
         targetSdk = 36
-        versionCode = 68
-        versionName = "0.53.0"
+        versionCode = 69
+        versionName = "0.56.0"
 
         testInstrumentationRunner = if (requestedTestBuildType == "release") {
             "me.egigoka.pomodorough.releaseiroh.ReleaseIrohSmokeInstrumentation"
@@ -149,6 +149,9 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     // Foldable posture (FoldingFeature/HALF_OPENED) for tabletop timer layout.
     implementation("androidx.window:window:1.3.0")
+    // Home-screen widget (Glance) renders the timer phase, task, and status.
+    implementation("androidx.glance:glance-appwidget:1.1.1")
+    implementation("androidx.glance:glance-material3:1.1.1")
 
     implementation("androidx.credentials:credentials:1.3.0")
     implementation("androidx.credentials:credentials-play-services-auth:1.3.0")

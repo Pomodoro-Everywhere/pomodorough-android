@@ -1,0 +1,428 @@
+{
+  "input": {
+    "profile": "androidCentralized",
+    "deviceId": "android-proof",
+    "ownership": {
+      "ownerId": "account-proof",
+      "expectedOwnerId": "account-proof",
+      "timerOwner": {
+        "timerId": "focus-proof",
+        "deviceId": "android-proof"
+      }
+    },
+    "workspace": {
+      "base": {
+        "canonicalTimer": {
+          "id": "focus-proof",
+          "phase": "focus",
+          "status": "running",
+          "plannedDurationMs": 1500000,
+          "elapsedAtAnchorMs": 0,
+          "anchorAt": "2026-08-30T12:00:00Z",
+          "startedByDeviceId": "android-proof"
+        },
+        "history": [],
+        "tasks": [
+          {
+            "id": "aaf83054-24b2-8c0e-901f-a974147bfe82",
+            "title": "Café"
+          }
+        ],
+        "durationsMs": {
+          "focus": 1500000,
+          "short_break": 300000,
+          "long_break": 900000
+        },
+        "autoStartBreaks": true,
+        "selectedTaskId": null
+      },
+      "local": {
+        "commands": [
+          {
+            "id": "finish-proof",
+            "occurredAt": "2026-08-31T12:00:00Z",
+            "hlcWallMs": 1788177600000,
+            "hlcCounter": 3,
+            "deviceSequence": 8,
+            "timerId": "focus-proof",
+            "type": "finish",
+            "phase": "focus",
+            "plannedDurationMs": 1500000,
+            "observedElapsedMs": 0,
+            "physicalOccurredAt": "2026-08-31T11:59:59Z",
+            "generatedByFinishCommandId": null,
+            "neverSent": true
+          },
+          {
+            "id": "break-proof",
+            "occurredAt": "2026-08-31T12:00:00Z",
+            "hlcWallMs": 1788177600000,
+            "hlcCounter": 4,
+            "deviceSequence": 9,
+            "timerId": "break-timer",
+            "type": "start",
+            "phase": "short_break",
+            "plannedDurationMs": 300000,
+            "observedElapsedMs": 0,
+            "physicalOccurredAt": "2026-08-31T11:59:59Z",
+            "generatedByFinishCommandId": "finish-proof",
+            "neverSent": true
+          },
+          {
+            "id": "pause-proof",
+            "occurredAt": "2026-08-31T12:00:00Z",
+            "hlcWallMs": 1788177600000,
+            "hlcCounter": 5,
+            "deviceSequence": 10,
+            "timerId": "break-timer",
+            "type": "pause",
+            "phase": "short_break",
+            "plannedDurationMs": 300000,
+            "observedElapsedMs": 0,
+            "physicalOccurredAt": "2026-08-31T11:59:59Z",
+            "generatedByFinishCommandId": "finish-proof",
+            "neverSent": true
+          }
+        ],
+        "taskOperations": [
+          {
+            "id": "task-op",
+            "occurredAt": "2026-08-31T12:00:00Z",
+            "hlcWallMs": 1788177600000,
+            "hlcCounter": 6,
+            "taskId": "aaf83054-24b2-8c0e-901f-a974147bfe82",
+            "type": "upsert",
+            "title": "Café"
+          }
+        ],
+        "durationOperations": [
+          {
+            "id": "duration-op",
+            "occurredAt": "2026-08-31T12:00:00Z",
+            "hlcWallMs": 1788177600000,
+            "hlcCounter": 7,
+            "phase": "short_break",
+            "durationMs": 300000
+          }
+        ],
+        "autoStartOperations": [
+          {
+            "id": "auto-op",
+            "occurredAt": "2026-08-31T12:00:00Z",
+            "hlcWallMs": 1788177600000,
+            "hlcCounter": 8,
+            "deviceId": "android-proof",
+            "enabled": true
+          }
+        ],
+        "selectedTaskOperations": [
+          {
+            "id": "select-op",
+            "occurredAt": "2026-08-31T12:00:00Z",
+            "hlcWallMs": 1788177600000,
+            "hlcCounter": 9,
+            "taskId": "aaf83054-24b2-8c0e-901f-a974147bfe82"
+          }
+        ]
+      },
+      "canonicalHead": {
+        "wallMs": 1788177600000,
+        "counter": 2
+      },
+      "neverSent": {
+        "commands": [
+          "finish-proof",
+          "break-proof",
+          "pause-proof"
+        ],
+        "taskOperations": [
+          "task-op"
+        ],
+        "durationOperations": [
+          "duration-op"
+        ],
+        "autoStartOperations": [
+          "auto-op"
+        ],
+        "selectedTaskOperations": [
+          "select-op"
+        ]
+      },
+      "timerDependencies": null,
+      "displayContext": {
+        "profile": "pwaStorage",
+        "projectionPending": null
+      },
+      "now": "2026-08-31T12:00:00Z"
+    },
+    "outgoing": null,
+    "calendarIntervals": [
+      {
+        "start": "2026-08-31T00:00:00Z",
+        "end": "2026-09-01T00:00:00Z"
+      }
+    ],
+    "sourceAcknowledgements": []
+  },
+  "nativeEnvelope": {
+    "ok": true,
+    "value": {
+      "classifications": [
+        {
+          "dependency": {
+            "dependsOnOperationId": "finish-proof",
+            "generatedBreak": true,
+            "operationId": "break-proof",
+            "sourceDayEnd": "2026-09-01T00:00:00Z",
+            "sourceDayStart": "2026-08-31T00:00:00Z"
+          },
+          "kind": "pendingGeneratedBreak",
+          "operationId": "break-proof",
+          "originalDependency": {
+            "dependsOnOperationId": "finish-proof",
+            "generatedBreak": true,
+            "operationId": "break-proof"
+          },
+          "sourceCompletedAt": "2026-08-31T11:59:59Z",
+          "sourcePhaseAfter": "short_break",
+          "wireAction": "preserve"
+        },
+        {
+          "dependency": {
+            "dependsOnOperationId": "break-proof",
+            "operationId": "pause-proof"
+          },
+          "kind": "retainedDirectDependency",
+          "operationId": "pause-proof",
+          "originalDependency": {
+            "dependsOnOperationId": "finish-proof",
+            "operationId": "pause-proof"
+          },
+          "wireAction": "preserve"
+        }
+      ],
+      "effectsAfterCommit": [],
+      "metadataWrites": [
+        {
+          "kind": "recordTimerDependencies",
+          "value": [
+            {
+              "dependsOnOperationId": "finish-proof",
+              "generatedBreak": true,
+              "operationId": "break-proof",
+              "sourceDayEnd": "2026-09-01T00:00:00Z",
+              "sourceDayStart": "2026-08-31T00:00:00Z"
+            },
+            {
+              "dependsOnOperationId": "break-proof",
+              "operationId": "pause-proof"
+            }
+          ]
+        }
+      ],
+      "outcome": "planned",
+      "outgoing": null,
+      "outgoingAction": "preserve",
+      "ownership": {
+        "expectedOwnerId": "account-proof",
+        "ownerId": "account-proof",
+        "timerOwner": {
+          "deviceId": "android-proof",
+          "timerId": "focus-proof"
+        }
+      },
+      "recovery": {
+        "automaticRepair": false,
+        "blocksMutations": false,
+        "blocksSync": false,
+        "status": "ready",
+        "unresolved": []
+      },
+      "schemaVersion": 1,
+      "timerDependencies": [
+        {
+          "dependsOnOperationId": "finish-proof",
+          "generatedBreak": true,
+          "operationId": "break-proof",
+          "sourceDayEnd": "2026-09-01T00:00:00Z",
+          "sourceDayStart": "2026-08-31T00:00:00Z"
+        },
+        {
+          "dependsOnOperationId": "break-proof",
+          "operationId": "pause-proof"
+        }
+      ],
+      "validatedDependencies": [
+        {
+          "dependsOnOperationId": "finish-proof",
+          "generatedBreak": true,
+          "operationId": "break-proof",
+          "sourceDayEnd": "2026-09-01T00:00:00Z",
+          "sourceDayStart": "2026-08-31T00:00:00Z"
+        },
+        {
+          "dependsOnOperationId": "break-proof",
+          "operationId": "pause-proof"
+        }
+      ],
+      "wireAction": "preserve",
+      "workspace": {
+        "base": {
+          "autoStartBreaks": true,
+          "canonicalTimer": {
+            "anchorAt": "2026-08-30T12:00:00Z",
+            "elapsedAtAnchorMs": 0,
+            "id": "focus-proof",
+            "phase": "focus",
+            "plannedDurationMs": 1500000,
+            "startedByDeviceId": "android-proof",
+            "status": "running"
+          },
+          "durationsMs": {
+            "focus": 1500000,
+            "long_break": 900000,
+            "short_break": 300000
+          },
+          "history": [],
+          "selectedTaskId": null,
+          "tasks": [
+            {
+              "id": "aaf83054-24b2-8c0e-901f-a974147bfe82",
+              "title": "Café"
+            }
+          ]
+        },
+        "canonicalHead": {
+          "counter": 2,
+          "wallMs": 1788177600000
+        },
+        "displayContext": {
+          "profile": "pwaStorage",
+          "projectionPending": null
+        },
+        "local": {
+          "autoStartOperations": [
+            {
+              "deviceId": "android-proof",
+              "enabled": true,
+              "hlcCounter": 8,
+              "hlcWallMs": 1788177600000,
+              "id": "auto-op",
+              "occurredAt": "2026-08-31T12:00:00Z"
+            }
+          ],
+          "commands": [
+            {
+              "deviceSequence": 8,
+              "generatedByFinishCommandId": null,
+              "hlcCounter": 3,
+              "hlcWallMs": 1788177600000,
+              "id": "finish-proof",
+              "neverSent": true,
+              "observedElapsedMs": 0,
+              "occurredAt": "2026-08-31T12:00:00Z",
+              "phase": "focus",
+              "physicalOccurredAt": "2026-08-31T11:59:59Z",
+              "plannedDurationMs": 1500000,
+              "timerId": "focus-proof",
+              "type": "finish"
+            },
+            {
+              "deviceSequence": 9,
+              "generatedByFinishCommandId": "finish-proof",
+              "hlcCounter": 4,
+              "hlcWallMs": 1788177600000,
+              "id": "break-proof",
+              "neverSent": true,
+              "observedElapsedMs": 0,
+              "occurredAt": "2026-08-31T12:00:00Z",
+              "phase": "short_break",
+              "physicalOccurredAt": "2026-08-31T11:59:59Z",
+              "plannedDurationMs": 300000,
+              "timerId": "break-timer",
+              "type": "start"
+            },
+            {
+              "deviceSequence": 10,
+              "generatedByFinishCommandId": "finish-proof",
+              "hlcCounter": 5,
+              "hlcWallMs": 1788177600000,
+              "id": "pause-proof",
+              "neverSent": true,
+              "observedElapsedMs": 0,
+              "occurredAt": "2026-08-31T12:00:00Z",
+              "phase": "short_break",
+              "physicalOccurredAt": "2026-08-31T11:59:59Z",
+              "plannedDurationMs": 300000,
+              "timerId": "break-timer",
+              "type": "pause"
+            }
+          ],
+          "durationOperations": [
+            {
+              "durationMs": 300000,
+              "hlcCounter": 7,
+              "hlcWallMs": 1788177600000,
+              "id": "duration-op",
+              "occurredAt": "2026-08-31T12:00:00Z",
+              "phase": "short_break"
+            }
+          ],
+          "selectedTaskOperations": [
+            {
+              "hlcCounter": 9,
+              "hlcWallMs": 1788177600000,
+              "id": "select-op",
+              "occurredAt": "2026-08-31T12:00:00Z",
+              "taskId": "aaf83054-24b2-8c0e-901f-a974147bfe82"
+            }
+          ],
+          "taskOperations": [
+            {
+              "hlcCounter": 6,
+              "hlcWallMs": 1788177600000,
+              "id": "task-op",
+              "occurredAt": "2026-08-31T12:00:00Z",
+              "taskId": "aaf83054-24b2-8c0e-901f-a974147bfe82",
+              "title": "Café",
+              "type": "upsert"
+            }
+          ]
+        },
+        "neverSent": {
+          "autoStartOperations": [
+            "auto-op"
+          ],
+          "commands": [
+            "finish-proof",
+            "break-proof",
+            "pause-proof"
+          ],
+          "durationOperations": [
+            "duration-op"
+          ],
+          "selectedTaskOperations": [
+            "select-op"
+          ],
+          "taskOperations": [
+            "task-op"
+          ]
+        },
+        "now": "2026-08-31T12:00:00Z",
+        "timerDependencies": [
+          {
+            "dependsOnOperationId": "finish-proof",
+            "generatedBreak": true,
+            "operationId": "break-proof",
+            "sourceDayEnd": "2026-09-01T00:00:00Z",
+            "sourceDayStart": "2026-08-31T00:00:00Z"
+          },
+          {
+            "dependsOnOperationId": "break-proof",
+            "operationId": "pause-proof"
+          }
+        ]
+      }
+    }
+  }
+}

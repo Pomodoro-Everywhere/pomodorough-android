@@ -125,6 +125,7 @@ class R48A02LandscapeRailTest {
                             onSetReplicationMode = {}, onCreateIrohRoom = {}, onJoinIrohRoom = {},
                             onLeaveIrohRoom = {}, onRefreshIrohInvite = {}, onSyncIrohNow = {},
                             onShareIrohInvite = {},
+                            onRetryStartup = {},
                         )
                     }
                 }

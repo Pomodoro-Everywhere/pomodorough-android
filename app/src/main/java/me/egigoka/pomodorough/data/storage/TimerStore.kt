@@ -265,7 +265,18 @@ internal class TimerStore(
         )
     }
 
-    suspend fun retireNeverSent(request: SyncRequest) {
+    suspend fun retireNeverSent(request: SyncRequest, state: LocalStateEntity? = null) {
+        if (state != null) {
+            dao.retireNeverSentWithCursor(
+                state,
+                request.commands.map { it.id },
+                request.taskOperations.map { it.id },
+                request.durationOperations.map { it.id },
+                request.autoStartOperations.map { it.id },
+                request.selectedTaskOperations.map { it.id },
+            )
+            return
+        }
         dao.retireNeverSent(
             request.commands.map { it.id },
             request.taskOperations.map { it.id },

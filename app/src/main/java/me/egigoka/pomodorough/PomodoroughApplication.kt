@@ -3,6 +3,9 @@ package me.egigoka.pomodorough
 import android.app.Application
 import computer.iroh.IrohAndroid
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import me.egigoka.pomodorough.core.SharedCore
@@ -18,17 +21,20 @@ import me.egigoka.pomodorough.data.iroh.IrohRoomStore
 import me.egigoka.pomodorough.data.iroh.IrohSecretVault
 import me.egigoka.pomodorough.data.local.LocalWorkspaceCoordinator
 import me.egigoka.pomodorough.data.local.PomodoroughDatabase
+import me.egigoka.pomodorough.widget.WidgetRefresh
 import okhttp3.OkHttpClient
 
 class PomodoroughApplication : Application() {
     lateinit var timerRepository: TimerRepository
         private set
+    private val widgetRefreshScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     override fun onCreate() {
         super.onCreate()
         startCrashReporting()
         IrohAndroid.installAndroidContext(applicationContext)
         timerRepository = ApplicationDependencyGraph(this).createTimerRepository()
+        WidgetRefresh(this).start(widgetRefreshScope, timerRepository.state)
     }
 
     private fun startCrashReporting() {

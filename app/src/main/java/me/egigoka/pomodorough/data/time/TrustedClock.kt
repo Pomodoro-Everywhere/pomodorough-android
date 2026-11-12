@@ -4,7 +4,6 @@ import java.time.Instant
 import kotlin.math.abs
 import me.egigoka.pomodorough.data.RequestTiming
 import me.egigoka.pomodorough.data.ServerClockSample
-import me.egigoka.pomodorough.data.SyncProtocolException
 import me.egigoka.pomodorough.data.SyncResponse
 import me.egigoka.pomodorough.data.SyncWireBounds
 import me.egigoka.pomodorough.data.local.LocalStateEntity
@@ -40,10 +39,10 @@ internal class TrustedClock(
         val offsetMs = try {
             Math.subtractExact(serverMs, timing.midpointPhysicalMs)
         } catch (_: ArithmeticException) {
-            throw SyncProtocolException("Server clock offset is outside supported range")
+            throw TrustedClockRejectedException(TrustedClockRejectionReason.ServerClockOffsetOutOfRange)
         }
         if (offsetMs !in -SyncWireBounds.MaxSafeInteger..SyncWireBounds.MaxSafeInteger) {
-            throw SyncProtocolException("Server clock offset is outside supported range")
+            throw TrustedClockRejectedException(TrustedClockRejectionReason.ServerClockOffsetOutOfRange)
         }
         return ServerClockSample(
             offsetMs,
@@ -70,7 +69,7 @@ internal class TrustedClock(
             receivedElapsedRealtimeMs,
         )
         if (receivedElapsedRealtimeMs < sample.midpointElapsedRealtimeMs) {
-            throw SyncProtocolException("Local receipt timing is outside supported range")
+            throw TrustedClockRejectedException(TrustedClockRejectionReason.LocalReceiptTimingOutOfRange)
         }
         val advancedServerMs = try {
             checkedTrustedTime(
@@ -78,15 +77,15 @@ internal class TrustedClock(
                 receivedElapsedRealtimeMs - sample.midpointElapsedRealtimeMs,
             )
         } catch (_: IllegalArgumentException) {
-            throw SyncProtocolException("Bootstrap clock sample is outside supported range")
+            throw TrustedClockRejectedException(TrustedClockRejectionReason.BootstrapClockSampleOutOfRange)
         }
         val offsetMs = try {
             Math.subtractExact(advancedServerMs, receivedPhysicalMs)
         } catch (_: ArithmeticException) {
-            throw SyncProtocolException("Server clock offset is outside supported range")
+            throw TrustedClockRejectedException(TrustedClockRejectionReason.ServerClockOffsetOutOfRange)
         }
         if (offsetMs !in -SyncWireBounds.MaxSafeInteger..SyncWireBounds.MaxSafeInteger) {
-            throw SyncProtocolException("Server clock offset is outside supported range")
+            throw TrustedClockRejectedException(TrustedClockRejectionReason.ServerClockOffsetOutOfRange)
         }
         return ServerClockSample(
             offsetMs = offsetMs,
@@ -158,7 +157,7 @@ internal class TrustedClock(
     fun responsePhysicalDelta(sample: ServerClockSample): Long = try {
         Math.negateExact(sample.offsetMs)
     } catch (_: ArithmeticException) {
-        throw SyncProtocolException("Server clock offset is outside supported range")
+        throw TrustedClockRejectedException(TrustedClockRejectionReason.ServerClockOffsetOutOfRange)
     }
 
     private fun continuedPersistedTime(
@@ -188,9 +187,7 @@ internal class TrustedClock(
             retainedWallMs,
             SyncWireBounds.MaxClockSkewMs - uncertaintyMs,
         ).coerceAtMost(SyncWireBounds.MaxSafeInteger)
-        require(restartedServerMs <= maximumMs) {
-            "Trusted time requires a fresh server sample"
-        }
+        if (restartedServerMs > maximumMs) throw FreshServerTimeRequiredException()
         val boundedServerMs = maxOf(restartedServerMs, retainedWallMs)
         anchor = TrustedClockAnchor(boundedServerMs, elapsedNowMs)
         return boundedServerMs
@@ -206,15 +203,15 @@ internal class TrustedClock(
         val serverMs = try {
             Instant.parse(response.serverTime).toEpochMilli()
         } catch (_: Exception) {
-            throw SyncProtocolException("Server returned an invalid server timestamp")
+            throw TrustedClockRejectedException(TrustedClockRejectionReason.InvalidServerTimestamp)
         }
         if (serverMs !in 1..SyncWireBounds.MaxSafeInteger) {
-            throw SyncProtocolException("Server timestamp is outside supported range")
+            throw TrustedClockRejectedException(TrustedClockRejectionReason.ServerTimestampOutOfRange)
         }
         try {
             SyncWireBounds.requirePhysicalSkew(serverMs, response.serverHlcWallMs)
         } catch (_: IllegalArgumentException) {
-            throw SyncProtocolException("Server HLC disagrees with server timestamp")
+            throw TrustedClockRejectedException(TrustedClockRejectionReason.ServerHlcDisagreesWithTimestamp)
         }
         return serverMs
     }
@@ -230,13 +227,13 @@ internal class TrustedClock(
         val halfRoundTripMs = try {
             Math.addExact(roundTripMs, 1L) / 2L
         } catch (_: ArithmeticException) {
-            throw SyncProtocolException("Local receipt timing is outside supported range")
+            throw TrustedClockRejectedException(TrustedClockRejectionReason.LocalReceiptTimingOutOfRange)
         }
         val physicalDeltaMs = receiptDifference(receivedPhysicalMs, sentPhysicalMs)
         val disagreementMs = receiptDisagreement(physicalDeltaMs, roundTripMs)
         val uncertaintyMs = receiptUncertainty(halfRoundTripMs, disagreementMs)
         if (uncertaintyMs > MaxServerClockUncertaintyMs) {
-            throw SyncProtocolException("Server clock sample uncertainty exceeds 30000ms")
+            throw TrustedClockRejectedException(TrustedClockRejectionReason.ClockSampleUncertaintyTooHigh)
         }
         return RequestTiming(
             uncertaintyMs,
@@ -256,14 +253,14 @@ internal class TrustedClock(
             receivedPhysicalMs !in 1..SyncWireBounds.MaxSafeInteger ||
             sentElapsedRealtimeMs < 0L || receivedElapsedRealtimeMs < sentElapsedRealtimeMs
         ) {
-            throw SyncProtocolException("Local receipt timing is outside supported range")
+            throw TrustedClockRejectedException(TrustedClockRejectionReason.LocalReceiptTimingOutOfRange)
         }
     }
 
     private fun receiptDifference(left: Long, right: Long): Long = try {
         Math.subtractExact(left, right)
     } catch (_: ArithmeticException) {
-        throw SyncProtocolException("Local receipt timing is outside supported range")
+        throw TrustedClockRejectedException(TrustedClockRejectionReason.LocalReceiptTimingOutOfRange)
     }
 
     private fun receiptDisagreement(physicalDeltaMs: Long, roundTripMs: Long): Long = try {
@@ -271,22 +268,22 @@ internal class TrustedClock(
         if (difference == Long.MIN_VALUE) throw ArithmeticException()
         abs(difference)
     } catch (_: ArithmeticException) {
-        throw SyncProtocolException("Local receipt timing is outside supported range")
+        throw TrustedClockRejectedException(TrustedClockRejectionReason.LocalReceiptTimingOutOfRange)
     }
 
     private fun receiptUncertainty(halfRoundTripMs: Long, disagreementMs: Long): Long = try {
         Math.addExact(halfRoundTripMs, disagreementMs)
     } catch (_: ArithmeticException) {
-        throw SyncProtocolException("Local receipt timing is outside supported range")
+        throw TrustedClockRejectedException(TrustedClockRejectionReason.LocalReceiptTimingOutOfRange)
     }
 
     private fun checkedTimeAdd(value: Long, increment: Long): Long = try {
         Math.addExact(value, increment)
     } catch (_: ArithmeticException) {
-        throw SyncProtocolException("Local receipt timing is outside supported range")
+        throw TrustedClockRejectedException(TrustedClockRejectionReason.LocalReceiptTimingOutOfRange)
     }.also {
         if (it !in 0..SyncWireBounds.MaxSafeInteger) {
-            throw SyncProtocolException("Local receipt timing is outside supported range")
+            throw TrustedClockRejectedException(TrustedClockRejectionReason.LocalReceiptTimingOutOfRange)
         }
     }
 

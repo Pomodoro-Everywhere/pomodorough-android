@@ -156,10 +156,12 @@ Run JVM tests, lint, and both build variants:
 ```
 
 Run Room migration, persistence, Compose, and repository integration tests on
-an emulator or connected device:
+an emulator or connected device. The locale test fails closed unless the
+runner names the app locale it expects, so pass the device locale:
 
 ```sh
-./gradlew :app:connectedDebugAndroidTest
+./gradlew :app:connectedDebugAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.expectedLocale=en-US
 ```
 
 Before tagging a release, boot exactly one API 36 emulator or connect one API

@@ -137,7 +137,9 @@ class CoreProjectionDispatcherTest {
         )
 
         assertEquals(null, actual.canonicalTimer)
-        assertEquals(history, actual.history)
+        // Core 0.55.0 writes `elapsedMs` on every row it returns; a completed row
+        // stored without it counts as its plan.
+        assertEquals(history.map { it.copy(elapsedMs = it.plannedDurationMs) }, actual.history)
     }
 
     @Test

@@ -100,6 +100,8 @@ class R53A01SyncNowTest {
                     when (method.name) {
                         "getState" -> uiState
                         "initialize" -> Unit
+                        // UX round 2: the view model mirrors the repository's pending task deletion.
+                        "getPendingTaskDeletion" -> MutableStateFlow(null)
                         "syncIrohNow" -> {
                             @Suppress("UNCHECKED_CAST")
                             val continuation = args.last() as kotlin.coroutines.Continuation<Unit>

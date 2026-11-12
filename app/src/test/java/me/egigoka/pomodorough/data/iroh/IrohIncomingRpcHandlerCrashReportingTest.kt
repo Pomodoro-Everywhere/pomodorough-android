@@ -20,6 +20,20 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class IrohIncomingRpcHandlerCrashReportingTest {
     @Test
+    fun acceptFailurePublishesBoundedUnavailableText() = runTest {
+        // R54-A13: the Unavailable event reaches UI state, so it never carries the socket error's text.
+        val events = mutableListOf<IrohIncomingRpcEvent>()
+        val handler = handler { events += it }
+        val endpoint = AcceptFailingEndpoint(IOException("accept failed at /data/user/0/secret-path"))
+        handler.acceptLoop(endpoint, 1L)
+        testScheduler.advanceUntilIdle()
+        assertEquals(
+            listOf(IrohIncomingRpcEvent.Unavailable("Iroh endpoint stopped accepting peers")),
+            events,
+        )
+    }
+
+    @Test
     fun handshakeIOExceptionStaysSilent() = runTest {
         val reported = mutableListOf<Throwable>()
         val previous = CrashReporter.delegate
@@ -252,7 +266,7 @@ class IrohIncomingRpcHandlerCrashReportingTest {
         }
     }
 
-    private fun handler(): IrohIncomingRpcHandler {
+    private fun handler(onEvent: suspend (IrohIncomingRpcEvent) -> Unit = {}): IrohIncomingRpcHandler {
         val transport = IrohEndpointTransport()
         val authentication = IrohPeerAuthentication(
             transport,
@@ -268,7 +282,7 @@ class IrohIncomingRpcHandlerCrashReportingTest {
                 { _, _, _ -> emptyList<IrohInventoryEntry>() to null },
                 { _, _ -> emptyList() },
             ),
-            {},
+            onEvent,
         )
     }
 
@@ -352,6 +366,11 @@ class IrohIncomingRpcHandlerCrashReportingTest {
             calls += 1
             return if (calls == 1) first else null
         }
+        override fun isClosed() = false
+    }
+
+    private class AcceptFailingEndpoint(private val failure: Exception) : Endpoint(NoHandle) {
+        override suspend fun acceptNext(): Incoming? = throw failure
         override fun isClosed() = false
     }
 

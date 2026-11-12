@@ -112,7 +112,7 @@ class BootstrapResolutionTest {
         repository.changeDuration(TimerPhase.Focus, 1)
 
         assertEquals(0, repository.state.value.pendingCount)
-        assertEquals(listOf(localHistory), repository.state.value.history)
+        assertEquals(listOf(localHistory).asCoreProjected(), repository.state.value.history)
         assertTrue(database.timerDao().pendingCommands().isEmpty())
         assertTrue(database.timerDao().pendingTaskOperations().isEmpty())
         assertTrue(database.timerDao().pendingDurationOperations().isEmpty())
@@ -164,7 +164,7 @@ class BootstrapResolutionTest {
         assertExactRequestCommands(commands, request.commands)
         assertEquals(listOf("me", "bootstrap", "resolve"), service.callOrder.take(3))
         assertEquals("user-1", database.timerDao().localState()?.ownerUserId)
-        assertEquals(listOf(canonicalHistory), repository.state.value.history)
+        assertEquals(listOf(canonicalHistory).asCoreProjected(), repository.state.value.history)
         assertTrue(database.timerDao().pendingCommands().isEmpty())
         assertNull(database.timerDao().pendingBootstrapResolution())
         assertNull(repository.state.value.historyResolution)
@@ -195,7 +195,7 @@ class BootstrapResolutionTest {
         assertTrue(request.commands.isEmpty())
         assertTrue(request.taskOperations.isEmpty())
         assertTrue(request.durationOperations.isEmpty())
-        assertEquals(listOf(remoteHistory), repository.state.value.history)
+        assertEquals(listOf(remoteHistory).asCoreProjected(), repository.state.value.history)
     }
 
     @Test
@@ -376,7 +376,7 @@ class BootstrapResolutionTest {
         repository.confirmAccountSwitch()
 
         assertEquals(newUser.id, database.timerDao().localState()?.ownerUserId)
-        assertEquals(listOf(remoteHistory), repository.state.value.history)
+        assertEquals(listOf(remoteHistory).asCoreProjected(), repository.state.value.history)
         assertTrue(database.timerDao().pendingCommands().isEmpty())
         assertEquals(0, service.resolveCalls)
         assertTrue(service.resolutionRequests.isEmpty())
@@ -690,7 +690,7 @@ class BootstrapResolutionTest {
         assertEquals(AuthStatus.SignedOut, repository.state.value.authStatus)
         assertNull(repository.state.value.user)
         assertTrue(!auth.tokensAvailable)
-        assertEquals(listOf(localHistory), repository.state.value.history)
+        assertEquals(listOf(localHistory).asCoreProjected(), repository.state.value.history)
     }
 
     @Test
@@ -825,7 +825,7 @@ class BootstrapResolutionTest {
             assertEquals("variant $index", listOf(command.id), database.timerDao().pendingCommands().map { it.id })
             assertNotNull("variant $index", database.timerDao().pendingBootstrapResolution())
             assertNotNull("variant $index", repository.state.value.historyResolution?.error)
-            assertEquals("variant $index", listOf(localHistory), repository.state.value.history)
+            assertEquals("variant $index", listOf(localHistory).asCoreProjected(), repository.state.value.history)
         }
     }
 
@@ -1632,7 +1632,7 @@ class BootstrapResolutionTest {
         } else {
             assertExactRequestCommands(commands, request.commands)
         }
-        assertEquals(canonicalHistory, repository.state.value.history)
+        assertEquals(canonicalHistory.asCoreProjected(), repository.state.value.history)
         assertTrue(database.timerDao().pendingCommands().isEmpty())
         assertNull(database.timerDao().pendingBootstrapResolution())
     }
@@ -1797,7 +1797,7 @@ class BootstrapResolutionTest {
         assertEquals(AuthStatus.SignedIn, repository.state.value.authStatus)
         assertEquals(newUser, repository.state.value.user)
         assertEquals(newUser.id, database.timerDao().localState()?.ownerUserId)
-        assertEquals(listOf(newHistory), repository.state.value.history)
+        assertEquals(listOf(newHistory).asCoreProjected(), repository.state.value.history)
         assertTrue(auth.tokensAvailable)
 
         releaseResolve.complete(Unit)
@@ -1806,7 +1806,7 @@ class BootstrapResolutionTest {
         assertEquals(AuthStatus.SignedIn, repository.state.value.authStatus)
         assertEquals(newUser, repository.state.value.user)
         assertEquals(newUser.id, database.timerDao().localState()?.ownerUserId)
-        assertEquals(listOf(newHistory), repository.state.value.history)
+        assertEquals(listOf(newHistory).asCoreProjected(), repository.state.value.history)
         assertNull(database.timerDao().pendingBootstrapResolution())
         assertTrue(auth.tokensAvailable)
     }

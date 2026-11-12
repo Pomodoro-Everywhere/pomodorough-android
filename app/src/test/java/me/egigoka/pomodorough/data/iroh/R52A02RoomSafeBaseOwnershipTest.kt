@@ -70,8 +70,8 @@ class R52A02RoomSafeBaseOwnershipTest {
             roomId = roomId,
             roomName = "Room",
             encryptedRoomSecret = ByteArray(32),
-            returnStateJson = WorkspaceCodec.encode(stale),
-            roomStateJson = WorkspaceCodec.encode(stale),
+            returnStateJson = WorkspaceCodec.encodeReturnState(stale),
+            roomStateJson = WorkspaceCodec.encodeRoomState(stale),
             createdAtMs = HeadWallMs,
             activated = true,
         )

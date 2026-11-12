@@ -18,14 +18,9 @@
     <string name="use_inexact_alarm">Use delayed fallback</string>
 
     <string name="syncing_your_clock">Syncing your clock</string>
-    <string name="make_time_feel_yours">Make time\nfeel yours.</string>
-    <string name="one_focused_clock_in_sync_everywhere">One focused clock, in sync everywhere.</string>
-    <string name="your_clock_anywhere">YOUR CLOCK, ANYWHERE</string>
-    <string name="pick_up_where_you_left_off">Pick up where you left off</string>
-    <string name="google_sign_in_keeps_timers_and_completed_sessions">Google sign-in keeps timers and completed sessions shared across your devices. Offline actions wait safely for sync.</string>
-    <string name="contacting_google">CONTACTING GOOGLE</string>
-    <string name="sign_in_with_google">SIGN IN WITH GOOGLE</string>
+    <string name="local_storage_read_failed">Pomodorough could not read its saved data. Nothing was deleted. Try again.</string>
     <string name="changes_resolved_on_another_device">Changes resolved on another device</string>
+    <string name="conflict_card_sentence">Some changes made here were not applied as they were, so Pomodorough kept the saved version; check your timer and tasks before you go on.</string>
     <string name="no_tasks_yet">No tasks yet</string>
     <string name="add_a_task_then_assign_it_before_starting">Add a task, then assign it before starting focus.</string>
     <string name="no_arrivals_yet">No arrivals yet</string>
@@ -110,6 +105,7 @@
     <string name="equal_peers">Equal peers</string>
     <string name="cloud">Cloud</string>
     <string name="signed_in_server">Signed-in server</string>
+    <string name="sign_in_to_sync_across_devices">Sign in to sync across devices</string>
     <string name="selected">Selected</string>
     <string name="not_selected">Not selected</string>
     <string name="create_or_join_a_room_below_first">Create or join a room below first</string>
@@ -133,7 +129,7 @@
     <string name="focus_task">FOCUS TASK</string>
     <string name="task_board">TASK BOARD</string>
     <string name="task_board_2">Task board</string>
-    <string name="write_release_notes">Write release notes</string>
+    <string name="write_release_notes">Task name</string>
     <string name="task_could_not_be_saved_try_again">Task could not be saved. Try again.</string>
     <string name="enter_printable_task_text">Enter printable task text.</string>
     <string name="remove_control_characters">Remove control characters.</string>
@@ -146,6 +142,15 @@
     <string name="action">Action</string>
     <string name="delete">Delete</string>
     <string name="delete_task">Delete %1$s</string>
+    <string name="rename_task">Rename %1$s</string>
+    <string name="rename_task_field">Rename task</string>
+    <string name="cancel_rename">Cancel rename</string>
+    <string name="undo">Undo</string>
+    <string name="delete_now">Delete now</string>
+    <string name="deleted_task_undoable">Deleted “%1$s”</string>
+    <string name="task_deletion_refused">Could not delete “%1$s”. The task is back in your list.</string>
+    <string name="task_deletion_finished_later">Finished deleting “%1$s”, which you deleted on this device earlier.</string>
+    <plurals name="task_deletion_finished_later_many"><item quantity="one">Finished deleting %1$d task you deleted on this device earlier.</item><item quantity="other">Finished deleting %1$d tasks you deleted on this device earlier.</item></plurals>
     <string name="current_service">CURRENT SERVICE</string>
     <string name="pause">Pause</string>
     <string name="resume">Resume</string>
@@ -174,6 +179,7 @@
     <string name="running">Running</string>
     <string name="paused">Paused</string>
     <string name="completed">Completed</string>
+    <string name="next_up">Next</string>
     <string name="cancelled">Cancelled</string>
     <string name="superseded">Continued on another device</string>
     <string name="idle">Idle</string>
@@ -185,7 +191,7 @@
     <string name="peer_route_unavailable">Peer route unavailable</string>
     <string name="peer_route_stopped">Peer route stopped</string>
     <string name="history_choice_needed">History choice needed</string>
-    <string name="local_only">Local only</string>
+    <string name="local_only">On device</string>
     <string name="offline_local">Offline · local</string>
     <string name="conflict">Conflict</string>
     <string name="syncing">Syncing</string>
@@ -231,8 +237,10 @@
     <plurals name="pomodoro_today"><item quantity="one">%1$d pomodoro · %2$s today</item><item quantity="other">%1$d pomodoros · %2$s today</item></plurals>
     <plurals name="finished_today"><item quantity="one">%1$d finished · %2$s today</item><item quantity="other">%1$d finished · %2$s today</item></plurals>
     <string name="start_phase">Start %1$s</string>
+    <string name="skip_to_phase">Skip to %1$s</string>
     <string name="pomodoro_progress">Pomodoro progress: %1$d of 4 today</string>
     <string name="timer_remaining">%1$d minutes %2$d seconds remaining, %3$s, %4$s</string>
+    <string name="timer_next_session">Session complete. Next: %1$s, %2$s</string>
     <plurals name="minutes_short"><item quantity="one">%1$d min</item><item quantity="other">%1$d min</item></plurals>
     <plurals name="minutes_long"><item quantity="one">%1$d minute</item><item quantity="other">%1$d minutes</item></plurals>
     <plurals name="hours_short"><item quantity="one">%1$d hr</item><item quantity="other">%1$d hr</item></plurals>
@@ -247,9 +255,10 @@
     <plurals name="retrying_queued"><item quantity="one">Retrying · %1$d queued</item><item quantity="other">Retrying · %1$d queued</item></plurals>
     <plurals name="waiting_to_sync"><item quantity="one">%1$d waiting to sync</item><item quantity="other">%1$d waiting to sync</item></plurals>
     <plurals name="task_summary_accessibility"><item quantity="one">%1$s, %2$d finished pomodoro today, %3$s spent</item><item quantity="other">%1$s, %2$d finished pomodoros today, %3$s spent</item></plurals>
+    <string name="history_planned_duration">Planned %1$s</string>
+    <string name="finished_early">Finished early</string>
     <string name="history_task">, task %1$s</string>
     <string name="history_accessibility">%1$s, %2$s%3$s, %4$s%5$s, %6$s</string>
-    <string name="google_sign_in_did_not_complete">Google sign-in did not complete</string>
     <string name="sign_out_failed_local_timer_data_was_kept">Sign out failed. Local timer data was kept.</string>
     <string name="reset_local_account">Reset local account</string>
     <string name="reset_local_account_title">Reset local account data?</string>
@@ -266,6 +275,12 @@
     <string name="pending_logout">Sign-out revocation is pending. Sign in to retry it before creating a new session.</string>
     <string name="sign_in_again_to_retry_history_choice">Sign in again to retry the exact saved history choice.</string>
     <string name="could_not_preserve_remote_sign_out">Could not preserve remote sign-out work</string>
+    <string name="sign_in_to_finish_saved_history_choice">Sign in to finish the saved history choice before making more changes.</string>
+    <string name="sign_in_with_local_data_owner_to_continue_syncing">Sign in with the account that owns this local data to continue syncing.</string>
+    <string name="local_state_corrupted_sync_blocked">Persisted timer state is corrupted. Sync and local mutations are blocked.</string>
+    <string name="local_clock_outside_sync_range">Local clock or sequence is outside the synchronization range.</string>
+    <string name="iroh_room_immutable_operation_conflict">Iroh room has an immutable operation conflict.</string>
+    <string name="session_expired_sign_in_again">Your session expired. Sign in again.</string>
     <string name="session_expired_sign_in_again_history_choice">Session expired. Sign in again to retry the exact saved history choice.</string>
     <string name="could_not_switch_accounts_without_risking_local_data">Could not switch accounts without risking local data.</string>
     <string name="task_must_contain_printable_text_and_fit_within_512_bytes">Task must contain printable text and fit within 512 bytes.</string>
@@ -284,8 +299,29 @@
     <string name="server_permanently_rejected_saved_history_request">Server permanently rejected the saved history request (%1$d). Re-check account history without deleting local queues.</string>
     <string name="could_not_finish_history_resolution_retry_same_request">Could not finish history resolution. Retry uses the same saved request.</string>
     <string name="history_resolution_failed_without_changing_local_data">History resolution failed without changing local data.</string>
-    <string name="could_not_verify_signed_in_account">Could not verify signed-in account</string>
-    <string name="could_not_validate_account_bootstrap">Could not validate account bootstrap</string>
+    <string name="sign_in_failed_interrupted">Sign-in was interrupted. Try again.</string>
+    <string name="sign_in_failed_no_google_account">No Google account is available on this device. Add one in system settings, then try again.</string>
+    <string name="sign_in_failed_google_unavailable">Google sign-in is not available on this device. Update Google Play services, then try again.</string>
+    <string name="sign_in_failed_google">Google sign-in did not finish. Try again.</string>
+    <string name="sign_in_failed_server">The server could not finish sign-in. Try again in a moment.</string>
+    <string name="sign_in_failed_offline">Could not reach the server. Check your connection, then try again.</string>
+    <string name="sign_in_failed_unreadable_reply">The server sent a reply this app could not read. Update the app, then try again.</string>
+    <string name="sign_in_failed_not_saved">This device could not save the sign-in. Try again.</string>
+    <string name="sign_in_failed">Sign-in did not finish. Try again.</string>
+    <string name="account_restore_failed_profile_rejected">The server sent account details this app could not read. Update the app, then sign in again.</string>
+    <string name="account_restore_failed_server">The server could not confirm your account. Try again in a moment.</string>
+    <string name="account_restore_failed_offline">Could not reach the server to confirm your account. Check your connection, then try again.</string>
+    <string name="account_restore_failed_unreadable_reply">The server sent a reply this app could not read. Update the app, then try again.</string>
+    <string name="account_restore_failed">Your account could not be loaded. Try again.</string>
+    <string name="device_clock_changed_during_request">The device clock changed while the request was running. Check the device date and time, then try again.</string>
+    <string name="device_clock_unusable">The device date and time are outside the range sync supports. Check the device date and time, then try again.</string>
+    <string name="server_time_unusable">The server sent a time this app could not use. Try again in a moment.</string>
+    <string name="fresh_server_time_required">The app must check the time with the server before it can change the timer. Connect to the internet, then try again.</string>
+    <string name="local_clock_out_of_range">The device clock or sequence is outside the range sync supports. Check the device date and time.</string>
+    <string name="legacy_dependency_recovery_not_saved">Legacy timer dependency recovery could not be saved. Reopen to retry.</string>
+    <string name="legacy_dependencies_need_recovery">Legacy timer dependencies need recovery. Retained operations remain unchanged.</string>
+    <string name="sign_in_workspace_not_restored">Could not restore the centralized workspace for sign-in. Try again.</string>
+    <string name="account_switch_cancelled_server_logout_failed">The new account was removed from this device, but the server sign-out was not confirmed.</string>
     <string name="previous_history_choice_still_needs_server_response">Previous history choice still needs a response from the server.</string>
     <string name="iroh_room_operation_could_not_be_recorded">Iroh room operation could not be recorded</string>
     <string name="sync_protocol_validation_failed">Sync protocol validation failed</string>
@@ -311,4 +347,14 @@
     <string name="switch_on">On</string>
     <string name="switch_off">Off</string>
     <string name="version_label">Version %1$s</string>
+    <string name="start_next">Start next</string>
+    <string name="skip_next">Skip next</string>
+    <string name="widget_label">Pomodorough timer</string>
+    <string name="widget_description">Shows the current phase, task, and timer status. Tap to start or pause.</string>
+    <string name="widget_status_ends_at">Ends %1$s</string>
+    <string name="widget_status_paused">Paused · %1$s left</string>
+    <string name="widget_status_ready">Ready</string>
+    <string name="widget_start">Start</string>
+    <string name="tile_label">Pomodorough</string>
+    <string name="tile_subtitle_left">%1$s left</string>
 </resources>

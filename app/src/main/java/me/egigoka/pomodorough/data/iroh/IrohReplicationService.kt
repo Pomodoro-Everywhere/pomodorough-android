@@ -6,6 +6,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import me.egigoka.pomodorough.data.local.IrohPeerEntity
 
 interface IrohReplicationStore {
@@ -105,6 +106,12 @@ class IrohReplicationService internal constructor(
 
     internal fun replaceState(value: IrohNetworkState) {
         _state.value = value
+    }
+
+    // R54-A10: compare-and-set, so a change computed from the current state never overwrites a
+    // newer one.
+    internal fun transformState(transform: (IrohNetworkState) -> IrohNetworkState) {
+        _state.update(transform)
     }
 
     suspend fun start(nextContext: IrohServiceContext, startPeriodicSync: Boolean = true): String =

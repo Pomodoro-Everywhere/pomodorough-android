@@ -28,10 +28,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 import me.egigoka.pomodorough.data.auth.SystemGoogleCredentialProvider
+import me.egigoka.pomodorough.timer.ExactAlarmFallbackChoice
 import me.egigoka.pomodorough.timer.SystemTimerCompletionNotifier
 import me.egigoka.pomodorough.ui.PomodoroughScreen
 import me.egigoka.pomodorough.ui.PomodoroughTheme
 import me.egigoka.pomodorough.ui.PomodoroughViewModel
+import me.egigoka.pomodorough.ui.TaskEditingActions
 
 class MainActivity : ComponentActivity() {
     private lateinit var pendingTimerAction: PendingTimerActionCoordinator
@@ -66,7 +68,11 @@ class MainActivity : ComponentActivity() {
         lifecycle.addObserver(LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_START -> viewModel.onForeground()
-                Lifecycle.Event.ON_STOP -> viewModel.onBackground()
+                Lifecycle.Event.ON_STOP -> {
+                    // A deferred delete must not outlive the undo snackbar.
+                    viewModel.endUndoWindowOnStop(isChangingConfigurations)
+                    viewModel.onBackground()
+                }
                 else -> Unit
             }
         })
@@ -90,7 +96,7 @@ class MainActivity : ComponentActivity() {
                 onSetAutoStart = viewModel::setAutoStart,
                 onSelectTask = viewModel::selectTask,
                 onAddTask = viewModel::addTask,
-                onDeleteTask = viewModel::deleteTask,
+                onDeleteTask = viewModel::requestTaskDeletion,
                 onResolveHistory = viewModel::resolveHistory,
                 onRecoverHistoryResolution = viewModel::recoverHistoryResolution,
                 onConfirmAccountSwitch = viewModel::confirmAccountSwitch,
@@ -110,10 +116,22 @@ class MainActivity : ComponentActivity() {
                 onStopSound = ::stopSound,
                 joinInviteDraft = viewModel.joinInviteDraft,
                 onJoinInviteChange = viewModel::updateJoinInviteDraft,
+                taskEditing = taskEditingActions(),
+                onRetryStartup = viewModel::retryStartup,
             )
             PermissionDialogs()
         }
     }
+
+    private fun taskEditingActions() = TaskEditingActions(
+        editingTaskId = viewModel.editingTaskId,
+        onBeginRename = viewModel::beginTaskRename,
+        onCancelRename = viewModel::cancelTaskRename,
+        onRename = viewModel::renameTask,
+        pendingDeletion = viewModel.pendingTaskDeletion,
+        onUndoDeletion = viewModel::undoTaskDeletion,
+        onConfirmDeletion = viewModel::confirmTaskDeletion,
+    )
 
     private fun signIn() {
         lifecycleScope.launch {
@@ -126,6 +144,7 @@ class MainActivity : ComponentActivity() {
             sdkInt = Build.VERSION.SDK_INT,
             permissionGranted = notificationPermissionGranted(),
             timerStatus = viewModel.state.value.timer?.status,
+            promptDeclined = NotificationPromptChoice.isDeclined(this),
         )
         handleTimerAction(
             pendingTimerAction.begin(decision == TimerNotificationPermissionAction.RequestPermission),
@@ -144,6 +163,7 @@ class MainActivity : ComponentActivity() {
                 sdkInt = Build.VERSION.SDK_INT,
                 canScheduleExactAlarms = exact,
                 timerStatus = viewModel.state.value.timer?.status,
+                fallbackAccepted = ExactAlarmFallbackChoice.isAccepted(this),
             )
         handleTimerAction(pendingTimerAction.exactAlarmResult(callback, needsFallback))
     }
@@ -181,6 +201,7 @@ class MainActivity : ComponentActivity() {
             },
             dismissButton = {
                 TextButton(onClick = {
+                    NotificationPromptChoice.decline(this@MainActivity)
                     handleTimerAction(pendingTimerAction.declineNotificationIntro(actionId))
                 }) { Text(stringResource(R.string.not_now)) }
             },
@@ -200,6 +221,7 @@ class MainActivity : ComponentActivity() {
             },
             dismissButton = {
                 TextButton(onClick = {
+                    NotificationPromptChoice.decline(this@MainActivity)
                     handleTimerAction(pendingTimerAction.continueWithoutNotifications(actionId))
                 }) { Text(stringResource(R.string.continue_without_notifications)) }
             },
@@ -219,6 +241,7 @@ class MainActivity : ComponentActivity() {
             },
             dismissButton = {
                 TextButton(onClick = {
+                    ExactAlarmFallbackChoice.accept(this@MainActivity)
                     handleTimerAction(pendingTimerAction.useInexactAlarm(actionId))
                 }) { Text(stringResource(R.string.use_inexact_alarm)) }
             },

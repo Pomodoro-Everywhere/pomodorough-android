@@ -37,6 +37,8 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
+import me.egigoka.pomodorough.R
 import me.egigoka.pomodorough.data.AppState
 import me.egigoka.pomodorough.data.AuthStatus
 import me.egigoka.pomodorough.data.CanonicalTimer
@@ -60,6 +62,8 @@ class R49A04FoldNoticesTest {
     private var dismissConflictCalls = 0
     private var dismissNoticeCalls = 0
     private val timerCalls = mutableListOf<String>()
+    private val conflictSentence get() =
+        InstrumentationRegistry.getInstrumentation().targetContext.getString(R.string.conflict_card_sentence)
 
     @Test
     fun splitVerticalLtrShowsMessagesAndKeepsGeometry() {
@@ -141,7 +145,7 @@ class R49A04FoldNoticesTest {
         rule.waitForIdle()
         rule.runOnIdle { assertEquals(1, dismissNoticeCalls) }
         rule.onNodeWithContentDescription("Heads up. $NOTICE").assertDoesNotExist()
-        rule.onNodeWithText(CONFLICT).assertIsDisplayed()
+        rule.onNodeWithText(conflictSentence).assertIsDisplayed()
         rule.onNodeWithText("Start focus").assertIsDisplayed()
     }
 
@@ -214,14 +218,18 @@ class R49A04FoldNoticesTest {
         assertMessages()
     }
 
+    // UX round 2, L5: the card shows one authored sentence; the raw AppState.conflict never renders.
     private fun assertMessages() {
-        rule.onAllNodesWithText(CONFLICT).assertCountEquals(1)
-        val conflict = revealMessage(rule.onNodeWithText(CONFLICT)).assertIsDisplayed()
+        rule.onAllNodesWithText(CONFLICT, substring = true, useUnmergedTree = true).assertCountEquals(0)
+        rule.onAllNodesWithText(conflictSentence).assertCountEquals(1)
+        val conflict = revealMessage(rule.onNodeWithText(conflictSentence)).assertIsDisplayed()
         val conflictNode = conflict.fetchSemanticsNode()
         assertEquals(LiveRegionMode.Polite, conflictNode.config[SemanticsProperties.LiveRegion])
         assertMessageInsidePane(conflict)
         rule.onAllNodesWithText(NOTICE, useUnmergedTree = true).assertCountEquals(1)
-        val notice = noticeNode().assertIsDisplayed()
+        // The authored conflict sentence wraps to several lines at large densities, so the
+        // notice below it can start under the fold of the scrolling messages column.
+        val notice = noticeNode().performScrollTo().assertIsDisplayed()
         val noticeConfig = notice.fetchSemanticsNode().config
         assertEquals(LiveRegionMode.Polite, noticeConfig[SemanticsProperties.LiveRegion])
         assertEquals("Dismiss", noticeConfig[SemanticsActions.OnClick].label)
@@ -264,7 +272,7 @@ class R49A04FoldNoticesTest {
             assertEquals(0, dismissConflictCalls)
         }
         rule.onNodeWithContentDescription("Heads up. $NOTICE").assertDoesNotExist()
-        rule.onNodeWithText(CONFLICT).performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText(conflictSentence).performScrollTo().assertIsDisplayed()
         rule.onNodeWithText(if (appState.timer == null) "Start focus" else "Resume")
             .performScrollTo().assertIsDisplayed()
     }
@@ -272,7 +280,7 @@ class R49A04FoldNoticesTest {
     private fun dismissConflict() {
         rule.onNodeWithText("Dismiss").performScrollTo().assertIsDisplayed().performTouchInput { click() }
         rule.runOnIdle { assertEquals(1, dismissConflictCalls) }
-        rule.onNodeWithText(CONFLICT).assertDoesNotExist()
+        rule.onNodeWithText(conflictSentence).assertDoesNotExist()
     }
 
     private fun activateTimerControls(vararg controls: Pair<String, String>) {

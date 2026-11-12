@@ -108,10 +108,12 @@ internal class IrohPeerSynchronization(
     private suspend fun knownPeers(roomId: String): List<IrohPeerEntity>? {
         return runCatching { dependencies.peers(roomId) }.getOrElse { error ->
             if (error is CancellationException) throw error
+            // expected-silent: a peer storage failure ends this pass with an UNAVAILABLE status and
+            // the periodic loop retries. R54-A13: the status carries bounded text, never the error's.
             onEvent(IrohPeerSyncEvent.Status(
                 IrohConnectionStatus.UNAVAILABLE,
                 roomId = roomId,
-                message = error.message,
+                message = "Saved Iroh peers could not be read",
             ))
             null
         }

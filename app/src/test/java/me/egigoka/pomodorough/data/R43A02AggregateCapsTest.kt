@@ -297,6 +297,7 @@ class R43A02AggregateCapsTest {
         knownTasks = emptyMap(),
         settings = TimerSettings(),
         selectedPhaseGeneration = 4,
+        projectionBase = CoreProjectionBase(durationsMs = TimerSettings().effectiveDurationsMs()),
     )
 
     private fun command(id: String, sequence: Int, counter: Long = sequence.toLong()) = TimerCommand(

@@ -189,7 +189,7 @@ internal class IrohEndpointLifecycle(
             onEvent(IrohEndpointEvent.Status(
                 IrohConnectionStatus.UNAVAILABLE,
                 nextContext.roomId,
-                message = error.message ?: "Iroh endpoint could not start",
+                message = "Iroh endpoint could not start",
             ))
             throw error
         }
@@ -212,7 +212,7 @@ internal class IrohEndpointLifecycle(
         onEvent(IrohEndpointEvent.Status(
             IrohConnectionStatus.UNAVAILABLE,
             nextContext.roomId,
-            message = error.message ?: "Iroh endpoint ticket could not be created",
+            message = "Iroh endpoint ticket could not be created",
         ))
         throw error
     }

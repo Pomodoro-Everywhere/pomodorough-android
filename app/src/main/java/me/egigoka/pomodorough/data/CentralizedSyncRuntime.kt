@@ -30,6 +30,8 @@ internal data class CentralizedSyncRuntimeSnapshot(
     val terminalSyncError: Boolean,
     val pendingQueuesEmpty: Boolean,
     val localRevision: Long,
+    // The retained queue still waits for its Core decision, so it cannot sync yet.
+    val legacyAdoptionPending: Boolean = false,
 )
 
 internal enum class SyncPauseReason { WorkspaceTransition, Unavailable, NoPending }
@@ -200,7 +202,9 @@ internal class CentralizedSyncRuntime(
                 SyncIterationResult.Success -> {
                     retryDelay = initialRetryDelayMs
                     forced = false
-                    if (host.snapshot().pendingQueuesEmpty) break
+                    // A held legacy queue prepares no attempt, so only an outside trigger retries it.
+                    val state = host.snapshot()
+                    if (state.pendingQueuesEmpty || state.legacyAdoptionPending) break
                 }
                 SyncIterationResult.Stop -> break
                 is SyncIterationResult.Retry -> {

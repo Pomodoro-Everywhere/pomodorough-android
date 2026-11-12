@@ -6,6 +6,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import me.egigoka.pomodorough.crash.CrashReporter
@@ -79,6 +80,45 @@ class IrohEndpointCrashReportingTest {
             CrashReporter.delegate = previous
             lifecycle.close()
         }
+    }
+
+    @Test
+    fun bindAndTicketFailureStatusesCarryBoundedText() = runTest {
+        // R54-A13: these Status events reach UI state, so they never carry the native error's text.
+        val bind = unavailableMessages(FailingBinding(RuntimeException(NativeErrorText)), true)
+        val ticket = unavailableMessages(
+            TicketFailingBinding(IrohShutdownFailingEndpoint(), RuntimeException(NativeErrorText)),
+            false,
+        )
+        assertEquals(listOf("Iroh endpoint could not start"), bind.distinct())
+        assertEquals(listOf("Iroh endpoint ticket could not be created"), ticket.distinct())
+    }
+
+    private suspend fun TestScope.unavailableMessages(
+        binding: IrohEndpointBinding,
+        startPeriodicSync: Boolean,
+    ): List<String?> {
+        val previous = CrashReporter.delegate
+        CrashReporter.delegate = {}
+        val events = mutableListOf<IrohEndpointEvent>()
+        val lifecycle = IrohEndpointLifecycle(binding, { events += it }, StandardTestDispatcher(testScheduler))
+        try {
+            runCatching {
+                lifecycle.start(
+                    IrohServiceContext("room", ByteArray(32) { 7 }, "device", null),
+                    startPeriodicSync,
+                    { _, _ -> awaitCancellation() },
+                    { awaitCancellation() },
+                )
+            }
+            runCurrent()
+        } finally {
+            CrashReporter.delegate = previous
+            lifecycle.close()
+        }
+        return events.filterIsInstance<IrohEndpointEvent.Status>()
+            .filter { it.status == IrohConnectionStatus.UNAVAILABLE }
+            .map { it.message }
     }
 
     private class FailingBinding(private val failure: Exception) : IrohEndpointBinding {
@@ -200,5 +240,9 @@ class IrohEndpointCrashReportingTest {
 
     private class FakeEndpoint : Endpoint(NoHandle) {
         override fun isClosed() = false
+    }
+
+    private companion object {
+        const val NativeErrorText = "native bind failed at /data/user/0/secret-path"
     }
 }

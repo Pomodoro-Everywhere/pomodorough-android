@@ -27,6 +27,12 @@ internal class IrohLifecycleState {
         IrohLifecycleEvent.EnteredForeground(transition(foreground = true))
     }
 
+    // R54-A05: a repeated foreground keeps the current generation, so it cannot strand an
+    // endpoint start that the current foreground owns. Returns null when already foreground.
+    fun enterForegroundIfBackground(): IrohLifecycleEvent.EnteredForeground? = synchronized(monitor) {
+        if (current.foreground) null else IrohLifecycleEvent.EnteredForeground(transition(foreground = true))
+    }
+
     fun enterBackground(): IrohLifecycleEvent.EnteredBackground = synchronized(monitor) {
         IrohLifecycleEvent.EnteredBackground(transition(foreground = false))
     }
