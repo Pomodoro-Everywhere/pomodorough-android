@@ -17,7 +17,8 @@ import org.junit.Test
  * R50-A02: canonical null selection must not fall back to optimistic local.
  * A covering head makes null authoritative (No task). Legacy rows without
  * a head keep the optimistic local for full-Core equality. Start reads the
- * safe projected selection; issued selections stay durable for exact retry.
+ * retained selection intent (R54-A19); issued selections stay out of the safe
+ * display and stay durable for exact retry.
  */
 class R50A02CanonicalNullSelectionTest {
     private val json = Json { explicitNulls = false }
@@ -93,7 +94,7 @@ class R50A02CanonicalNullSelectionTest {
     }
 
     @Test
-    fun issuedSelectionExcludedButRetainedForRetry() {
+    fun issuedSelectionExcludedFromDisplayButStartsWithTask() {
         val task = requireNotNull(TaskReducer.taskFromTitle("Deep work"))
         val issued = SelectedTaskOperation("selection-issued-1", task.id, NewAt, NewWallMs, 0L)
         val queues = PendingSyncQueues(emptyList(), emptyList(), emptyList(), emptyList(), listOf(issued))
@@ -102,7 +103,10 @@ class R50A02CanonicalNullSelectionTest {
         assertEquals(listOf(issued), queues.selectedTaskOperations)
         val state = startState(task, safeBase = null, optimisticLocal = task.id, safeSelected = null)
             .copy(queues = queues)
-        assertNull(startTaskId(state))
+        // R54-A19: Core's androidCoordinator profile plans Start from every
+        // retained queue, so the sent-but-unacknowledged selection still
+        // shapes Start even though the safe display omits it.
+        assertEquals(task.id, startTaskId(state))
     }
 
     @Test

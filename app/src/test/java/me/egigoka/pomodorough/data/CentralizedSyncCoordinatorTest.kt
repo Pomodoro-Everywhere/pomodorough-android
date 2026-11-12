@@ -67,7 +67,8 @@ class CentralizedSyncCoordinatorTest {
         // V2 immutable: the retained break (00:05) predates the canonical head
         // (00:06) so it stays pending for exact retry without optimistic projection.
         assertTrue(result.projected.projection.canonicalTimer == null)
-        assertEquals(null, result.local.ownedTimerId)
+        // R54-A19: the promoted Start is still queued, so it keeps ownership.
+        assertEquals(GeneratedTimerId, result.local.ownedTimerId)
         assertEquals(ServerWallMs, result.local.hlcWallMs)
         assertEquals(7L, result.local.revision)
         assertEquals(CentralizedConflictTransition.Keep, result.conflict)

@@ -152,6 +152,7 @@ private data class TimerCommandTarget(
     val phase: String,
     val durationMs: Long,
     val starting: Boolean,
+    val taskId: String? = null,
 )
 
 private data class ReservedTaskMutation(
@@ -579,18 +580,39 @@ internal class TimerMutationCoordinator(
         val starting = input.type == CommandType.Start
         val targetTimerId = if (starting) timerId() else current?.id
         if (targetTimerId == null || !validTransition(input.type, current)) return null
-        val phase = if (starting) {
-            input.startingPhase ?: input.state.settings.selectedPhase
-        } else {
-            current?.phase ?: return null
-        }
-        val durationMs = if (starting) {
-            input.state.settings.durationMsFor(phase)
-        } else {
-            current?.plannedDurationMs ?: return null
-        }
-        return TimerCommandTarget(targetTimerId, phase, durationMs, starting)
+        if (starting) return startTarget(input, targetTimerId)
+        val timer = current ?: return null
+        return TimerCommandTarget(targetTimerId, timer.phase, timer.plannedDurationMs, starting = false)
     }
+
+    // R54-A19: Start reads the retained local intent, not the delivery-safe
+    // display. Core's androidCoordinator profile plans Start from every
+    // retained Room queue (workspace.intent.v1 entrypoint, ReplayDomains::
+    // Retained), so a duration, task, or selection that is sent but not yet
+    // acknowledged still shapes the Start. The display projection stays safe.
+    private fun startTarget(input: TimerCommandMutationInput, timerId: String): TimerCommandTarget {
+        val state = input.state
+        val phase = input.startingPhase ?: state.settings.selectedPhase
+        val occurredAt = Instant.parse(input.reservation.stamps.single().occurredAt)
+        val intent = retainedPreferenceIntent(state, occurredAt)
+        return TimerCommandTarget(
+            timerId = timerId,
+            phase = phase,
+            durationMs = state.settings.withDurations(intent.durationsMs).durationMsFor(phase),
+            starting = true,
+            taskId = selectedTaskForStart(state, intent, phase),
+        )
+    }
+
+    // Projects every retained preference queue over the canonical base.
+    // Timer commands stay out: Start never reads the projected timer, and
+    // retained Start+Finish pairs must not replay into planning (R51-A01).
+    private fun retainedPreferenceIntent(state: TimerMutationState, now: Instant): CoreProjectionResult =
+        projectionDispatcher.apply(
+            base = state.projectionBase,
+            pending = corePending(state.local.deviceId, state.queues.copy(commands = emptyList())),
+            now = now,
+        )
 
     private fun reservedCommand(
         input: TimerCommandMutationInput,
@@ -611,7 +633,7 @@ internal class TimerMutationCoordinator(
         } else {
             TimerPresentation.elapsedAt(input.state.projection.timer, input.physicalNowMs)
         },
-        taskId = selectedTaskForStart(input.state, target.starting, target.phase),
+        taskId = target.taskId,
         physicalOccurredAt = Instant.ofEpochMilli(input.physicalNowMs).toString(),
     )
 
@@ -785,24 +807,25 @@ internal class TimerMutationCoordinator(
 
     private fun selectedTaskForStart(
         state: TimerMutationState,
-        starting: Boolean,
+        intent: CoreProjectionResult,
         phase: String,
-    ): String? = if (starting && phase == TimerPhase.Focus) {
-        safeSelectedTaskForStart(state)?.takeIf { selected ->
-            state.visibleTasks.any { it.id == selected }
+    ): String? {
+        if (phase != TimerPhase.Focus) return null
+        return intendedSelectedTask(state, intent)?.takeIf { selected ->
+            intent.tasks.any { it.id == selected }
         }
-    } else {
-        null
     }
 
     // R50-A02: covering head makes canonical null authoritative; Start
-    // reads the safe projected selection. Legacy rows without a head keep
-    // the optimistic local for full-Core equality.
-    private fun safeSelectedTaskForStart(state: TimerMutationState): String? =
+    // reads the Core projection over the canonical base, never the
+    // optimistic local. R54-A19: that projection includes the retained
+    // selection queue. Legacy rows without a head keep the optimistic
+    // local for full-Core equality.
+    private fun intendedSelectedTask(state: TimerMutationState, intent: CoreProjectionResult): String? =
         if (SafeProjectionPolicy.headOrNull(state.local) == null) {
             state.local.selectedTaskId
         } else {
-            state.selectedTaskId
+            intent.selectedTaskId
         }
 
     private fun dependencyForTimer(state: TimerMutationState, timerId: String): String? =
@@ -834,18 +857,18 @@ internal class TimerMutationCoordinator(
         state: TimerMutationState,
         queues: PendingSyncQueues,
         pinnedSelectedTaskOperations: List<SelectedTaskOperation> = emptyList(),
-    ): CoreProjectionPending {
-        val safe = projectionQueuesFor(state, queues, pinnedSelectedTaskOperations)
-        return CoreProjectionPending(
-            commands = safe.commands.map { DeviceOperation(state.local.deviceId, it) },
-            taskOperations = safe.taskOperations.map { DeviceOperation(state.local.deviceId, it) },
-            durationOperations = safe.durationOperations.map { DeviceOperation(state.local.deviceId, it) },
-            autoStartOperations = safe.autoStartOperations.map { DeviceOperation(it.deviceId, it) },
-            selectedTaskOperations = safe.selectedTaskOperations.map {
-                DeviceOperation(state.local.deviceId, it)
-            },
-        )
-    }
+    ): CoreProjectionPending = corePending(
+        state.local.deviceId,
+        projectionQueuesFor(state, queues, pinnedSelectedTaskOperations),
+    )
+
+    private fun corePending(deviceId: String, queues: PendingSyncQueues) = CoreProjectionPending(
+        commands = queues.commands.map { DeviceOperation(deviceId, it) },
+        taskOperations = queues.taskOperations.map { DeviceOperation(deviceId, it) },
+        durationOperations = queues.durationOperations.map { DeviceOperation(deviceId, it) },
+        autoStartOperations = queues.autoStartOperations.map { DeviceOperation(it.deviceId, it) },
+        selectedTaskOperations = queues.selectedTaskOperations.map { DeviceOperation(deviceId, it) },
+    )
 
     // R51-A01: mutation planning projects safe retained queues plus the
     // new operations only. Issued operations stay persisted for exact retry
