@@ -10,9 +10,11 @@ scale_slug="${font_scale//./_}"
 test_locale="${TEST_LOCALE:-en-US}"
 test_class="${TEST_CLASS:-}"
 # The heaviest en-US shard runs the fold-boundary matrix and needs about 13 minutes
-# on hosted runners, so 600 s cut it off near the end. Keep the cap well under the
-# 60-minute connected job timeout so a real hang still yields diagnostics.
-instrumentation_timeout_seconds="${INSTRUMENTATION_TIMEOUT_SECONDS:-900}"
+# on hosted runners, so 600 s cut it off near the end. With Core 0.57.0 the shard
+# that holds the task batch partition test took 850 s, so 900 s no longer leaves
+# room. Keep the cap well under the 60-minute connected job timeout so a real hang
+# still yields diagnostics.
+instrumentation_timeout_seconds="${INSTRUMENTATION_TIMEOUT_SECONDS:-1500}"
 locale_slug="${test_locale//-/_}"
 results_dir="app/build/outputs/androidTest-results/direct-font-$scale_slug-locale-$locale_slug"
 diagnostics_dir="app/build/reports/androidTests/diagnostics-font-$scale_slug-locale-$locale_slug"

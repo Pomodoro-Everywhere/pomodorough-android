@@ -964,8 +964,10 @@ class TimerRepositoryPositiveTest {
                 repository.initialize()
                 // A full connected run leaves the API 35 emulator under sustained GC pressure;
                 // preserve the exact convergence assertion while allowing the 513-item partition
-                // to complete through the interpreted SharedCore boundary.
-                awaitState(timeoutMs = 180_000) {
+                // to complete through the interpreted SharedCore boundary. Core 0.57.0 roughly
+                // doubled projection.apply.v2 and reconcile.rebase.v2 time for hundreds of tasks,
+                // and the slowest hosted API 36 emulator then missed a 180 s wait.
+                awaitState(timeoutMs = 420_000) {
                     service.syncCalls == expectedBatchSizes.size &&
                         repository.state.value.pendingCount == 0
                 }
