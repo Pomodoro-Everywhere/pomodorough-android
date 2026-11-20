@@ -125,7 +125,7 @@ class R54A02StartupRetryTest {
         compose.onNodeWithText(context.getString(R.string.retry)).performSemanticsAction(SemanticsActions.OnClick)
 
         assertEquals(1, retries)
-        compose.onNodeWithText(context.getString(R.string.syncing_your_clock)).assertDoesNotExist()
+        compose.onNodeWithText(context.getString(R.string.loading_your_timer)).assertDoesNotExist()
     }
 
     @Test
@@ -133,7 +133,7 @@ class R54A02StartupRetryTest {
         compose.mainClock.autoAdvance = false
         compose.setContent { Screen(AppState()) {} }
 
-        compose.onNodeWithText(context.getString(R.string.syncing_your_clock)).assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.loading_your_timer)).assertIsDisplayed()
         compose.onNodeWithText(context.getString(R.string.retry)).assertDoesNotExist()
     }
 

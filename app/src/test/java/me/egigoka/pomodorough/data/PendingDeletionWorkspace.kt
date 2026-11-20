@@ -54,6 +54,9 @@ internal class PendingDeletionWorkspace(
     /** Core refuses every projection whose pending queue deletes one of these tasks, so that delete fails to commit. */
     @Volatile var refusedDeleteTaskIds: Set<String> = emptySet()
 
+    /** Rewrites every Core projection output, so a test can return a task list in an order no local rule produces. */
+    @Volatile var projectionOutputRewrite: (JsonElement) -> JsonElement = { it }
+
     /** The base selection of every projection that a history-resolution preparation ran, in order. */
     val bootstrapBaseSelections = CopyOnWriteArrayList<String?>()
 
@@ -90,7 +93,8 @@ internal class PendingDeletionWorkspace(
             val base = json.parseToJsonElement(input).jsonObject.getValue("base").jsonObject
             bootstrapBaseSelections += base["selectedTaskId"]?.jsonPrimitive?.contentOrNull
         }
-        return core.dispatch(operation, input)
+        val output = core.dispatch(operation, input)
+        return if (operation == "projection.apply.v2") projectionOutputRewrite(output) else output
     }
 
     // The projection dispatch is synchronous, so the coordinator's preparation is on the call stack.

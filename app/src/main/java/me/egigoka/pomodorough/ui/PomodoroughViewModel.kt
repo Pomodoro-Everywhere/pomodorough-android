@@ -40,12 +40,19 @@ class PomodoroughViewModel(
     var joinInviteDraft by mutableStateOf("")
         private set
 
+    // AND-16: the join form shows its own failure, because the route card that names it sits
+    // above the fold. An edited or cleared invite ends the failure.
+    var joinInviteFailed by mutableStateOf(false)
+        private set
+
     fun updateJoinInviteDraft(value: String) {
         joinInviteDraft = value
+        joinInviteFailed = false
     }
 
     fun clearJoinInviteDraft() {
         joinInviteDraft = ""
+        joinInviteFailed = false
     }
 
     init {
@@ -135,7 +142,13 @@ class PomodoroughViewModel(
     fun dismissNotice() = repository.dismissNotice()
     fun setReplicationMode(mode: ReplicationMode) = launch { repository.setReplicationMode(mode) }
     fun createIrohRoom(name: String) = launch { repository.createIrohRoom(name) }
-    fun joinIrohRoom(invite: String) = launch { repository.joinIrohRoom(invite) }
+    fun joinIrohRoom(invite: String) {
+        joinInviteFailed = false
+        launch {
+            repository.joinIrohRoom(invite)
+            joinInviteFailed = repository.state.value.network.roomId == null
+        }
+    }
     fun leaveIrohRoom() = launch { repository.leaveIrohRoom() }
     fun refreshIrohInvite() = launch { repository.refreshIrohInvite() }
     fun syncIrohNow() = launch { repository.syncIrohNow() }

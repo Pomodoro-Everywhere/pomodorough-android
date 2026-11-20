@@ -104,12 +104,73 @@ class CompletionNotificationActionTest {
         assertEquals(listOf<String?>(null), stoppedAlerts)
     }
 
+    // AND-24: a button names its phase, so a tap after the core moved on changes nothing.
+    @Test
+    fun startNextIgnoresButtonNamingAnotherPhase() = runTest {
+        repository.mutableState.value = AppState(
+            timer = timer(TimerStatus.Completed),
+            settings = TimerSettings(selectedPhase = TimerPhase.Focus),
+        )
+
+        val outcome = handler.handle(CompletionNotificationAction.StartNext, "t1", TimerPhase.ShortBreak)
+
+        assertEquals(CompletionNotificationOutcome.OfferedPhaseChanged, outcome)
+        assertEquals(listOf("initialize"), repository.events)
+        assertEquals(1, cancelledNotifications)
+    }
+
+    @Test
+    fun startNextStartsThePhaseTheButtonNamed() = runTest {
+        repository.mutableState.value = AppState(
+            timer = timer(TimerStatus.Completed),
+            settings = TimerSettings(selectedPhase = TimerPhase.ShortBreak),
+        )
+
+        val outcome = handler.handle(CompletionNotificationAction.StartNext, "t1", TimerPhase.ShortBreak)
+
+        assertEquals(CompletionNotificationOutcome.Started, outcome)
+        assertEquals(listOf("initialize", "toggleTimer"), repository.events)
+    }
+
+    @Test
+    fun skipNextIgnoresButtonNamingAnotherDestination() = runTest {
+        repository.mutableState.value = AppState(
+            timer = timer(TimerStatus.Completed),
+            settings = TimerSettings(selectedPhase = TimerPhase.Focus),
+            skipDestinationPhase = TimerPhase.LongBreak,
+        )
+
+        val outcome = handler.handle(CompletionNotificationAction.SkipNext, "t1", TimerPhase.ShortBreak)
+
+        assertEquals(CompletionNotificationOutcome.OfferedPhaseChanged, outcome)
+        assertEquals(listOf("initialize"), repository.events)
+    }
+
+    @Test
+    fun skipNextSelectsTheDestinationTheButtonNamed() = runTest {
+        repository.mutableState.value = AppState(
+            timer = timer(TimerStatus.Completed),
+            settings = TimerSettings(selectedPhase = TimerPhase.ShortBreak),
+            skipDestinationPhase = TimerPhase.Focus,
+        )
+
+        val outcome = handler.handle(CompletionNotificationAction.SkipNext, "t1", TimerPhase.Focus)
+
+        assertEquals(CompletionNotificationOutcome.PhaseSkipped, outcome)
+        assertEquals(listOf("initialize", "selectPhase:${TimerPhase.Focus}"), repository.events)
+    }
+
     @Test
     fun receiverCancellerRemovesPostedCompletionNotification() = runTest {
         val manager = context.getSystemService(NotificationManager::class.java)
         manager.notify(
             SystemTimerCompletionNotifier.NotificationId,
-            SystemTimerCompletionNotifier.completionNotification(context, "t1", android.net.Uri.EMPTY),
+            SystemTimerCompletionNotifier.completionNotification(
+                context,
+                "t1",
+                android.net.Uri.EMPTY,
+                CompletionNextPhases(start = TimerPhase.Focus, skipTo = null),
+            ),
         )
         assertEquals(1, shadowOf(manager).size())
         val cancelling = CompletionNotificationActionHandler(

@@ -73,8 +73,8 @@ class TimerConvergenceFixtureTest {
             permutations(taskOperations).forEach { arrivalOrder ->
                 assertEquals(
                     fixtureCase.name,
-                    fixtureCase.expected.tasks,
-                    TaskReducer.replay(emptyList(), arrivalOrder),
+                    inIdOrder(fixtureCase.expected.tasks),
+                    inIdOrder(TaskReducer.replay(emptyList(), arrivalOrder)),
                 )
             }
 
@@ -222,8 +222,8 @@ class TimerConvergenceFixtureTest {
             )
             assertEquals(
                 fixtureCase.name,
-                fixtureCase.expected.tasks,
-                TaskReducer.replay(fixtureCase.canonical.tasks, retainedTasks),
+                inIdOrder(fixtureCase.expected.tasks),
+                inIdOrder(TaskReducer.replay(fixtureCase.canonical.tasks, retainedTasks)),
             )
             val canonicalSettings = TimerSettings().withDurations(fixtureCase.canonical.durationsMs)
             assertEquals(
@@ -242,6 +242,10 @@ class TimerConvergenceFixtureTest {
             )
         }
     }
+
+    // The corpus lists tasks in the Shared Core task list order. The replay does not order tasks,
+    // so both sides are compared in ID order: the same tasks, each once.
+    private fun inIdOrder(tasks: List<FocusTask>): List<FocusTask> = tasks.sortedBy(FocusTask::id)
 
     private fun <T> permutations(values: List<T>): List<List<T>> = when (values.size) {
         0 -> listOf(emptyList())

@@ -687,8 +687,8 @@ internal class CentralizedSyncCoordinator(
             canonicalAutoStartBreaks = response.autoStartBreaks,
             safeBaseDurationsJson = json.encodeToString(response.durationsMs),
             safeBaseSelectedTaskId = response.selectedTaskId,
-            safeCanonicalHeadWallMs = response.serverHlcWallMs,
-            safeCanonicalHeadCounter = response.serverHlcCounter,
+            safeCanonicalHeadWallMs = response.canonicalHead().first,
+            safeCanonicalHeadCounter = response.canonicalHead().second,
             ownedTimerId = when {
                 clearOwnedTimer -> null
                 ownStartQueued(snapshot.local.ownedTimerId, projected.queues.commands) -> snapshot.local.ownedTimerId

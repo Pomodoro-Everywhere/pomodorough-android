@@ -116,15 +116,28 @@ class TaskReducerTest {
         )
     }
 
+    // The task list order is a Shared Core decision (pomodorough-core TASK_LIST_ORDER.md). The
+    // replay must not apply an order of its own: not the old UTF-8 byte order, and not a copy of
+    // the Core rules. Each list below is in an order that one of those rules would change.
     @Test
-    fun finalTaskOrderUsesUnsignedUtf8Bytes() {
+    fun replayLeavesTheTaskListOrderToSharedCore() {
         val supplementary = FocusTask("task-supplementary", "\uD800\uDC00")
         val privateUse = FocusTask("task-private-use", "\uE000")
+        val coreOrder = listOf("apple", "Banana", "Bulk task 2", "Bulk task 10")
+            .map { requireNotNull(TaskReducer.taskFromTitle(it)) }
 
-        assertEquals(
-            listOf(privateUse, supplementary),
-            TaskReducer.replay(listOf(supplementary, privateUse), emptyList()),
-        )
+        listOf(listOf(supplementary, privateUse), coreOrder, coreOrder.reversed()).forEach { base ->
+            assertEquals(base, TaskReducer.replay(base, emptyList()))
+        }
+    }
+
+    @Test
+    fun replayAddsATaskAfterTheBaseTasks() {
+        val base = listOf("Bulk task 10", "apple").map { requireNotNull(TaskReducer.taskFromTitle(it)) }
+        val added = requireNotNull(TaskReducer.taskFromTitle("Banana"))
+        val upsert = operation("operation-upsert", added.id, TaskOperationType.Upsert, added.title, wall = 1)
+
+        assertEquals(base + added, TaskReducer.replay(base, listOf(upsert)))
     }
 
     @Test

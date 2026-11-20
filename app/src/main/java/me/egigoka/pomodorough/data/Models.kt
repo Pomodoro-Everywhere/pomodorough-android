@@ -462,7 +462,23 @@ data class SyncResponse(
     @Required val autoStartBreaks: Boolean = false,
     @Required val selectedTaskAcknowledgements: List<SelectedTaskAcknowledgement> = emptyList(),
     @Required val selectedTaskId: String? = null,
-)
+    // R55-A03: the canonical HLC head covers only operations the server has
+    // ordered. Older servers omit the pair; see canonicalHead(). An explicit
+    // null fails decoding (CanonicalHlcFieldSerializer).
+    @Serializable(with = CanonicalHlcFieldSerializer::class) val canonicalHlcWallMs: Long? = null,
+    @Serializable(with = CanonicalHlcFieldSerializer::class) val canonicalHlcCounter: Long? = null,
+) {
+    /**
+     * Receiver rule: the canonical pair when both fields are present, else the
+     * server clock of an older server. Clock merge, skew checks and trusted
+     * time stay on serverHlc*. TimerSyncValidation rejects a malformed pair.
+     */
+    fun canonicalHead(): Pair<Long, Long> {
+        val wall = canonicalHlcWallMs ?: return serverHlcWallMs to serverHlcCounter
+        val counter = canonicalHlcCounter ?: return serverHlcWallMs to serverHlcCounter
+        return wall to counter
+    }
+}
 
 @Serializable
 data class HistoryResponse(val history: List<HistoryItem>)

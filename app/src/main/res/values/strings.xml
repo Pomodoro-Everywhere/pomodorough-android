@@ -2,8 +2,8 @@
 <resources>
     <string name="app_name">Pomodorough</string>
     <string name="timer_complete_channel">Timer arrivals</string>
-    <string name="timer_complete_title">Service complete</string>
-    <string name="timer_complete_body">Timer arrived. Open Pomodorough for the next service.</string>
+    <string name="timer_complete_title">Session complete</string>
+    <string name="timer_complete_next">Next: %1$s</string>
     <string name="stop_sound">Stop sound</string>
     <string name="notification_intro_title">Never miss an arrival</string>
     <string name="notification_intro_body">Allow notifications so Pomodorough can alert you when a timer finishes, including while another app is open.</string>
@@ -17,7 +17,7 @@
     <string name="continue_without_notifications">Continue without alerts</string>
     <string name="use_inexact_alarm">Use delayed fallback</string>
 
-    <string name="syncing_your_clock">Syncing your clock</string>
+    <string name="loading_your_timer">Loading your timer</string>
     <string name="local_storage_read_failed">Pomodorough could not read its saved data. Nothing was deleted. Try again.</string>
     <string name="changes_resolved_on_another_device">Changes resolved on another device</string>
     <string name="conflict_card_sentence">Some changes made here were not applied as they were, so Pomodorough kept the saved version; check your timer and tasks before you go on.</string>
@@ -81,10 +81,10 @@
     <string name="unnamed_room">Unnamed room</string>
     <string name="sync_now">Sync now</string>
     <string name="leave_room">Leave room</string>
-    <string name="open_a_peer_route">Open a peer route</string>
+    <string name="create_a_room">Create a room</string>
     <string name="copy_1_64_characters_when_set">1–64 characters when set</string>
-    <string name="create_iroh_room">CREATE IROH ROOM</string>
-    <string name="join_an_existing_route">Join an existing route</string>
+    <string name="create_iroh_room">CREATE ROOM</string>
+    <string name="join_a_room">Join a room</string>
     <string name="pomodorough1">pomodorough1.…</string>
     <string name="join_room">JOIN ROOM</string>
     <string name="room_pass">Room pass</string>
@@ -111,6 +111,7 @@
     <string name="create_or_join_a_room_below_first">Create or join a room below first</string>
     <string name="active">ACTIVE</string>
     <string name="select">SELECT</string>
+    <string name="route_sign_in">SIGN IN</string>
     <string name="route_stopped">Route stopped</string>
     <string name="opening_route">Opening route</string>
     <string name="ready_for_peers">Ready for peers</string>
@@ -170,6 +171,9 @@
     <string name="completed_focus">Completed focus</string>
     <string name="no_completed_focus_sessions_yet">No completed focus sessions yet.</string>
     <string name="run_log_this_account">RUN LOG / THIS ACCOUNT</string>
+    <string name="run_log_this_device">RUN LOG / THIS DEVICE</string>
+    <string name="run_log_this_room">RUN LOG / THIS ROOM</string>
+    <plurals name="arrivals_count"><item quantity="one">%1$d arrival</item><item quantity="other">%1$d arrivals</item></plurals>
     <string name="recent_arrivals">Recent arrivals</string>
     <string name="queued"> · queued</string>
     <string name="dismiss">Dismiss</string>
@@ -179,7 +183,7 @@
     <string name="running">Running</string>
     <string name="paused">Paused</string>
     <string name="completed">Completed</string>
-    <string name="next_up">Next</string>
+    <string name="timer_status_ready">Ready</string>
     <string name="cancelled">Cancelled</string>
     <string name="superseded">Continued on another device</string>
     <string name="idle">Idle</string>
@@ -210,9 +214,6 @@
     <string name="short_break">Short break</string>
     <string name="long_break">Long break</string>
     <string name="focus">Focus</string>
-    <string name="reset">Reset</string>
-    <string name="recover">Recover</string>
-    <string name="work">Work</string>
     <string name="copy_0_min">0 min</string>
     <string name="pomodoro">pomodoro</string>
     <string name="pomodoros">pomodoros</string>
@@ -239,10 +240,12 @@
     <string name="start_phase">Start %1$s</string>
     <string name="skip_to_phase">Skip to %1$s</string>
     <string name="pomodoro_progress">Pomodoro progress: %1$d of 4 today</string>
-    <string name="timer_remaining">%1$d minutes %2$d seconds remaining, %3$s, %4$s</string>
+    <string name="timer_remaining_description">%1$s remaining, %2$s, %3$s</string>
+    <string name="minutes_and_seconds">%1$s %2$s</string>
     <string name="timer_next_session">Session complete. Next: %1$s, %2$s</string>
     <plurals name="minutes_short"><item quantity="one">%1$d min</item><item quantity="other">%1$d min</item></plurals>
     <plurals name="minutes_long"><item quantity="one">%1$d minute</item><item quantity="other">%1$d minutes</item></plurals>
+    <plurals name="seconds_long"><item quantity="one">%1$d second</item><item quantity="other">%1$d seconds</item></plurals>
     <plurals name="hours_short"><item quantity="one">%1$d hr</item><item quantity="other">%1$d hr</item></plurals>
     <string name="hours_minutes_short">%1$d hr %2$d min</string>
     <string name="decrease_phase_duration">Decrease %1$s duration</string>
@@ -347,8 +350,6 @@
     <string name="switch_on">On</string>
     <string name="switch_off">Off</string>
     <string name="version_label">Version %1$s</string>
-    <string name="start_next">Start next</string>
-    <string name="skip_next">Skip next</string>
     <string name="widget_label">Pomodorough timer</string>
     <string name="widget_description">Shows the current phase, task, and timer status. Tap to start or pause.</string>
     <string name="widget_status_ends_at">Ends %1$s</string>
@@ -357,4 +358,5 @@
     <string name="widget_start">Start</string>
     <string name="tile_label">Pomodorough</string>
     <string name="tile_subtitle_left">%1$s left</string>
+    <string name="room_invite_join_failed">This invite did not open a room. Check that it is complete and try again.</string>
 </resources>

@@ -80,9 +80,14 @@ internal fun shouldPostCompletionAlert(timer: CanonicalTimer?): Boolean {
     return timer?.status != TimerStatus.Running && timer?.status != TimerStatus.Paused
 }
 
+/**
+ * Posts the completion notification. [nextPhases] is read when the notification
+ * is posted, after the core has completed the timer and selected the next phase.
+ */
 internal class SystemTimerCompletionNotifier(
     context: Context,
     private val timerId: String,
+    private val nextPhases: () -> CompletionNextPhases,
 ) : TimerCompletionNotifying {
     private val appContext = context.applicationContext
 
@@ -100,7 +105,7 @@ internal class SystemTimerCompletionNotifier(
         val manager = appContext.getSystemService(NotificationManager::class.java)
         val chime = completionChimeUri(appContext)
         ensureCompletionChannel(manager, appContext, chime)
-        manager.notify(NotificationId, completionNotification(appContext, timerId, chime))
+        manager.notify(NotificationId, completionNotification(appContext, timerId, chime, nextPhases()))
         return true
     }
 
@@ -142,38 +147,49 @@ internal class SystemTimerCompletionNotifier(
             return sdkInt < 33 || permissionGranted
         }
 
-        /** Stop sound, Start next, and Skip next all broadcast to [TimerAlarmReceiver]. */
-        internal fun completionNotification(context: Context, timerId: String, chime: Uri): Notification {
+        /**
+         * AND-24: the notification uses the timer screen's words. Its buttons name the
+         * phase they start or skip to, and each carries that phase so a tap on a stale
+         * notification cannot act on a phase it did not name. Every button broadcasts
+         * to [TimerAlarmReceiver]; Skip is left out when the core offers no skip.
+         */
+        internal fun completionNotification(
+            context: Context,
+            timerId: String,
+            chime: Uri,
+            next: CompletionNextPhases,
+        ): Notification {
             val contentIntent = PendingIntent.getActivity(
                 context,
                 0,
                 Intent(context, MainActivity::class.java),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
-            return NotificationCompat.Builder(context, ChannelId)
+            val builder = NotificationCompat.Builder(context, ChannelId)
                 .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
                 .setContentTitle(context.getString(R.string.timer_complete_title))
-                .setContentText(context.getString(R.string.timer_complete_body))
+                .setContentText(context.getString(R.string.timer_complete_next, phaseName(context, next.start)))
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setSound(chime)
                 .setContentIntent(contentIntent)
                 .addAction(
                     0,
                     context.getString(R.string.stop_sound),
-                    receiverIntent(context, 1, TimerAlarmReceiver.StopSoundAction, timerId),
+                    receiverIntent(context, 1, TimerAlarmReceiver.StopSoundAction, timerId, phase = null),
                 )
                 .addAction(
                     0,
-                    context.getString(R.string.start_next),
-                    receiverIntent(context, 2, TimerAlarmReceiver.StartNextAction, timerId),
+                    context.getString(R.string.start_phase, phaseName(context, next.start).lowercase()),
+                    receiverIntent(context, 2, TimerAlarmReceiver.StartNextAction, timerId, next.start),
                 )
-                .addAction(
+            next.skipTo?.let { destination ->
+                builder.addAction(
                     0,
-                    context.getString(R.string.skip_next),
-                    receiverIntent(context, 3, TimerAlarmReceiver.SkipNextAction, timerId),
+                    context.getString(R.string.skip_to_phase, phaseName(context, destination).lowercase()),
+                    receiverIntent(context, 3, TimerAlarmReceiver.SkipNextAction, timerId, destination),
                 )
-                .build()
-                .apply { flags = flags or Notification.FLAG_INSISTENT }
+            }
+            return builder.build().apply { flags = flags or Notification.FLAG_INSISTENT }
         }
 
         private fun receiverIntent(
@@ -181,12 +197,14 @@ internal class SystemTimerCompletionNotifier(
             requestCode: Int,
             action: String,
             timerId: String,
+            phase: String?,
         ): PendingIntent = PendingIntent.getBroadcast(
             context,
             requestCode,
             Intent(context, TimerAlarmReceiver::class.java)
                 .setAction(action)
-                .putExtra(TimerAlarmReceiver.TimerIdExtra, timerId),
+                .putExtra(TimerAlarmReceiver.TimerIdExtra, timerId)
+                .putExtra(TimerAlarmReceiver.OfferedPhaseExtra, phase),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
     }
@@ -227,7 +245,7 @@ class TimerAlarmReceiver : BroadcastReceiver() {
             try {
                 if (completionAction != null) {
                     completionActionHandler(context, application)
-                        .handle(completionAction, timerId(intent))
+                        .handle(completionAction, timerId(intent), offeredPhase(intent))
                 } else {
                     deliverExpiredTimer(context, application, timerId(intent))
                 }
@@ -251,7 +269,9 @@ class TimerAlarmReceiver : BroadcastReceiver() {
         val result = deliverTimerAlarm(
             repository = application.timerRepository,
             timerId = timerId,
-            notifier = SystemTimerCompletionNotifier(context, timerId),
+            notifier = SystemTimerCompletionNotifier(context, timerId) {
+                CompletionNextPhases.from(application.timerRepository.state.value)
+            },
         )
         if (result == TimerAlarmDeliveryResult.CompletedWithoutNotification) {
             Log.w(Tag, "Timer completed without posting a notification")
@@ -272,9 +292,11 @@ class TimerAlarmReceiver : BroadcastReceiver() {
         internal const val StartNextAction = "me.egigoka.pomodorough.START_NEXT_TIMER"
         internal const val SkipNextAction = "me.egigoka.pomodorough.SKIP_NEXT_TIMER"
         internal const val TimerIdExtra = "me.egigoka.pomodorough.TIMER_ID"
+        internal const val OfferedPhaseExtra = "me.egigoka.pomodorough.OFFERED_PHASE"
         private const val Tag = "PomodoroughAlarm"
 
         internal fun isStopSoundAction(action: String?): Boolean = action == StopSoundAction
         internal fun timerId(intent: Intent): String? = intent.getStringExtra(TimerIdExtra)
+        internal fun offeredPhase(intent: Intent): String? = intent.getStringExtra(OfferedPhaseExtra)
     }
 }

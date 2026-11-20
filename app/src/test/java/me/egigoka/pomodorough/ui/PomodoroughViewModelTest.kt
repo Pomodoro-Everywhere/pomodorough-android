@@ -20,7 +20,9 @@ import me.egigoka.pomodorough.data.TimerStatus
 import me.egigoka.pomodorough.data.iroh.ReplicationMode
 import me.egigoka.pomodorough.data.auth.GoogleCredentialProvider
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TestWatcher
@@ -223,6 +225,38 @@ class PomodoroughViewModelTest {
             runCurrent()
         }
 
+    // AND-16: a join that leaves no room open marks the invite form as failed until the invite changes.
+    @Test
+    fun failedJoinMarksTheInviteUntilItIsEdited() = runTest(mainDispatcherRule.dispatcher) {
+        val repository = RecordingTimerRepository()
+        val viewModel = PomodoroughViewModel(repository)
+        runCurrent()
+
+        viewModel.joinIrohRoom("pomodorough1:broken")
+        runCurrent()
+        assertTrue("a join that opened no room is a failure", viewModel.joinInviteFailed)
+
+        viewModel.updateJoinInviteDraft("pomodorough1:fixed")
+        assertFalse("an edited invite clears the failure", viewModel.joinInviteFailed)
+
+        viewModel.joinIrohRoom("pomodorough1:broken")
+        runCurrent()
+        viewModel.clearJoinInviteDraft()
+        assertFalse("a cleared invite clears the failure", viewModel.joinInviteFailed)
+    }
+
+    @Test
+    fun joinThatOpensARoomIsNotAFailure() = runTest(mainDispatcherRule.dispatcher) {
+        val repository = RecordingTimerRepository().apply { joinedRoomId = "room-1" }
+        val viewModel = PomodoroughViewModel(repository)
+        runCurrent()
+
+        viewModel.joinIrohRoom("pomodorough1:good")
+        runCurrent()
+
+        assertFalse(viewModel.joinInviteFailed)
+    }
+
     private fun runningTimer() = CanonicalTimer(
         id = "timer-1",
         phase = "focus",
@@ -302,7 +336,11 @@ private class RecordingTimerRepository : TimerRepositoryContract {
     override suspend fun setReplicationMode(mode: ReplicationMode) =
         record("setReplicationMode:${mode.name}")
     override suspend fun createIrohRoom(name: String) = record("createIrohRoom:$name")
-    override suspend fun joinIrohRoom(invite: String) = record("joinIrohRoom:$invite")
+    var joinedRoomId: String? = null
+    override suspend fun joinIrohRoom(invite: String) {
+        record("joinIrohRoom:$invite")
+        mutableState.value = mutableState.value.let { it.copy(network = it.network.copy(roomId = joinedRoomId)) }
+    }
     override suspend fun leaveIrohRoom() = record("leaveIrohRoom")
     override suspend fun refreshIrohInvite() = record("refreshIrohInvite")
     override suspend fun syncIrohNow() = record("syncIrohNow")

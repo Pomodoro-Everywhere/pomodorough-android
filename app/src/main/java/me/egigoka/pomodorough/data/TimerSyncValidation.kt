@@ -255,6 +255,22 @@ internal object TimerSyncValidation {
             response.serverHlcCounter,
             allowLegacySentinel = false,
         ), "$source returned an invalid server clock")
+        validateCanonicalHead(response, source)
+    }
+
+    // R55-A03: both canonical fields or neither, each a safe non-negative
+    // integer, and never ahead of the server clock.
+    private fun validateCanonicalHead(response: SyncResponse, source: String) {
+        val wall = response.canonicalHlcWallMs
+        val counter = response.canonicalHlcCounter
+        if (wall == null && counter == null) return
+        protocolRequire(wall != null && counter != null, "$source returned an incomplete canonical head")
+        val head = checkNotNull(wall) to checkNotNull(counter)
+        protocolRequire(head.first in 0..SyncWireBounds.MaxSafeInteger &&
+            head.second in 0..SyncWireBounds.MaxSafeInteger, "$source returned an invalid canonical head")
+        val server = response.serverHlcWallMs to response.serverHlcCounter
+        protocolRequire(head.first < server.first || head.first == server.first && head.second <= server.second,
+            "$source returned a canonical head ahead of the server clock")
     }
 
     private fun validateCanonicalTimer(timer: CanonicalTimer, source: String) {

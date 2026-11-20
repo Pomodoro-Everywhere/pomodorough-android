@@ -10,6 +10,8 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchColors
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -57,11 +59,28 @@ internal fun CrashReportingCard(modifier: Modifier = Modifier) {
                 .padding(horizontal = 18.dp, vertical = 16.dp),
             label = { CrashReportingLabel() },
             switch = {
-                Switch(checked = checked, onCheckedChange = null, modifier = Modifier.testTag("crash_reporting_switch"))
+                Switch(
+                    checked = checked,
+                    onCheckedChange = null,
+                    modifier = Modifier.testTag("crash_reporting_switch"),
+                    colors = crashSwitchColors(),
+                )
             },
         )
     }
 }
+
+// AND-12: the switch paints app roles. The unchecked track is the page surface inside the
+// primary outline, not the baseline surfaceContainerHighest grey.
+@Composable
+internal fun crashSwitchColors(): SwitchColors = SwitchDefaults.colors(
+    checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
+    checkedTrackColor = MaterialTheme.colorScheme.primary,
+    checkedBorderColor = MaterialTheme.colorScheme.primary,
+    uncheckedThumbColor = MaterialTheme.colorScheme.primary,
+    uncheckedTrackColor = MaterialTheme.colorScheme.surface,
+    uncheckedBorderColor = MaterialTheme.colorScheme.primary,
+)
 
 @Composable
 private fun CrashReportingLabel() {

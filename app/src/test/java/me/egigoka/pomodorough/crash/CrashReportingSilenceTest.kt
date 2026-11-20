@@ -60,6 +60,7 @@ class CrashReportingSilenceTest {
         "me/egigoka/pomodorough/ui/TimerScreenScaffold.kt",
         "me/egigoka/pomodorough/ui/UiComponents.kt",
         "me/egigoka/pomodorough/ui/PomodoroughViewModel.kt",
+        "me/egigoka/pomodorough/NotificationSettingsIntents.kt",
     )
 
     private val cancellationGuardSites = listOf(

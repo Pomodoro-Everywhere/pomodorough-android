@@ -4,16 +4,12 @@ import android.content.Context
 import android.text.format.DateFormat
 import java.util.Date
 import me.egigoka.pomodorough.R
-import me.egigoka.pomodorough.data.TimerPhase
 import me.egigoka.pomodorough.timer.TimerSurfaceTiming
+import me.egigoka.pomodorough.timer.phaseName
 
 /** Localized widget strings. Wall-clock formatting is injectable so tests stay deterministic. */
 internal object WidgetText {
-    fun phaseLabel(context: Context, phase: String): String = when (phase) {
-        TimerPhase.ShortBreak -> context.getString(R.string.short_break)
-        TimerPhase.LongBreak -> context.getString(R.string.long_break)
-        else -> context.getString(R.string.focus)
-    }
+    fun phaseLabel(context: Context, phase: String): String = phaseName(context, phase)
 
     fun taskTitle(context: Context, snapshot: WidgetSnapshot): String =
         snapshot.taskTitle ?: context.getString(R.string.no_task)

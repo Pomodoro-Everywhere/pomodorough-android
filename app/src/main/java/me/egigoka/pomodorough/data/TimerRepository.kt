@@ -933,8 +933,38 @@ class TimerRepository(
 
     // The owner that signs in again replays the deletes it left behind.
     override suspend fun signIn(credentialProvider: GoogleCredentialProvider) {
-        accountWorkspaceController.serialize { signInInternal(credentialProvider) }
+        accountWorkspaceController.serialize { signInKeepingChosenRoute(credentialProvider) }
         replayLeftoverTaskDeletion(signedInReplay())
+    }
+
+    private suspend fun signInKeepingChosenRoute(credentialProvider: GoogleCredentialProvider) {
+        val chosenRoute = replicationMode()
+        signInInternal(credentialProvider)
+        restoreRouteAfterFailedSignIn(chosenRoute)
+    }
+
+    // AND-18: prepareSignIn moves the route to Cloud before an account exists. A sign-in that
+    // ends signed out puts back the route the user chose, so a failure never selects Cloud.
+    // The restore mirrors that forced move and skips the room-entry gate, because the user was
+    // already on the chosen route. A pending history choice belongs to the account route, so
+    // it keeps Cloud; a cancelled sign-in throws past this and keeps Cloud too.
+    // The account-network gate still applies, as it does to every other route change: a
+    // credential failure in this sign-in asks for a local reset, the workspace reload is
+    // refused until then, and the reset clears the workspace that the stored route holds.
+    // Keeping Cloud makes that the Cloud workspace on screen, not the room the user left.
+    private suspend fun restoreRouteAfterFailedSignIn(chosenRoute: ReplicationMode) {
+        if (chosenRoute == ReplicationMode.CENTRALIZED) return
+        if (replicationMode() != ReplicationMode.CENTRALIZED) return
+        val restoreAdmitted = actionMutex.withLock {
+            authStatus == AuthStatus.SignedOut && historyResolution == null && !accountNetworkBlocked()
+        }
+        if (!restoreAdmitted) return
+        val controller = replication ?: return
+        completePendingTaskDeletion()
+        accountWorkspaceController.advanceGeneration(AccountWorkspaceReason.ReplicationModeChanged)
+        controller.setMode(chosenRoute)
+        reloadWorkspace(controller.mode)
+        centralizedSyncRuntime.requestRevisionClose()
     }
 
     private suspend fun signInInternal(credentialProvider: GoogleCredentialProvider) {

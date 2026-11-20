@@ -195,9 +195,8 @@ class PomodoroughRtlAccessibilityTest {
 
     private fun assertTimerNameAndValue(context: Context) {
         val description = context.getString(
-            R.string.timer_remaining,
-            20,
-            0,
+            R.string.timer_remaining_description,
+            context.resources.getQuantityString(R.plurals.minutes_long, 20, 20),
             context.getString(R.string.focus),
             context.getString(R.string.paused),
         )

@@ -9,7 +9,6 @@ import java.time.ZoneId
 import java.util.UUID
 import me.egigoka.pomodorough.data.FocusTask
 import me.egigoka.pomodorough.data.HistoryItem
-import me.egigoka.pomodorough.data.SyncWireBounds
 import me.egigoka.pomodorough.data.TaskDailySummary
 import me.egigoka.pomodorough.data.TaskOperation
 import me.egigoka.pomodorough.data.TaskOperationType
@@ -53,6 +52,11 @@ object TaskReducer {
         return UUID(buffer.long, buffer.long).toString()
     }
 
+    /**
+     * Replays task operations over [base]. The result is not in task list order: base tasks keep
+     * their place and a task that an operation adds goes last. The task list order is a Shared Core
+     * decision, so the app shows the list that a Core projection returns and never sorts it here.
+     */
     fun replay(base: List<FocusTask>, operations: List<TaskOperation>): List<FocusTask> {
         val tasks = base.associateByTo(linkedMapOf(), FocusTask::id)
         operations.sortedWith(
@@ -68,10 +72,7 @@ object TaskReducer {
                 TaskOperationType.Delete, TaskOperationType.Rename -> tasks.remove(operation.taskId)
             }
         }
-        return tasks.values.sortedWith { left, right ->
-            SyncWireBounds.compareUtf8(left.title, right.title).takeIf { it != 0 }
-                ?: SyncWireBounds.compareUtf8(left.id, right.id)
-        }
+        return tasks.values.toList()
     }
 
     fun summariesToday(

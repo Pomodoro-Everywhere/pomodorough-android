@@ -147,6 +147,7 @@ fun PomodoroughScreen(
     joinInviteDraft: String = "",
     onJoinInviteChange: (String) -> Unit = {},
     taskEditing: TaskEditingActions = TaskEditingActions(),
+    joinInviteFailed: Boolean = false,
 ) {
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         if (!state.ready) {
@@ -163,6 +164,7 @@ fun PomodoroughScreen(
                 onShareIrohInvite,
                 onDeleteAccount, onOpenPrivacy,
                 joinInviteDraft, onJoinInviteChange, taskEditing,
+                joinInviteFailed = joinInviteFailed,
             ))
         }
     }
@@ -171,6 +173,7 @@ fun PomodoroughScreen(
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun LoadingScreen() {
+    LightSystemBarIconsOnInk()
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -186,7 +189,7 @@ private fun LoadingScreen() {
             )
             Spacer(Modifier.height(28.dp))
             Text(
-                stringResource(R.string.syncing_your_clock),
+                stringResource(R.string.loading_your_timer),
                 color = darkModeTextColor(Cloud),
                 style = MaterialTheme.typography.titleLarge,
             )
@@ -213,4 +216,5 @@ internal data class TimerScreenActions(
     val joinInviteDraft: String = "",
     val onJoinInviteChange: (String) -> Unit = {},
     val taskEditing: TaskEditingActions = TaskEditingActions(),
+    val joinInviteFailed: Boolean = false,
 )

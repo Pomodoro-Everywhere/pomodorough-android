@@ -26,6 +26,7 @@ import me.egigoka.pomodorough.R
 /** Startup could not read local storage; nothing was changed and Retry reads again. */
 @Composable
 internal fun LocalStorageFailureScreen(onRetry: () -> Unit) {
+    LightSystemBarIconsOnInk()
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()

@@ -21,12 +21,18 @@ internal enum class CompletionNotificationOutcome {
     TimerAlreadyActive,
     PhaseSkipped,
     NoSkipDestination,
+
+    /** The core now proposes a phase other than the one the button named. */
+    OfferedPhaseChanged,
 }
 
 /**
  * Performs the same repository calls as the in-app primary and Skip buttons.
- * The next phase is resolved here from published state, never when the notification is built,
- * so a stale notification cannot start or skip a phase the core no longer proposes.
+ * The next phase is resolved here from published state. A button names the phase it
+ * offered when the notification was posted; if the core now proposes another phase,
+ * the tap changes nothing, so a stale notification cannot start or skip a phase the
+ * core no longer proposes. An intent without an offered phase is checked only
+ * against the current proposal.
  */
 internal class CompletionNotificationActionHandler(
     private val repository: TimerRepositoryContract,
@@ -36,32 +42,41 @@ internal class CompletionNotificationActionHandler(
     suspend fun handle(
         action: CompletionNotificationAction,
         timerId: String?,
+        offeredPhase: String? = null,
     ): CompletionNotificationOutcome {
         repository.initialize()
         stopAlert(timerId)
         cancelNotification()
         return when (action) {
-            CompletionNotificationAction.StartNext -> startNext()
-            CompletionNotificationAction.SkipNext -> skipNext()
+            CompletionNotificationAction.StartNext -> startNext(offeredPhase)
+            CompletionNotificationAction.SkipNext -> skipNext(offeredPhase)
         }
     }
 
-    private suspend fun startNext(): CompletionNotificationOutcome {
-        val status = repository.state.value.timer?.status
+    private suspend fun startNext(offeredPhase: String?): CompletionNotificationOutcome {
+        val state = repository.state.value
+        val status = state.timer?.status
         if (status == TimerStatus.Running || status == TimerStatus.Paused) {
             Log.w(Tag, "Start next ignored: a timer is already active")
             return CompletionNotificationOutcome.TimerAlreadyActive
+        }
+        if (offeredPhase != null && offeredPhase != CompletionNextPhases.from(state).start) {
+            Log.w(Tag, "Start next ignored: the core now proposes another phase")
+            return CompletionNotificationOutcome.OfferedPhaseChanged
         }
         repository.toggleTimer()
         return CompletionNotificationOutcome.Started
     }
 
-    private suspend fun skipNext(): CompletionNotificationOutcome {
-        val state = repository.state.value
-        val destination = state.skipDestinationPhase?.takeIf { it != state.settings.selectedPhase }
+    private suspend fun skipNext(offeredPhase: String?): CompletionNotificationOutcome {
+        val destination = CompletionNextPhases.from(repository.state.value).skipTo
         if (destination == null) {
             Log.w(Tag, "Skip next ignored: core proposes no skip destination")
             return CompletionNotificationOutcome.NoSkipDestination
+        }
+        if (offeredPhase != null && offeredPhase != destination) {
+            Log.w(Tag, "Skip next ignored: the core now proposes another destination")
+            return CompletionNotificationOutcome.OfferedPhaseChanged
         }
         repository.selectPhase(destination)
         return CompletionNotificationOutcome.PhaseSkipped

@@ -117,6 +117,7 @@ import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.sin
+import kotlin.math.sqrt
 import kotlinx.coroutines.delay
 import me.egigoka.pomodorough.R
 import me.egigoka.pomodorough.data.AppState
@@ -143,11 +144,44 @@ internal fun TimerHero(
     orbitMaxSize: Dp = 318.dp,
     modifier: Modifier = Modifier,
 ) {
-    val status = state.timer?.status ?: "idle"
-    val phase = displayPhase(state.timer, state.settings)
     val showContextLabel = true
-    val palette = phasePalette(phase)
-    val textColor = contentColorForContainer(palette.container)
+    val card = timerHeroCardStyle(state)
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = if (landscape) Ink else card.containerColor,
+        contentColor = if (landscape) darkModeTextColor(Cloud) else card.textColor,
+        shape = if (landscape) RoundedCornerShape(24.dp) else card.shape,
+    ) {
+        if (landscape) {
+            LandscapeTimerHero(state, actions, showContextLabel)
+        } else {
+            PortraitTimerHero(
+                state, actions, card.palette, card.textColor, showContextLabel, orbitMaxSize, card.topStartCorner,
+            )
+        }
+    }
+}
+
+// The phase-coloured card of the dial heroes. The top-start and bottom-end
+// corners follow the timer status.
+internal class TimerHeroCardStyle(
+    val palette: PhasePalette,
+    val textColor: Color,
+    val containerColor: Color,
+    val topStartCorner: Dp,
+) {
+    val shape get() = RoundedCornerShape(
+        topStart = topStartCorner,
+        topEnd = 22.dp,
+        bottomStart = 22.dp,
+        bottomEnd = topStartCorner,
+    )
+}
+
+@Composable
+internal fun timerHeroCardStyle(state: TimerHeroState): TimerHeroCardStyle {
+    val status = state.timer?.status ?: "idle"
+    val palette = phasePalette(displayPhase(state.timer, state.settings))
     val containerColor by animateColorAsState(palette.container, label = "timer container")
     val corner by animateDpAsState(
         targetValue = when (status) {
@@ -157,28 +191,7 @@ internal fun TimerHero(
         },
         label = "timer shape",
     )
-
-    Surface(
-        modifier = modifier.fillMaxWidth(),
-        color = if (landscape) Ink else containerColor,
-        contentColor = if (landscape) darkModeTextColor(Cloud) else textColor,
-        shape = if (landscape) {
-            RoundedCornerShape(24.dp)
-        } else {
-            RoundedCornerShape(
-                topStart = corner,
-                topEnd = 22.dp,
-                bottomStart = 22.dp,
-                bottomEnd = corner,
-            )
-        },
-    ) {
-        if (landscape) {
-            LandscapeTimerHero(state, actions, showContextLabel)
-        } else {
-            PortraitTimerHero(state, actions, palette, textColor, showContextLabel, orbitMaxSize)
-        }
-    }
+    return TimerHeroCardStyle(palette, contentColorForContainer(palette.container), containerColor, corner)
 }
 
 internal data class TimerHeroState(
@@ -229,13 +242,15 @@ private fun PortraitTimerHero(
     textColor: Color,
     showContextLabel: Boolean,
     orbitMaxSize: Dp,
+    topStartCorner: Dp,
 ) {
     // PortraitTimerScreen owns scrolling for the header, messages, and hero together.
-    Column(Modifier.padding(14.dp)) {
+    Column(Modifier.padding(PortraitHeroPadding)) {
         if (showContextLabel) {
             Text(
                 stringResource(R.string.current_service),
-                color = textColor.copy(alpha = 0.72f),
+                Modifier.padding(start = cornerLabelIndent(topStartCorner, PortraitHeroPadding)),
+                color = textColor.copy(alpha = SecondaryTextAlpha),
                 style = MaterialTheme.typography.labelMedium,
             )
             Spacer(Modifier.height(6.dp))
@@ -256,15 +271,31 @@ private fun PortraitTimerHero(
         Text(
             timerInstruction(state.timer?.status ?: "idle"),
             Modifier.fillMaxWidth(),
-            color = textColor.copy(alpha = 0.72f),
+            color = textColor.copy(alpha = SecondaryTextAlpha),
             style = MaterialTheme.typography.bodyMedium,
             textAlign = TextAlign.Center,
         )
     }
 }
 
+internal val PortraitHeroPadding = 14.dp
+
+// AND-05: the card's rounded top-start corner cuts into the first line. At
+// depth y below the top edge, a corner of radius r covers r - sqrt(r² - (r - y)²)
+// from the side. The label's top-left point sits at depth `padding`, so it
+// moves in by whatever that coverage exceeds the normal padding.
+internal fun roundedCornerCoverage(cornerRadius: Dp, depth: Dp): Dp {
+    if (depth >= cornerRadius) return 0.dp
+    val radius = cornerRadius.value
+    val rise = radius - depth.value
+    return (radius - sqrt(radius * radius - rise * rise)).dp
+}
+
+internal fun cornerLabelIndent(cornerRadius: Dp, padding: Dp): Dp =
+    (roundedCornerCoverage(cornerRadius, padding) - padding).coerceAtLeast(0.dp)
+
 @Composable
-private fun PrimaryTimerButton(state: TimerHeroState, onClick: () -> Unit) {
+internal fun PrimaryTimerButton(state: TimerHeroState, onClick: () -> Unit) {
     // R51-A04: minimum touch target only. The outer portrait column
     // scrolls, so the button grows with wrapped labels instead of
     // clipping them inside a fixed height.
@@ -291,7 +322,7 @@ private fun timerToggleLabel(status: String, selectedPhase: String): String = wh
 }
 
 @Composable
-private fun PortraitTimerActions(state: TimerHeroState, actions: TimerHeroActions, palette: PhasePalette) {
+internal fun PortraitTimerActions(state: TimerHeroState, actions: TimerHeroActions, palette: PhasePalette) {
     val controls = timerControlState(state)
     // R51-A04: portrait actions derive from content like the R50
     // landscape repair. FlowRow keeps actions side by side when the
@@ -434,7 +465,8 @@ internal fun landscapeReadoutFontSize(availableHeight: Dp, availableWidth: Dp): 
 // monospace time text fits 320dp widths without clipping. sp already
 // scales with the system, so the base shrinks to compensate.
 internal fun orbitTimeFontSize(orbitSize: Dp, fontScale: Float): androidx.compose.ui.unit.TextUnit {
-    val base = if (orbitSize < 280.dp) 48f else 62f
+    // AND-29: a dial larger than the phone maximum scales its digits with the ring.
+    val base = if (orbitSize < 280.dp) 48f else 62f * maxOf(1f, orbitSize / PhoneOrbitMaxSize)
     val compensation = when {
         fontScale >= 2f -> 0.6f
         fontScale >= 1.3f -> 0.75f
@@ -656,22 +688,21 @@ private fun timerReadout(state: TimerHeroState, textColor: Color, animationLabel
         description = if (status == TimerStatus.Completed) {
             stringResource(R.string.timer_next_session, phaseLabel(phase), formatTaskDuration(duration))
         } else {
-            stringResource(R.string.timer_remaining, minutes, seconds, phaseLabel(phase), statusLabel(status))
+            stringResource(
+                R.string.timer_remaining_description,
+                spokenRemainingTime(minutes, seconds),
+                phaseLabel(phase),
+                statusLabel(status),
+            )
         },
     )
 }
 
+// AND-24: the header names the phase only. A route word in front of it
+// ("RESET SHORT BREAK") read as an action.
 @Composable
-private fun LandscapeReadoutHeader(phase: String, textColor: Color) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            phaseRouteLabel(phase).uppercase(),
-            color = darkModeTextColor(Cloud),
-            style = MaterialTheme.typography.labelMedium,
-        )
-        Spacer(Modifier.width(8.dp))
-        Text(phaseLabel(phase).uppercase(), color = textColor, style = MaterialTheme.typography.labelMedium)
-    }
+internal fun LandscapeReadoutHeader(phase: String, textColor: Color) {
+    Text(phaseLabel(phase).uppercase(), color = textColor, style = MaterialTheme.typography.labelMedium)
 }
 
 @Composable
@@ -690,7 +721,7 @@ internal fun LandscapeTaskSelector(
     val presentation = taskSelectorPresentation(state)
     Box {
         LandscapeTaskSelectorButton(presentation) { expanded = true }
-        TaskSelectionMenu(state.tasks, expanded, onSelectTask) { expanded = false }
+        TaskSelectionMenu(state, expanded, onSelectTask) { expanded = false }
     }
 }
 
@@ -730,27 +761,39 @@ internal fun TimerOrbit(
     palette: PhasePalette,
     maxSize: Dp,
 ) {
-    val textColor = contentColorForContainer(palette.container)
-    val readout = timerReadout(state, Butter, "Timer progress")
     BoxWithConstraints(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-        val orbitSize = min(min(maxWidth.value, maxSize.value), 318f).dp
-        TimerDialLayout(
-            ringSize = orbitSize,
-            ringStroke = OrbitStrokeWidth,
-            content = TimerDialContent(
-                ring = { TimerOrbitCanvas(readout.animatedProgress, displayedTickCount(readout.duration), palette) },
-                countdown = { DepartureBoard(readout.timeText, orbitSize) },
-                phase = { TimerDialPhase(readout.phase, textColor) },
-                statusChip = { TimerDialStatusChip(readout, palette, textColor) },
-                progressBar = { StackedDialProgress(readout.animatedProgress, palette) },
-            ),
-            modifier = Modifier.clearAndSetSemantics {
-                progressBarRangeInfo = ProgressBarRangeInfo(readout.progress, 0f..1f)
-                contentDescription = readout.description
-            },
-        )
+        TimerOrbitDial(state, palette, min(min(maxWidth.value, maxSize.value), PhoneOrbitMaxSize.value).dp)
     }
 }
+
+// The dial at a diameter its caller measured. TimerOrbit keeps the phone
+// maximum; AND-29: the expanded Timer pane passes the diameter its space allows.
+@Composable
+internal fun TimerOrbitDial(state: TimerHeroState, palette: PhasePalette, orbitSize: Dp) {
+    val textColor = contentColorForContainer(palette.container)
+    val readout = timerReadout(state, Butter, "Timer progress")
+    TimerDialLayout(
+        ringSize = orbitSize,
+        ringStroke = OrbitStrokeWidth,
+        content = TimerDialContent(
+            ring = { TimerOrbitCanvas(readout.animatedProgress, displayedTickCount(readout.duration), palette) },
+            countdown = { DepartureBoard(readout.timeText, orbitSize) },
+            phase = { TimerDialPhase(readout.phase, textColor) },
+            statusChip = { TimerDialStatusChip(readout, palette, textColor) },
+            progressBar = { StackedDialProgress(readout.animatedProgress, palette) },
+        ),
+        modifier = Modifier.testTag(TimerDialTag).clearAndSetSemantics {
+            progressBarRangeInfo = ProgressBarRangeInfo(readout.progress, 0f..1f)
+            contentDescription = readout.description
+        },
+    )
+}
+
+internal const val TimerDialTag = "timer_dial"
+
+// The largest dial a phone layout asks for. Phone layouts keep it; it is
+// also the size at which the countdown digits have their base size.
+private val PhoneOrbitMaxSize = 318.dp
 
 private val OrbitStrokeWidth = 18.dp
 
@@ -878,10 +921,10 @@ private fun TimerDialStatusChip(readout: TimerReadoutState, palette: PhasePalett
 }
 
 // The dial chip names the planned length and, outside a running service,
-// the status word ("Idle", "Paused"), so an idle hero says so instead of
-// only showing a full countdown. After a completed run the dial already
-// shows the next phase, so the chip says "Next" rather than pairing
-// "Completed" with a length that was never run.
+// the status word, so an idle hero says so instead of only showing a full
+// countdown. AND-24: a paused timer says "Paused"; every other state is
+// ready to start the phase on the dial and says "Ready", whether a run
+// completed, was cancelled, or none has started.
 @Composable
 private fun ServiceStatusChip(readout: TimerReadoutState) {
     Row(
@@ -905,4 +948,4 @@ private fun ServiceStatusChip(readout: TimerReadoutState) {
 
 @Composable
 private fun serviceStatusWord(status: String): String =
-    if (status == TimerStatus.Completed) stringResource(R.string.next_up) else statusLabel(status)
+    if (status == TimerStatus.Paused) statusLabel(status) else stringResource(R.string.timer_status_ready)

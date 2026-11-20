@@ -92,7 +92,7 @@ class DarkThemeTextContrastTest {
         typeInto("Task", "Alpha")
         assertReadable("ADD TASK")
         openTab("Network")
-        listOf("CREATE IROH ROOM", "JOIN ROOM").forEach(::assertReadable)
+        listOf("CREATE ROOM", "JOIN ROOM").forEach(::assertReadable)
     }
 
     @Test
@@ -302,7 +302,7 @@ class DarkThemeTextContrastTest {
             invite = "pomodorough-invite-abcdefghijklmnopqrstuvwxyz",
         )
         val deletedTask = PendingTaskDeletion("task-alpha", "Alpha")
-        val breakCardLabels = listOf("Start short break", "FOCUS TASK", "No task", "Idle", "5 min")
+        val breakCardLabels = listOf("Start short break", "FOCUS TASK", "No task", "Ready", "5 min")
         val snackbarLabels = listOf("Deleted “Alpha”", "Undo")
     }
 }

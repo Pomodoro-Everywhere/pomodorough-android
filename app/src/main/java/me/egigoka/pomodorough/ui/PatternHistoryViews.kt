@@ -84,6 +84,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalAccessibilityManager
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
+import androidx.annotation.StringRes
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
@@ -150,13 +151,44 @@ internal fun PatternSection(
     modifier: Modifier = Modifier,
     versionName: String = BuildConfig.VERSION_NAME,
 ) {
+    Column(modifier) {
+        PatternPhaseList(settings, timer, mutationsEnabled, onSelectPhase, onChangeDuration)
+        Spacer(Modifier.height(12.dp))
+        PatternWideSettings(settings.autoStartBreaks, mutationsEnabled, onSetAutoStart, versionName = versionName)
+    }
+}
+
+// The header and one card for each phase. A card selects its phase and edits
+// its duration. AND-29: with two panes this is the list pane.
+@Composable
+internal fun PatternPhaseList(
+    settings: TimerSettings,
+    timer: CanonicalTimer?,
+    mutationsEnabled: Boolean,
+    onSelectPhase: (String) -> Unit,
+    onChangeDuration: (String, Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val active = timer?.status == TimerStatus.Running || timer?.status == TimerStatus.Paused
     Column(modifier) {
         PatternHeader()
         Spacer(Modifier.height(16.dp))
         PhaseCards(settings, mutationsEnabled && !active, onSelectPhase, onChangeDuration)
-        Spacer(Modifier.height(12.dp))
-        AutoStartBreaksCard(settings.autoStartBreaks, mutationsEnabled, onSetAutoStart)
+    }
+}
+
+// The settings that apply to the whole pattern, not to one phase. AND-29:
+// with two panes this is the detail pane.
+@Composable
+internal fun PatternWideSettings(
+    autoStartBreaks: Boolean,
+    mutationsEnabled: Boolean,
+    onSetAutoStart: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+    versionName: String = BuildConfig.VERSION_NAME,
+) {
+    Column(modifier) {
+        AutoStartBreaksCard(autoStartBreaks, mutationsEnabled, onSetAutoStart)
         Spacer(Modifier.height(12.dp))
         VersionFooter(versionName = versionName)
     }
@@ -321,7 +353,7 @@ internal fun PhaseCardHeader(
             Text(phaseLabel(phase), style = MaterialTheme.typography.titleLarge)
             Text(
                 supportingText,
-                color = if (selected) selectedTextColor.copy(alpha = 0.72f)
+                color = if (selected) selectedTextColor.copy(alpha = SecondaryTextAlpha)
                 else MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodyMedium,
             )
@@ -452,8 +484,17 @@ private fun CompletedFocusContent(totals: List<CompletedFocusTotal>) {
     }
 }
 
+// AND-09: the run log names the workspace it shows. A room keeps its own history, and
+// without an account the history stays on this device.
+@StringRes
+internal fun runLogLabel(state: AppState): Int = when {
+    state.network.mode == ReplicationMode.IROH -> R.string.run_log_this_room
+    state.authStatus == AuthStatus.SignedIn -> R.string.run_log_this_account
+    else -> R.string.run_log_this_device
+}
+
 @Composable
-internal fun HistoryTitle(count: Int, modifier: Modifier = Modifier) {
+internal fun HistoryTitle(count: Int, @StringRes runLogLabel: Int, modifier: Modifier = Modifier) {
     Row(
         modifier = modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -462,7 +503,7 @@ internal fun HistoryTitle(count: Int, modifier: Modifier = Modifier) {
         // The title column yields width so the count badge stays on screen at
         // large font scales instead of being pushed past the trailing edge.
         Column(modifier = Modifier.weight(1f, fill = false)) {
-            SectionLabel(stringResource(R.string.run_log_this_account))
+            SectionLabel(stringResource(runLogLabel))
             Text(stringResource(R.string.recent_arrivals), style = MaterialTheme.typography.headlineMedium)
         }
         Surface(
@@ -470,9 +511,12 @@ internal fun HistoryTitle(count: Int, modifier: Modifier = Modifier) {
             contentColor = darkModeTextColor(Cloud),
             shape = CircleShape,
         ) {
+            // AND-09: the padded digits read as "zero three"; the badge speaks the arrival count.
+            val countDescription = pluralStringResource(R.plurals.arrivals_count, count, count)
             Text(
                 count.toString().padStart(2, '0'),
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp)
+                    .clearAndSetSemantics { contentDescription = countDescription },
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Black,
             )
@@ -510,12 +554,13 @@ private fun HistoryRowContent(
     showPending: Boolean,
     palette: PhasePalette,
 ) {
-    Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-        HistoryPhaseStamp(item.phase, palette)
-        Spacer(Modifier.width(13.dp))
-        HistoryDetails(item, taskTitle, showPending, Modifier.weight(1f))
-        HistoryDuration(item)
-    }
+    HistoryRowLayout(
+        stamp = { HistoryPhaseStamp(item.phase, palette) },
+        details = { HistoryDetails(item, taskTitle, showPending) },
+        duration = { HistoryDuration(item) },
+        stampGap = 13.dp,
+        modifier = Modifier.padding(14.dp),
+    )
 }
 
 @Composable
@@ -533,13 +578,13 @@ private fun HistoryPhaseStamp(phase: String, palette: PhasePalette) {
 }
 
 @Composable
-private fun HistoryDetails(item: HistoryItem, taskTitle: String?, showPending: Boolean, modifier: Modifier) {
+private fun HistoryDetails(item: HistoryItem, taskTitle: String?, showPending: Boolean) {
     val taskContext = when {
         taskTitle != null -> taskTitle
         item.taskId != null -> stringResource(R.string.deleted_task)
         else -> stringResource(R.string.unassigned)
     }
-    Column(modifier) {
+    Column {
         Text(
             phaseLabel(item.phase) + if (item.pending && showPending) stringResource(R.string.queued) else "",
             style = MaterialTheme.typography.titleLarge,

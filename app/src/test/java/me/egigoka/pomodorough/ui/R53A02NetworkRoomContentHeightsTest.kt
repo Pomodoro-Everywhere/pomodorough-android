@@ -80,7 +80,7 @@ class R53A02NetworkRoomContentHeightsTest {
         val context = ApplicationProvider.getApplicationContext<Application>()
         val text = context.getString(id)
         if (context.resources.configuration.locales[0].toLanguageTag() == "ar-XB") {
-            val english = if (id == R.string.join_room) "JOIN ROOM" else "CREATE IROH ROOM"
+            val english = if (id == R.string.join_room) "JOIN ROOM" else "CREATE ROOM"
             // Release builds ship without pseudo-locales, so ar-XB falls back
             // to English there; expansion is asserted in debug unit tests only.
             if (BuildConfig.DEBUG) assertFalse("ar-XB must load pseudo-localized resources", text == english)

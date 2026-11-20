@@ -412,11 +412,30 @@ internal fun resolutionWarning(strategy: BootstrapStrategy): String = when (stra
         stringResource(R.string.queued_local_changes_will_be_merged_into_account)
 }
 
+// AND-31: secondary text on phase cards. Ink at 80% on Lavender is 4.99:1 and Cloud at 80% on
+// Violet is 8.07:1; the old 72% left Ink on Lavender at 4.21:1, under the 4.5:1 text minimum.
+internal const val SecondaryTextAlpha = 0.8f
+
+// AND-04: the chip colour follows the same route and account branches as syncLabel, so a
+// calm label such as "On device" never sits on the attention colour of a stale sync status.
 @Composable
-internal fun syncColor(status: SyncStatus): Color = when (status) {
-    SyncStatus.Synced, SyncStatus.Offline -> Lavender
-    SyncStatus.Conflict, SyncStatus.Retrying -> MaterialTheme.colorScheme.tertiaryContainer
-    SyncStatus.Syncing, SyncStatus.Queued, SyncStatus.Checking -> MaterialTheme.colorScheme.tertiaryContainer
+internal fun syncColor(state: AppState): Color =
+    if (syncNeedsAttention(state)) MaterialTheme.colorScheme.tertiaryContainer else Lavender
+
+internal fun syncNeedsAttention(state: AppState): Boolean = when (state.network.mode) {
+    ReplicationMode.OFFLINE -> false
+    ReplicationMode.IROH -> roomNeedsAttention(state.network.status)
+    ReplicationMode.CENTRALIZED -> cloudNeedsAttention(state)
+}
+
+private fun roomNeedsAttention(status: IrohConnectionStatus): Boolean =
+    status != IrohConnectionStatus.LISTENING && status != IrohConnectionStatus.WAITING_FOR_PEERS
+
+// Signed out, the Cloud route stays on this device and the chip reads "On device".
+private fun cloudNeedsAttention(state: AppState): Boolean = when {
+    state.historyResolution != null -> true
+    state.authStatus == AuthStatus.SignedIn -> state.syncStatus != SyncStatus.Synced && state.syncStatus != SyncStatus.Offline
+    else -> state.authStatus == AuthStatus.Loading || state.authStatus == AuthStatus.SigningIn
 }
 
 @Composable
@@ -472,13 +491,6 @@ internal fun statusLabel(status: String): String = when (status) {
     else -> stringResource(R.string.idle)
 }
 
-@Composable
-internal fun phaseRouteLabel(phase: String): String = when (phase) {
-    TimerPhase.ShortBreak -> stringResource(R.string.reset)
-    TimerPhase.LongBreak -> stringResource(R.string.recover)
-    else -> stringResource(R.string.work)
-}
-
 internal fun phaseStamp(phase: String): String = when (phase) {
     TimerPhase.ShortBreak -> "SB"
     TimerPhase.LongBreak -> "LB"
@@ -500,6 +512,19 @@ internal fun formatTaskDuration(milliseconds: Long): String {
         hours == 0L -> pluralStringResource(R.plurals.minutes_short, minutes.toInt(), minutes)
         remainingMinutes == 0L -> pluralStringResource(R.plurals.hours_short, hours.toInt(), hours)
         else -> stringResource(R.string.hours_minutes_short, hours, remainingMinutes)
+    }
+}
+
+// AND-21: the dial description is spoken, so each count takes its plural
+// form, and a zero part is left out ("1 minute", not "1 minutes 0 seconds").
+@Composable
+internal fun spokenRemainingTime(minutes: Long, seconds: Long): String {
+    val minutesText = pluralStringResource(R.plurals.minutes_long, minutes.toInt(), minutes.toInt())
+    val secondsText = pluralStringResource(R.plurals.seconds_long, seconds.toInt(), seconds.toInt())
+    return when {
+        minutes == 0L -> secondsText
+        seconds == 0L -> minutesText
+        else -> stringResource(R.string.minutes_and_seconds, minutesText, secondsText)
     }
 }
 

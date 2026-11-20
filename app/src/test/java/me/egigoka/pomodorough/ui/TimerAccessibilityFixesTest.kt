@@ -31,13 +31,12 @@ class TimerAccessibilityFixesTest {
         assertTrue(landscapeReadoutLetterSpacing(2f) >= (-2).sp)
     }
 
+    // AND-15: narrow rows stack instead of squeezing, so the one table
+    // layout gives the title the largest share of the row.
     @Test
-    fun taskRowWeightsProtectMetricsWhenNarrow() {
-        val narrow = taskRowWeights(isNarrow = true)
-        val wide = taskRowWeights(isNarrow = false)
-        assertTrue(narrow.finished + narrow.time >= wide.finished + wide.time)
-        assertTrue(narrow.title <= narrow.finished + narrow.time + 0.01f)
-        assertTrue(wide.title <= wide.finished + wide.time + 0.51f)
+    fun tableTaskRowGivesTitleTheLargestShare() {
+        val weights = TableTaskRowWeights
+        assertTrue(weights.title > weights.finished + weights.time)
     }
 
     @Test
@@ -65,7 +64,7 @@ class TimerAccessibilityFixesTest {
     fun taskRowsEnforceTouchTargetAndRebalancedWeights() {
         val views = productionText("me/egigoka/pomodorough/ui/TaskViews.kt")
         assertTrue(views.contains("heightIn(min = 48.dp)"))
-        assertTrue(views.contains("taskRowWeights("))
+        assertTrue(views.contains("TableTaskRowWeights"))
         assertTrue(views.contains("widthIn(min = 44.dp)"))
         assertTrue(!views.contains("weight(4.55f)"))
         assertTrue(!views.contains("weight(2f)"))

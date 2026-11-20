@@ -9,7 +9,6 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.Orientation
@@ -19,6 +18,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -37,8 +37,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Checklist
@@ -48,6 +46,7 @@ import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonColors
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ContainedLoadingIndicator
 import androidx.compose.material3.DropdownMenu
@@ -93,9 +92,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.progressBarRangeInfo
-import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -120,7 +117,6 @@ import kotlin.math.sin
 import kotlinx.coroutines.delay
 import me.egigoka.pomodorough.R
 import me.egigoka.pomodorough.data.AppState
-import me.egigoka.pomodorough.data.AuthStatus
 import me.egigoka.pomodorough.data.BootstrapStrategy
 import me.egigoka.pomodorough.data.CanonicalTimer
 import me.egigoka.pomodorough.data.FocusTask
@@ -145,40 +141,98 @@ internal fun NetworkSection(
     joinCode: String,
     onJoinCodeChange: (String) -> Unit,
     modifier: Modifier = Modifier,
+    joinInviteFailed: Boolean = false,
+) {
+    val joinInvite = JoinInviteDraft(joinCode, joinInviteFailed, onJoinCodeChange)
+    NetworkSectionArrangement(state, enabled, actions, roomNameDraft, joinInvite) { parts ->
+        Column(modifier, verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            parts.routes(this)
+            parts.routeDetails(this)
+        }
+    }
+}
+
+internal class JoinInviteDraft(val code: String, val failed: Boolean, val onCodeChange: (String) -> Unit)
+
+// The two halves of the Network section. One column shows them in order;
+// AND-29: two panes show the routes as the list and the rest as its detail.
+internal class NetworkSectionParts(
+    val routes: @Composable ColumnScope.() -> Unit,
+    val routeDetails: @Composable ColumnScope.() -> Unit,
+)
+
+// Owns the confirmation dialogs and the draft clearing for both halves, so
+// they behave the same in one column and in two panes.
+@Composable
+internal fun NetworkSectionArrangement(
+    state: AppState,
+    enabled: Boolean,
+    actions: NetworkActions,
+    roomNameDraft: RoomNameDraftState,
+    joinInvite: JoinInviteDraft,
+    arrangement: @Composable (NetworkSectionParts) -> Unit,
 ) {
     var confirmLeave by remember { mutableStateOf(false) }
     var confirmRecovery by remember { mutableStateOf(false) }
     val network = state.network
     val networkActionsEnabled = enabled && network.identityRecovery == null && !network.transitioning
-    ClearNetworkDraftsOnRoomOpened(network.roomId, roomNameDraft, onJoinCodeChange)
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        NetworkSectionHeader()
-        network.identityRecovery?.let { kind ->
-            IdentityRecoveryCard(
-                kind,
-                network.recoveryAttemptFailed,
-                !network.transitioning,
-            ) { confirmRecovery = true }
-        }
-        RouteSwitch(
-            network.mode,
-            network.roomId != null,
-            state.authStatus == AuthStatus.SignedIn,
-            networkActionsEnabled,
-            actions.onSetMode,
-        )
-        NetworkStatusCard(network, networkActionsEnabled, actions.onSyncNow) { confirmLeave = true }
-        if (network.roomId == null) {
-            CreateRoomCard(roomNameDraft.name, networkActionsEnabled, roomNameDraft::onChange) {
-                actions.onCreateRoom(roomNameDraft.name)
-            }
-            JoinRoomCard(joinCode, networkActionsEnabled, onJoinCodeChange) { actions.onJoinRoom(joinCode) }
-        }
-        network.invite?.let { RoomInviteCard(it, networkActionsEnabled, actions) }
-        NetworkPrivacyCard()
-        CrashReportingCard()
-    }
+    ClearNetworkDraftsOnRoomOpened(network.roomId, roomNameDraft, joinInvite.onCodeChange)
+    arrangement(
+        NetworkSectionParts(
+            routes = { NetworkRoutes(state, networkActionsEnabled, actions) { confirmRecovery = true } },
+            routeDetails = {
+                NetworkRouteDetails(network, networkActionsEnabled, actions, roomNameDraft, joinInvite) {
+                    confirmLeave = true
+                }
+            },
+        ),
+    )
     NetworkConfirmDialogs(network, actions, confirmLeave, confirmRecovery, { confirmLeave = it }, { confirmRecovery = it })
+}
+
+@Composable
+private fun NetworkRoutes(
+    state: AppState,
+    networkActionsEnabled: Boolean,
+    actions: NetworkActions,
+    onReviewRecovery: () -> Unit,
+) {
+    val network = state.network
+    NetworkSectionHeader()
+    network.identityRecovery?.let { kind ->
+        IdentityRecoveryCard(kind, network.recoveryAttemptFailed, !network.transitioning, onReviewRecovery)
+    }
+    RouteSwitch(
+        network.mode,
+        network.roomId != null,
+        cloudAccess(state),
+        networkActionsEnabled,
+        actions.onSetMode,
+        actions.onSignIn,
+    )
+}
+
+@Composable
+private fun NetworkRouteDetails(
+    network: IrohNetworkState,
+    networkActionsEnabled: Boolean,
+    actions: NetworkActions,
+    roomNameDraft: RoomNameDraftState,
+    joinInvite: JoinInviteDraft,
+    onReviewLeave: () -> Unit,
+) {
+    NetworkStatusCard(network, networkActionsEnabled, actions.onSyncNow, onReviewLeave)
+    if (network.roomId == null) {
+        CreateRoomCard(roomNameDraft.name, networkActionsEnabled, roomNameDraft::onChange) {
+            actions.onCreateRoom(roomNameDraft.name)
+        }
+        JoinRoomCard(joinInvite.code, joinInvite.failed, networkActionsEnabled, joinInvite.onCodeChange) {
+            actions.onJoinRoom(joinInvite.code)
+        }
+    }
+    network.invite?.let { RoomInviteCard(it, networkActionsEnabled, actions) }
+    NetworkPrivacyCard()
+    CrashReportingCard()
 }
 
 @Composable
@@ -230,6 +284,7 @@ internal data class NetworkActions(
     val onSyncNow: () -> Unit,
     val onConfirmIdentityRecovery: () -> Unit = {},
     val onShareInvite: (String) -> Unit,
+    val onSignIn: () -> Unit = {},
 )
 
 @Composable
@@ -419,7 +474,7 @@ private fun CreateRoomCard(
         shape = MaterialTheme.shapes.large,
     ) {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(stringResource(R.string.open_a_peer_route), style = MaterialTheme.typography.titleLarge)
+            Text(stringResource(R.string.create_a_room), style = MaterialTheme.typography.titleLarge)
             OutlinedTextField(
                 value = roomName,
                 onValueChange = onNameChange,
@@ -433,15 +488,24 @@ private fun CreateRoomCard(
                 onClick = onCreate,
                 enabled = enabled && roomName.codePointCount(0, roomName.length) <= 64,
                 modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Violet, contentColor = darkModeTextColor(Cloud)),
+                colors = createRoomButtonColors(),
             ) { Text(stringResource(R.string.create_iroh_room)) }
         }
     }
 }
 
+// AND-19: the card is Violet in the dark theme, so a Violet button vanished on it.
+// primary is Violet with Cloud text in light and the light blue with Ink text in dark.
+@Composable
+internal fun createRoomButtonColors(): ButtonColors = ButtonDefaults.buttonColors(
+    containerColor = MaterialTheme.colorScheme.primary,
+    contentColor = MaterialTheme.colorScheme.onPrimary,
+)
+
 @Composable
 private fun JoinRoomCard(
     joinCode: String,
+    joinFailed: Boolean,
     enabled: Boolean,
     onCodeChange: (String) -> Unit,
     onJoin: () -> Unit,
@@ -453,7 +517,7 @@ private fun JoinRoomCard(
         shape = MaterialTheme.shapes.large,
     ) {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(stringResource(R.string.join_an_existing_route), style = MaterialTheme.typography.titleLarge)
+            Text(stringResource(R.string.join_a_room), style = MaterialTheme.typography.titleLarge)
             OutlinedTextField(
                 value = joinCode,
                 onValueChange = onCodeChange,
@@ -461,6 +525,11 @@ private fun JoinRoomCard(
                 modifier = Modifier.fillMaxWidth().semantics { contentDescription = inviteLabel },
                 label = { Text(inviteLabel, Modifier.clearAndSetSemantics {}) },
                 placeholder = { Text(stringResource(R.string.pomodorough1)) },
+                // AND-16: a failed join names itself under the field, where the user typed.
+                isError = joinFailed,
+                supportingText = if (joinFailed) {
+                    { JoinInviteFailure() }
+                } else null,
                 minLines = 3,
                 maxLines = 6,
             )
@@ -472,6 +541,14 @@ private fun JoinRoomCard(
             ) { Text(stringResource(R.string.join_room)) }
         }
     }
+}
+
+@Composable
+private fun JoinInviteFailure() {
+    Text(
+        stringResource(R.string.room_invite_join_failed),
+        Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+    )
 }
 
 @Composable
@@ -554,82 +631,6 @@ private fun LeaveRoomDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
             }
         },
     )
-}
-
-@Composable
-internal fun RouteSwitch(
-    active: ReplicationMode,
-    hasIrohRoom: Boolean,
-    signedIn: Boolean,
-    enabled: Boolean,
-    onSetMode: (ReplicationMode) -> Unit,
-) {
-    // Cloud mode stays local until sign-in; the header already says "On device", so the card must not claim a server.
-    val cloudDetail = stringResource(
-        if (signedIn) R.string.signed_in_server else R.string.sign_in_to_sync_across_devices,
-    )
-    val choices = listOf(
-        ReplicationMode.OFFLINE to (stringResource(R.string.on_device) to stringResource(R.string.no_remote_endpoint)),
-        ReplicationMode.IROH to (stringResource(R.string.iroh_room) to stringResource(R.string.equal_peers)),
-        ReplicationMode.CENTRALIZED to (stringResource(R.string.cloud) to cloudDetail),
-    )
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        choices.forEach { (mode, copy) ->
-            RouteChoice(mode, copy, active == mode, hasIrohRoom, enabled) { onSetMode(mode) }
-        }
-    }
-}
-
-@Composable
-private fun RouteChoice(
-    mode: ReplicationMode,
-    copy: Pair<String, String>,
-    selected: Boolean,
-    hasIrohRoom: Boolean,
-    mutationsEnabled: Boolean,
-    onSelect: () -> Unit,
-) {
-    val enabled = mutationsEnabled && (mode != ReplicationMode.IROH || hasIrohRoom)
-    val selectionDescription = stringResource(if (selected) R.string.selected else R.string.not_selected)
-    Surface(
-        onClick = onSelect,
-        enabled = enabled,
-        modifier = Modifier.fillMaxWidth().heightIn(min = 62.dp).semantics {
-            stateDescription = selectionDescription
-        },
-        color = if (selected) Violet else MaterialTheme.colorScheme.surface,
-        contentColor = darkModeTextColor(if (selected) Cloud else MaterialTheme.colorScheme.onSurface),
-        shape = RoundedCornerShape(
-            topStart = if (mode == ReplicationMode.OFFLINE) 28.dp else 14.dp,
-            topEnd = 14.dp,
-            bottomStart = 14.dp,
-            bottomEnd = if (mode == ReplicationMode.CENTRALIZED) 28.dp else 14.dp,
-        ),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
-    ) {
-        Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier.size(14.dp).background(
-                    if (selected) MaterialTheme.colorScheme.tertiaryContainer else Lavender,
-                    CircleShape,
-                ),
-            )
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(copy.first, style = MaterialTheme.typography.labelLarge)
-                Text(
-                    if (mode == ReplicationMode.IROH && !hasIrohRoom) {
-                        stringResource(R.string.create_or_join_a_room_below_first)
-                    } else copy.second,
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            }
-            Text(
-                stringResource(if (selected) R.string.active else R.string.select),
-                style = MaterialTheme.typography.labelMedium,
-            )
-        }
-    }
 }
 
 @Composable

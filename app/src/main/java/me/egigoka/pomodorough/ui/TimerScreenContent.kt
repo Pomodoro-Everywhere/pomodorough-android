@@ -54,6 +54,7 @@ import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -224,51 +225,51 @@ internal fun LandscapeTimerScreen(
     mutationsEnabled: Boolean,
     actions: TimerContentActions,
 ) {
-    Column(
+    Row(
         modifier = Modifier
             .fillMaxSize()
             .systemBarsPadding()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+            .padding(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        if (state.localAccountResetRequired) {
-            ResetLocalAccountButton(actions.header.onResetLocalAccount, Modifier.align(Alignment.End))
-        }
-        LandscapeMessagesAndHero(state, mutationsEnabled, actions, Modifier.weight(1f))
-    }
-}
-
-// B1: a landscape viewport is too short to stack a message card above the
-// hero and still show the primary timer control. Messages take a scrolling
-// column beside the hero, which keeps the full height.
-@Composable
-private fun LandscapeMessagesAndHero(
-    state: AppState,
-    mutationsEnabled: Boolean,
-    actions: TimerContentActions,
-    modifier: Modifier,
-) {
-    val hasMessages = state.conflict != null || state.notice != null
-    Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (hasMessages) {
-            Column(
-                modifier = Modifier
-                    .weight(LandscapeMessagesWidthShare)
-                    .fillMaxHeight()
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) { TimerScreenMessages(state, actions) }
-        }
+        LandscapeSidePanel(
+            state,
+            actions,
+            Modifier.weight(LandscapeSidePanelWidthShare).fillMaxHeight(),
+        )
         TimerHero(
             state = timerHeroState(state, mutationsEnabled),
             actions = actions.hero,
             landscape = true,
-            modifier = Modifier.weight(1f - LandscapeMessagesWidthShare).fillMaxHeight(),
+            modifier = Modifier
+                .weight(1f - LandscapeSidePanelWidthShare)
+                .fillMaxHeight()
+                .padding(vertical = 8.dp),
         )
     }
 }
 
-private const val LandscapeMessagesWidthShare = 0.4f
+// AND-26: landscape Timer shows the same header as every other screen, with
+// sign-in, the account and the sync chip. B1: a landscape viewport is too
+// short to stack the header and message cards above the hero and still show
+// the primary timer control, so they scroll in a column beside the hero,
+// which keeps the full height. The header offers the local reset only while
+// signed out, so the side panel adds the reset button in the other states.
+@Composable
+private fun LandscapeSidePanel(state: AppState, actions: TimerContentActions, modifier: Modifier) {
+    Column(
+        modifier = modifier.verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        AppHeader(state, actions.header)
+        if (state.localAccountResetRequired && state.authStatus != AuthStatus.SignedOut) {
+            ResetLocalAccountButton(actions.header.onResetLocalAccount, Modifier.align(Alignment.End))
+        }
+        TimerScreenMessages(state, actions)
+    }
+}
+
+private const val LandscapeSidePanelWidthShare = 0.4f
 
 internal data class AppHeaderActions(
     val onSignIn: () -> Unit,
@@ -420,12 +421,13 @@ private fun HeaderTextButton(label: String, onClick: () -> Unit, enabled: Boolea
 private fun HeaderSyncRow(state: AppState) {
     val accountLabel = headerAccountLabel(state)
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Surface(color = syncColor(state.syncStatus), contentColor = contentColorForContainer(syncColor(state.syncStatus)), shape = CircleShape) {
+        Surface(color = syncColor(state), contentColor = contentColorForContainer(syncColor(state)), shape = CircleShape) {
             Row(
                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Box(Modifier.size(8.dp).background(Ink, CircleShape))
+                // The dot takes the chip's text colour; Ink vanished on the Violet attention chip.
+                Box(Modifier.size(8.dp).background(LocalContentColor.current, CircleShape))
                 Spacer(Modifier.width(7.dp))
                 Text(syncLabel(state), style = MaterialTheme.typography.labelMedium)
             }

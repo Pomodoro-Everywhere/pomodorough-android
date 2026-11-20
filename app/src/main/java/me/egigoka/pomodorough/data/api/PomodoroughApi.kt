@@ -158,7 +158,7 @@ class PomodoroughApi internal constructor(
             requireSuccess(response)
             val body = readBody(response)
             if (body.isBlank()) throw IOException("Server returned an empty response")
-            json.decodeFromString(body)
+            json.decodeServerResponse(body)
         }
     }
 

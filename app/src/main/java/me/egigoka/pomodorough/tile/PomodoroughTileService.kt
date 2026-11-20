@@ -14,7 +14,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import me.egigoka.pomodorough.PomodoroughApplication
-import me.egigoka.pomodorough.R
 import me.egigoka.pomodorough.crash.CrashReporter
 import me.egigoka.pomodorough.data.AppState
 import me.egigoka.pomodorough.data.TimerRepository
@@ -69,24 +68,17 @@ class PomodoroughTileService : TileService() {
         val nowMs = System.currentTimeMillis()
         val timing = TimerSurfaceTiming.from(state.timer, nowMs)
         val tile = qsTile ?: return timing
-        val snapshot = TileSnapshot.from(timing, nowMs)
+        val snapshot = TileSnapshot.from(timing, state.timer?.phase, nowMs)
         tile.state = when (snapshot.activation) {
             TileActivation.Active -> Tile.STATE_ACTIVE
             TileActivation.Inactive -> Tile.STATE_INACTIVE
         }
-        tile.label = getString(R.string.tile_label)
+        tile.label = TileText.label(this, snapshot.label)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            tile.subtitle = subtitleText(snapshot.subtitle)
+            tile.subtitle = TileText.subtitle(this, snapshot.subtitle)
         }
         tile.updateTile()
         return timing
-    }
-
-    private fun subtitleText(subtitle: TileSubtitle): String = when (subtitle) {
-        is TileSubtitle.TimeLeft ->
-            getString(R.string.tile_subtitle_left, TimerSurfaceTiming.formatClock(subtitle.remainingMs))
-        TileSubtitle.Paused -> getString(R.string.paused)
-        TileSubtitle.Ready -> getString(R.string.widget_status_ready)
     }
 
     private suspend fun initializeQuietly(repository: TimerRepository) {

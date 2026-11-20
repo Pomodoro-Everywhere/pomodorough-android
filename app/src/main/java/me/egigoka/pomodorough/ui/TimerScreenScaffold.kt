@@ -1,6 +1,7 @@
 package me.egigoka.pomodorough.ui
 
 import android.app.Activity
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -61,8 +62,8 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.window.layout.FoldingFeature
 import kotlinx.coroutines.CancellationException
@@ -85,14 +86,13 @@ internal fun TimerScreen(state: AppState, actions: TimerScreenActions) {
     val ui = rememberTimerScreenUiState(state)
     val mutationsEnabled = mutationsEnabled(state)
     val recentHistory = remember(state.history) { state.history.sortedByDescending(::historyEpoch) }
+    // AND-32: Back from another tab returns to Timer first. Back on Timer
+    // leaves the app as usual. The rename editor registers its own handler
+    // deeper in the tree, so its Back still cancels the rename first.
+    BackHandler(enabled = ui.navigation.activeTab != MainTab.Timer) {
+        ui.navigation.activeTab = MainTab.Timer
+    }
     AutoDismissNotice(state.notice, actions.onDismissNotice, offersRetry = state.noticeAction != null)
-    TaskDeletionUndoSnackbar(
-        actions.taskEditing.pendingDeletion,
-        ui.snackbarHost,
-        actions.taskEditing.onUndoDeletion,
-        actions.taskEditing.onConfirmDeletion,
-        onTasksScreen = ui.navigation.activeTab == MainTab.Tasks,
-    )
     TimerScreenLayout(state, actions, ui, mutationsEnabled, recentHistory)
     TimerScreenDialogs(state, actions, ui)
 }
@@ -139,8 +139,9 @@ internal fun restoreMainTab(saved: String?): MainTab? {
     return MainTab.entries.firstOrNull { it.name == saved }
 }
 
-private class TimerNavigationState(
-    private val tasks: LazyListState,
+internal class TimerNavigationState(
+    // AND-29: also the list of the task board pane beside the Timer.
+    val tasks: LazyListState,
     private val pattern: LazyListState,
     private val arrivals: LazyListState,
     private val network: LazyListState,
@@ -157,7 +158,7 @@ private class TimerNavigationState(
     }
 }
 
-private data class TimerScreenUiState(
+internal data class TimerScreenUiState(
     val dialogs: TimerDialogState,
     val navigation: TimerNavigationState,
     val confirmationStrategy: MutableState<BootstrapStrategy?>,
@@ -223,15 +224,23 @@ private fun TimerScreenLayout(
     val contentActions = timerContentActions(actions, ui.dialogs)
     val foldState = rememberFoldWindowState()
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        if (ui.navigation.activeTab != MainTab.Timer) {
-            PortraitScreenScaffold(state, actions, contentActions, ui, mutationsEnabled, recentHistory)
-            return@BoxWithConstraints
-        }
-        // Flat posture falls back to the legacy maxWidth > maxHeight gate
-        // inside timerLayoutDecision; unavailable window info stays Flat.
-        // Separating FLAT (isSeparating) keeps the fold split even when flat.
-        when (timerLayoutDecision(maxWidth, maxHeight, foldState.posture, foldState.isSeparating)) {
-            TimerLayoutDecision.FoldHalfOpen -> HalfOpenTimerScreen(
+        // Unavailable window info stays Flat; timerLayoutDecision then picks
+        // by the window size alone. Separating FLAT (isSeparating) keeps the
+        // fold split even when flat.
+        val timerLayout = timerLayoutDecision(maxWidth, maxHeight, foldState.posture, foldState.isSeparating)
+        val foldSplit = timerLayout == TimerLayoutDecision.FoldHalfOpen
+        val panes = windowPaneLayout(maxWidth, maxHeight, foldSplit)
+        // The undo snackbar needs the board on screen, and the pane layout
+        // decides that for the Timer tab.
+        TaskDeletionUndoSnackbar(
+            actions.taskEditing.pendingDeletion,
+            ui.snackbarHost,
+            actions.taskEditing.onUndoDeletion,
+            actions.taskEditing.onConfirmDeletion,
+            onTasksScreen = taskBoardShown(ui.navigation.activeTab, panes),
+        )
+        if (ui.navigation.activeTab == MainTab.Timer && foldSplit) {
+            HalfOpenTimerScreen(
                 state,
                 mutationsEnabled,
                 contentActions,
@@ -240,64 +249,74 @@ private fun TimerScreenLayout(
                 onSelectTab = { ui.navigation.activeTab = it },
                 snackbarHost = ui.snackbarHost,
             )
-            TimerLayoutDecision.Landscape -> LandscapeTimerScaffold(
-                state,
-                mutationsEnabled,
-                contentActions,
-                activeTab = ui.navigation.activeTab,
-                onSelectTab = { ui.navigation.activeTab = it },
-                maxWidth = maxWidth,
-                maxHeight = maxHeight,
-                snackbarHost = ui.snackbarHost,
-            )
-            TimerLayoutDecision.Portrait -> PortraitScreenScaffold(
-                state,
-                actions,
-                contentActions,
-                ui,
-                mutationsEnabled,
-                recentHistory,
-            )
+            return@BoxWithConstraints
+        }
+        MainScreenScaffold(mainNavigationStyle(maxWidth, maxHeight, foldSplit), ui) { padding ->
+            val tabs = MainTabInputs(state, actions, contentActions, ui, mutationsEnabled, recentHistory, padding)
+            MainTabContent(timerLayout, panes, tabs)
         }
     }
 }
 
-// Landscape keeps navigation outside the orientation-specific timer
-// content: a side rail when clearly wide, a bottom bar when barely
-// wide. Both surfaces share MainTab so every destination stays
-// reachable without rotating.
+// Everything a tab needs to draw itself, whichever layout the window picks.
+internal class MainTabInputs(
+    val state: AppState,
+    val actions: TimerScreenActions,
+    val contentActions: TimerContentActions,
+    val ui: TimerScreenUiState,
+    val mutationsEnabled: Boolean,
+    val recentHistory: List<HistoryItem>,
+    val padding: PaddingValues,
+)
+
+// AND-29: with two panes the Timer, Pattern, Arrivals and Network tabs split
+// the window. The Tasks tab is the task board alone in every layout.
 @Composable
-private fun LandscapeTimerScaffold(
-    state: AppState,
-    mutationsEnabled: Boolean,
-    actions: TimerContentActions,
-    activeTab: MainTab,
-    onSelectTab: (MainTab) -> Unit,
-    maxWidth: Dp,
-    maxHeight: Dp,
-    snackbarHost: SnackbarHostState,
+private fun MainTabContent(timerLayout: TimerLayoutDecision, panes: WindowPaneLayout, tabs: MainTabInputs) {
+    val activeTab = tabs.ui.navigation.activeTab
+    val state = tabs.state
+    when {
+        panes == WindowPaneLayout.TwoPane && activeTab != MainTab.Tasks -> ExpandedTabPanes(tabs)
+        activeTab != MainTab.Timer -> SecondaryTabList(
+            state, tabs.actions, tabs.contentActions, tabs.ui, tabs.mutationsEnabled, tabs.recentHistory, tabs.padding,
+        )
+        timerLayout == TimerLayoutDecision.Landscape -> Box(Modifier.fillMaxSize().padding(tabs.padding)) {
+            LandscapeTimerScreen(state, tabs.mutationsEnabled, tabs.contentActions)
+        }
+        else ->
+            PortraitTimerTab(state, tabs.actions.onRefresh, tabs.contentActions, tabs.mutationsEnabled, tabs.padding)
+    }
+}
+
+// AND-26: every tab shares one scaffold, so the navigation keeps its place
+// when the user switches tabs. mainNavigationStyle picks a side rail or a
+// bottom bar from the window size; both surfaces share MainTab so every
+// destination stays reachable without rotating.
+@Composable
+private fun MainScreenScaffold(
+    navigationStyle: MainNavigationStyle,
+    ui: TimerScreenUiState,
+    content: @Composable (PaddingValues) -> Unit,
 ) {
-    val style = landscapeNavigationStyle(maxWidth, maxHeight)
+    val navigation = ui.navigation
     Scaffold(
         modifier = Modifier.fillMaxSize().systemBarsPadding(),
         bottomBar = {
-            if (style == LandscapeNavigationStyle.Bar) {
-                MainNavigationBar(activeTab, onSelectTab)
+            if (navigationStyle == MainNavigationStyle.Bar) {
+                MainNavigationBar(navigation.activeTab) { navigation.activeTab = it }
             }
         },
-        snackbarHost = { UndoSnackbarHost(snackbarHost) },
+        snackbarHost = {
+            UndoSnackbarHost(ui.snackbarHost, Modifier.onSizeChanged { ui.snackbarHeightPx.intValue = it.height })
+        },
     ) { padding ->
-        if (style == LandscapeNavigationStyle.Rail) {
+        if (navigationStyle == MainNavigationStyle.Rail) {
             Row(Modifier.fillMaxSize().padding(padding)) {
-                MainNavigationRail(activeTab, onSelectTab)
-                Box(Modifier.weight(1f).fillMaxHeight()) {
-                    LandscapeTimerScreen(state, mutationsEnabled, actions)
-                }
+                MainNavigationRail(navigation.activeTab) { navigation.activeTab = it }
+                Box(Modifier.weight(1f).fillMaxHeight()) { content(PaddingValues()) }
             }
         } else {
-            Box(Modifier.fillMaxSize().padding(padding)) {
-                LandscapeTimerScreen(state, mutationsEnabled, actions)
-            }
+            content(padding)
         }
     }
 }
@@ -515,32 +534,6 @@ private fun retryNotice(actions: TimerScreenActions, retry: NoticeAction) {
     }
 }
 
-@Composable
-private fun PortraitScreenScaffold(
-    state: AppState,
-    actions: TimerScreenActions,
-    contentActions: TimerContentActions,
-    ui: TimerScreenUiState,
-    mutationsEnabled: Boolean,
-    recentHistory: List<HistoryItem>,
-) {
-    Scaffold(
-        modifier = Modifier.fillMaxSize().systemBarsPadding(),
-        bottomBar = {
-            MainNavigationBar(ui.navigation.activeTab) { ui.navigation.activeTab = it }
-        },
-        snackbarHost = {
-            UndoSnackbarHost(ui.snackbarHost, Modifier.onSizeChanged { ui.snackbarHeightPx.intValue = it.height })
-        },
-    ) { padding ->
-        if (ui.navigation.activeTab == MainTab.Timer) {
-            PortraitTimerTab(state, actions.onRefresh, contentActions, mutationsEnabled, padding)
-        } else {
-            SecondaryTabList(state, actions, contentActions, ui, mutationsEnabled, recentHistory, padding)
-        }
-    }
-}
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PortraitTimerTab(
@@ -550,17 +543,31 @@ private fun PortraitTimerTab(
     mutationsEnabled: Boolean,
     padding: PaddingValues,
 ) {
-    val modifier = Modifier.fillMaxSize().padding(padding)
+    TimerPullToRefresh(state, onRefresh, Modifier.fillMaxSize().padding(padding)) {
+        PortraitTimerScreen(state, mutationsEnabled, actions)
+    }
+}
+
+// Pulling down on the Timer refreshes a signed-in account. Signed out, there
+// is nothing to refresh, so the content sits in a plain box.
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun TimerPullToRefresh(
+    state: AppState,
+    onRefresh: () -> Unit,
+    modifier: Modifier,
+    content: @Composable () -> Unit,
+) {
     if (state.authStatus == AuthStatus.SignedIn) {
         PullToRefreshBox(
             isRefreshing = state.syncStatus == SyncStatus.Syncing,
             onRefresh = onRefresh,
             modifier = modifier.testTag("timer_pull_to_refresh"),
         ) {
-            PortraitTimerScreen(state, mutationsEnabled, actions)
+            content()
         }
     } else {
-        Box(modifier) { PortraitTimerScreen(state, mutationsEnabled, actions) }
+        Box(modifier) { content() }
     }
 }
 
@@ -580,7 +587,6 @@ private fun SecondaryTabList(
 ) {
     val navigation = ui.navigation
     val activeTab = navigation.activeTab
-    val snackbarInset = with(LocalDensity.current) { ui.snackbarHeightPx.intValue.toDp() }
     key(activeTab) {
         Box(
             modifier = Modifier.fillMaxSize().scaffoldContentAboveKeyboard(padding),
@@ -589,7 +595,7 @@ private fun SecondaryTabList(
             LazyColumn(
                 state = navigation.listState(),
                 modifier = Modifier.widthIn(max = SecondaryTabMaxWidth).fillMaxSize(),
-                contentPadding = PaddingValues(bottom = 20.dp + snackbarInset),
+                contentPadding = PaddingValues(bottom = tabListBottomPadding(ui)),
             ) {
                 secondaryHeader(state, contentActions)
                 when (activeTab) {
@@ -603,6 +609,11 @@ private fun SecondaryTabList(
         }
     }
 }
+
+// A tab's list ends clear of the undo snackbar.
+@Composable
+internal fun tabListBottomPadding(ui: TimerScreenUiState): Dp =
+    20.dp + with(LocalDensity.current) { ui.snackbarHeightPx.intValue.toDp() }
 
 private fun LazyListScope.secondaryHeader(state: AppState, actions: TimerContentActions) {
     item { AppHeader(state, actions.header) }
@@ -621,7 +632,7 @@ private fun LazyListScope.secondaryHeader(state: AppState, actions: TimerContent
     }
 }
 
-private fun LazyListScope.taskTab(
+internal fun LazyListScope.taskTab(
     state: AppState,
     actions: TimerScreenActions,
     mutationsEnabled: Boolean,
@@ -686,8 +697,25 @@ private fun LazyListScope.patternTab(
 }
 
 private fun LazyListScope.arrivalsTab(state: AppState, history: List<HistoryItem>) {
+    arrivalsSummary(state, history)
+    arrivalsRunLog(state, history)
+}
+
+// The summary title sits this far below the top of its list. Beside it, the
+// run log pane starts its first row at the same depth.
+internal val ArrivalsTitleVerticalPadding = 18.dp
+
+// Each run log row is padded this much above and below, so two rows sit
+// twice this apart.
+internal val RunLogRowVerticalPadding = 5.dp
+
+internal fun LazyListScope.arrivalsSummary(state: AppState, history: List<HistoryItem>) {
     item {
-        HistoryTitle(history.size, Modifier.padding(horizontal = 16.dp, vertical = 18.dp))
+        HistoryTitle(
+            history.size,
+            runLogLabel(state),
+            Modifier.padding(horizontal = 16.dp, vertical = ArrivalsTitleVerticalPadding),
+        )
     }
     item {
         CompletedFocusBreakdown(
@@ -696,6 +724,13 @@ private fun LazyListScope.arrivalsTab(state: AppState, history: List<HistoryItem
             Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
         )
     }
+}
+
+internal fun LazyListScope.arrivalsRunLog(
+    state: AppState,
+    history: List<HistoryItem>,
+    rowVerticalPadding: Dp = RunLogRowVerticalPadding,
+) {
     if (history.isEmpty()) {
         item {
             EmptyTabCard(
@@ -710,7 +745,7 @@ private fun LazyListScope.arrivalsTab(state: AppState, history: List<HistoryItem
                 historyItem,
                 historyItem.taskId?.let { taskId -> state.knownTasks.firstOrNull { it.id == taskId }?.title },
                 state.authStatus == AuthStatus.SignedIn,
-                Modifier.padding(horizontal = 16.dp, vertical = 5.dp),
+                Modifier.padding(horizontal = 16.dp, vertical = rowVerticalPadding),
             )
         }
     }
@@ -726,23 +761,27 @@ private fun LazyListScope.networkTab(
         NetworkSection(
             state,
             mutationsEnabled,
-            NetworkActions(
-                onSetMode = actions.onSetReplicationMode,
-                onCreateRoom = actions.onCreateIrohRoom,
-                onJoinRoom = actions.onJoinIrohRoom,
-                onLeaveRoom = actions.onLeaveIrohRoom,
-                onRefreshInvite = actions.onRefreshIrohInvite,
-                onSyncNow = actions.onSyncIrohNow,
-                onConfirmIdentityRecovery = actions.onConfirmIrohIdentityRecovery,
-                onShareInvite = actions.onShareIrohInvite,
-            ),
+            networkActions(actions),
             roomNameDraft,
             actions.joinInviteDraft,
             actions.onJoinInviteChange,
             Modifier.padding(horizontal = 16.dp, vertical = 18.dp),
+            joinInviteFailed = actions.joinInviteFailed,
         )
     }
 }
+
+internal fun networkActions(actions: TimerScreenActions) = NetworkActions(
+    onSetMode = actions.onSetReplicationMode,
+    onCreateRoom = actions.onCreateIrohRoom,
+    onJoinRoom = actions.onJoinIrohRoom,
+    onLeaveRoom = actions.onLeaveIrohRoom,
+    onRefreshInvite = actions.onRefreshIrohInvite,
+    onSyncNow = actions.onSyncIrohNow,
+    onConfirmIdentityRecovery = actions.onConfirmIrohIdentityRecovery,
+    onShareInvite = actions.onShareIrohInvite,
+    onSignIn = actions.onSignIn,
+)
 
 @Composable
 private fun EmptyTabCard(title: String, description: String, modifier: Modifier) {

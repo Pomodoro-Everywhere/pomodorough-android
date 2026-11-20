@@ -67,6 +67,38 @@ class TaskUndoWindowScreenTest {
         compose.onNodeWithText("Undo").assertDoesNotExist()
     }
 
+    // AND-29: at an expanded width the task board sits beside the Timer, so a
+    // delete from the Timer tab keeps its undo window.
+    @Test
+    @Config(qualifiers = "en-w1280dp-h800dp-land")
+    fun taskBoardBesideTheTimerKeepsTheUndoWindow() {
+        val repository = render(twoTasks)
+        compose.onNodeWithContentDescription("Delete Alpha").performClick()
+        compose.onNodeWithText("Deleted “Alpha”").assertExists()
+        compose.mainClock.advanceTimeBy(LongWait)
+        compose.waitForIdle()
+
+        assertEquals(emptyList<String>(), repository.deletions)
+        compose.onNodeWithText("Undo").performClick()
+        compose.onNodeWithContentDescription("Delete Alpha").assertExists()
+        assertEquals(emptyList<String>(), repository.deletions)
+    }
+
+    @Test
+    @Config(qualifiers = "en-w1280dp-h800dp-land")
+    fun leavingTheTimerPanesCommitsDeleteAndClosesSnackbar() {
+        val repository = render(twoTasks)
+        compose.onNodeWithContentDescription("Delete Alpha").performClick()
+        compose.onNodeWithText("Deleted “Alpha”").assertExists()
+        assertEquals(emptyList<String>(), repository.deletions)
+
+        openTab("Pattern")
+        compose.waitForIdle()
+
+        assertEquals(listOf("task-alpha"), repository.deletions)
+        compose.onNodeWithText("Undo").assertDoesNotExist()
+    }
+
     @Test
     fun undoSnackbarStaysOnTasksTabUntilUndo() {
         val repository = render(twoTasks)

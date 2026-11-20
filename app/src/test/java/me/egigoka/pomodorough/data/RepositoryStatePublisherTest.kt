@@ -26,6 +26,21 @@ class RepositoryStatePublisherTest {
         assertEquals(SyncStatus.Queued, publisher.state.value.syncStatus)
     }
 
+    // The task list order is a Shared Core decision. The publisher shows the list as it arrives.
+    @Test
+    fun publicationKeepsTheSharedCoreTaskListOrder() {
+        val publisher = RepositoryStatePublisher()
+        val coreOrder = listOf("apple", "Banana", "Bulk task 2", "Bulk task 10")
+            .mapIndexed { index, title -> FocusTask("task-${3 - index}", title) }
+
+        listOf(coreOrder, coreOrder.reversed()).forEach { tasks ->
+            publisher.publish(publication(tasks = tasks))
+
+            assertEquals(tasks, publisher.state.value.tasks)
+            assertEquals(tasks, publisher.state.value.taskSummaries.map(TaskDailySummary::task))
+        }
+    }
+
     @Test
     fun conflictPrecedesOfflineAndAlarmEventPreservesOtherState() {
         val publisher = RepositoryStatePublisher()
@@ -49,6 +64,7 @@ class RepositoryStatePublisherTest {
     private fun publication(
         ready: Boolean = true,
         projection: TimerProjection = TimerProjection(null, emptyList()),
+        tasks: List<FocusTask> = emptyList(),
         knownTasks: Collection<FocusTask> = emptyList(),
         pendingCounts: List<Int> = emptyList(),
         online: Boolean = true,
@@ -61,7 +77,7 @@ class RepositoryStatePublisherTest {
         user = null,
         projection = projection,
         completionAlertTimerId = null,
-        tasks = emptyList(),
+        tasks = tasks,
         knownTasks = knownTasks,
         selectedTaskId = null,
         settings = TimerSettings(),

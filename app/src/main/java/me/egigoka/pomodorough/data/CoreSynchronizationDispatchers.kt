@@ -2,6 +2,8 @@ package me.egigoka.pomodorough.data
 
 import java.time.Instant
 import kotlinx.coroutines.CancellationException
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
@@ -853,6 +855,10 @@ private data class CoreLocalQueues(
     }
 }
 
+// R55-A03: Core reads the canonical pair as the response's canonical head.
+// An absent pair stays absent on the wire, never null, so Core falls back to
+// serverHlc* exactly as for an older server.
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable
 private data class CoreCanonicalResponse(
     val acknowledgements: List<Acknowledgement>,
@@ -870,6 +876,8 @@ private data class CoreCanonicalResponse(
     val serverTime: String,
     val serverHlcWallMs: Long,
     val serverHlcCounter: Long,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val canonicalHlcWallMs: Long? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val canonicalHlcCounter: Long? = null,
 ) {
     fun projectionBase() = CoreProjectionBase(
         canonicalTimer = canonicalTimer?.toModel(),
@@ -901,6 +909,8 @@ private data class CoreCanonicalResponse(
                 value.serverTime,
                 value.serverHlcWallMs,
                 value.serverHlcCounter,
+                value.canonicalHlcWallMs,
+                value.canonicalHlcCounter,
             )
         }
     }

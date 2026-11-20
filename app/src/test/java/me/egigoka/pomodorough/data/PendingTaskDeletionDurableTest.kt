@@ -66,6 +66,21 @@ class PendingTaskDeletionDurableTest {
         assertEquals(listOf(task), workspace.startProcess().state.value.tasks)
     }
 
+    // AND-20: deleting the focus task only opens the undo window, so Undo
+    // brings the task back still selected, in this process and the next.
+    @Test
+    fun undoKeepsTheFocusTaskSelected() = runBlocking {
+        val workspace = workspace()
+        val first = workspace.startProcess()
+        val task = first.seedSelectedTask("Write report")
+        first.requestTaskDeletion(task.id)
+
+        first.undoTaskDeletion()
+
+        assertEquals(task.id, first.state.value.selectedTaskId)
+        assertEquals(task.id, workspace.startProcess().state.value.selectedTaskId)
+    }
+
     // Batch B rework: a marker of another owner is kept for that owner's next
     // sign-in, and it deletes nothing in this workspace.
     @Test

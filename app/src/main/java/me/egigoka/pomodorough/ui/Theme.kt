@@ -60,6 +60,13 @@ private val lightColors = lightColorScheme(
     onSurface = Ink,
     surfaceVariant = Lavender,
     onSurfaceVariant = Ink,
+    // AND-12: dialogs, menus and switch tracks paint the surface container roles. Left unset
+    // they fall back to the Material baseline purple-greys, so they step from Cloud instead.
+    surfaceContainerLowest = Color(0xFFF6FAFA),
+    surfaceContainerLow = Color(0xFFEFF5F6),
+    surfaceContainer = Cloud,
+    surfaceContainerHigh = Color(0xFFDCE7E9),
+    surfaceContainerHighest = Color(0xFFD0DEE1),
     outline = Violet,
     outlineVariant = Lavender,
     error = DangerText,
@@ -96,6 +103,13 @@ private val darkColors = darkColorScheme(
     onSurface = Color.White,
     surfaceVariant = Color(0xFF23313D),
     onSurfaceVariant = Color.White,
+    // AND-12: the containers step up from the navy surface to surfaceVariant, so dialogs and
+    // menus stay on the app's navy instead of the Material baseline #2B2930.
+    surfaceContainerLowest = Color(0xFF09111A),
+    surfaceContainerLow = Color(0xFF121E2A),
+    surfaceContainer = Color(0xFF162330),
+    surfaceContainerHigh = Color(0xFF1C2A37),
+    surfaceContainerHighest = Color(0xFF23313D),
     outline = Color(0xFF91A7B5),
     outlineVariant = Color(0xFF41515E),
     error = Color(0xFFFFB4AB),

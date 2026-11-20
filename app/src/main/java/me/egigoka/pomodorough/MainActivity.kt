@@ -28,6 +28,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 import me.egigoka.pomodorough.data.auth.SystemGoogleCredentialProvider
+import me.egigoka.pomodorough.timer.CompletionNextPhases
 import me.egigoka.pomodorough.timer.ExactAlarmFallbackChoice
 import me.egigoka.pomodorough.timer.SystemTimerCompletionNotifier
 import me.egigoka.pomodorough.ui.PomodoroughScreen
@@ -44,7 +45,9 @@ class MainActivity : ComponentActivity() {
             // R48-A01: the foreground ticker posts its completion alert
             // through the shared coordinator instead of going silent.
             completionAlert = { timerId ->
-                SystemTimerCompletionNotifier(applicationContext, timerId).show()
+                SystemTimerCompletionNotifier(applicationContext, timerId) {
+                    CompletionNextPhases.from((application as PomodoroughApplication).timerRepository.state.value)
+                }.show()
             },
         )
     }
@@ -116,6 +119,7 @@ class MainActivity : ComponentActivity() {
                 onStopSound = ::stopSound,
                 joinInviteDraft = viewModel.joinInviteDraft,
                 onJoinInviteChange = viewModel::updateJoinInviteDraft,
+                joinInviteFailed = viewModel.joinInviteFailed,
                 taskEditing = taskEditingActions(),
                 onRetryStartup = viewModel::retryStartup,
             )
@@ -276,7 +280,7 @@ class MainActivity : ComponentActivity() {
             is PendingTimerActionEffect.RequestNotificationPermission ->
                 bindNotificationPermission(effect.callback).launch(Manifest.permission.POST_NOTIFICATIONS)
             is PendingTimerActionEffect.OpenNotificationSettings ->
-                bindNotificationSettings(effect.callback).launch(notificationSettingsIntent())
+                launchNotificationSettings(packageName, bindNotificationSettings(effect.callback)::launch)
             is PendingTimerActionEffect.OpenExactAlarmSettings ->
                 bindExactAlarmSettings(effect.callback).launch(exactAlarmSettingsIntent())
         }
@@ -334,11 +338,6 @@ class MainActivity : ComponentActivity() {
     private fun notificationPermissionGranted(): Boolean = Build.VERSION.SDK_INT < 33 ||
         ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
         PackageManager.PERMISSION_GRANTED
-
-    private fun notificationSettingsIntent(): Intent = Intent(
-        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-        Uri.parse("package:$packageName"),
-    )
 
     private fun exactAlarmSettingsIntent(): Intent = Intent(
         Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,

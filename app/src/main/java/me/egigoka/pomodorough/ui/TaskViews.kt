@@ -42,6 +42,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.History
@@ -88,6 +89,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalAccessibilityManager
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
@@ -107,7 +109,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
@@ -150,7 +154,7 @@ internal fun TaskSelector(
     val presentation = taskSelectorPresentation(state)
     Box(Modifier.fillMaxWidth()) {
         TaskSelectorButton(presentation, onClick = { expanded = true })
-        TaskSelectionMenu(state.tasks, expanded, onSelectTask) { expanded = false }
+        TaskSelectionMenu(state, expanded, onSelectTask) { expanded = false }
     }
 }
 
@@ -204,23 +208,39 @@ private fun TaskSelectorButton(state: TaskSelectorPresentation, onClick: () -> U
 
 @Composable
 internal fun TaskSelectionMenu(
-    tasks: List<FocusTask>,
+    state: TaskSelectorState,
     expanded: Boolean,
     onSelectTask: (String?) -> Unit,
     onDismiss: () -> Unit,
 ) {
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
-        DropdownMenuItem(
-            text = { Text(stringResource(R.string.no_task)) },
-            onClick = { onDismiss(); onSelectTask(null) },
-        )
-        tasks.forEach { task ->
-            DropdownMenuItem(
-                text = { Text(task.title, maxLines = 2, overflow = TextOverflow.Ellipsis) },
-                onClick = { onDismiss(); onSelectTask(task.id) },
-            )
+        TaskSelectionItem(stringResource(R.string.no_task), state.selectedTaskId == null) {
+            onDismiss(); onSelectTask(null)
+        }
+        state.tasks.forEach { task ->
+            TaskSelectionItem(task.title, state.selectedTaskId == task.id) {
+                onDismiss(); onSelectTask(task.id)
+            }
         }
     }
+}
+
+// AND-12: the current choice carries a check mark and the selected state, so the open menu
+// says which task the timer uses.
+@Composable
+private fun TaskSelectionItem(title: String, selected: Boolean, onClick: () -> Unit) {
+    val selectionDescription = stringResource(if (selected) R.string.selected else R.string.not_selected)
+    DropdownMenuItem(
+        text = { Text(title, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+        onClick = onClick,
+        modifier = Modifier.semantics {
+            this.selected = selected
+            stateDescription = selectionDescription
+        },
+        trailingIcon = if (selected) {
+            { Icon(Icons.Outlined.Check, contentDescription = null) }
+        } else null,
+    )
 }
 
 @Composable
@@ -323,46 +343,42 @@ private fun TaskDraftCard(
     }
 }
 
+// The labels show only above table rows. They take the same width, padding,
+// weights and minimum widths as WideTaskSummary so each label sits over its
+// column (AND-28: at 320 dp the rows stack and the labels go away).
 @Composable
 internal fun TaskColumnLabels(modifier: Modifier = Modifier) {
-    if (LocalConfiguration.current.fontScale < 1.3f) {
-        BoxWithConstraints(modifier.fillMaxWidth()) {
-            val weights = taskRowWeights(isNarrow = maxWidth < 360.dp)
-            Row(verticalAlignment = Alignment.Bottom) {
-                Text(
-                    stringResource(R.string.task),
-                    Modifier.weight(weights.title),
-                    style = MaterialTheme.typography.labelMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
+    BoxWithConstraints(modifier.fillMaxWidth()) {
+        if (rememberTaskRowLayout(maxWidth) != TaskRowLayout.Table) return@BoxWithConstraints
+        val weights = TableTaskRowWeights
+        Row(Modifier.padding(horizontal = TaskRowHorizontalPadding), verticalAlignment = Alignment.Bottom) {
+            Row(Modifier.weight(weights.content), verticalAlignment = Alignment.Bottom) {
+                TaskColumnLabel(stringResource(R.string.task), Modifier.weight(weights.title), TextAlign.Start)
+                TaskColumnLabel(
                     stringResource(R.string.finished),
-                    Modifier.weight(weights.finished),
-                    style = MaterialTheme.typography.labelMedium,
-                    textAlign = TextAlign.Center,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                    Modifier.weight(weights.finished).widthIn(min = 44.dp),
                 )
-                Text(
-                    stringResource(R.string.time),
-                    Modifier.weight(weights.time),
-                    style = MaterialTheme.typography.labelMedium,
-                    textAlign = TextAlign.Center,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    stringResource(R.string.action),
-                    Modifier.weight(weights.action),
-                    style = MaterialTheme.typography.labelMedium,
-                    textAlign = TextAlign.Center,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                TaskColumnLabel(stringResource(R.string.time), Modifier.weight(weights.time).widthIn(min = 56.dp))
             }
+            TaskColumnLabel(
+                stringResource(R.string.action),
+                Modifier.weight(weights.action).widthIn(min = 64.dp),
+                TextAlign.End,
+            )
         }
     }
+}
+
+@Composable
+private fun TaskColumnLabel(text: String, modifier: Modifier, textAlign: TextAlign = TextAlign.Center) {
+    Text(
+        text,
+        modifier,
+        style = MaterialTheme.typography.labelMedium,
+        textAlign = textAlign,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+    )
 }
 
 /** Row callbacks the task board hands each summary row. */
@@ -381,26 +397,94 @@ internal fun TaskSummaryRow(
     modifier: Modifier = Modifier,
     editing: Boolean = false,
 ) {
-    val useStackedLayout = LocalConfiguration.current.fontScale >= 1.3f
     val summaryDescription = taskSummaryDescription(summary)
-    Surface(
-        modifier = modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-        shape = MaterialTheme.shapes.large,
-    ) {
-        when {
-            editing -> TaskTitleEditor(
-                summary.task.title,
-                actions.onRename,
-                actions.onCancelRename,
-                Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-            )
-            useStackedLayout -> StackedTaskSummary(summary, summaryDescription, mutationsEnabled, actions)
-            else -> WideTaskSummary(summary, summaryDescription, mutationsEnabled, actions)
+    BoxWithConstraints(modifier.fillMaxWidth()) {
+        val layout = rememberTaskRowLayout(maxWidth)
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            shape = MaterialTheme.shapes.large,
+        ) {
+            when {
+                editing -> TaskTitleEditor(
+                    summary.task.title,
+                    actions.onRename,
+                    actions.onCancelRename,
+                    Modifier.padding(horizontal = TaskRowHorizontalPadding, vertical = 12.dp),
+                )
+                layout == TaskRowLayout.Stacked ->
+                    StackedTaskSummary(summary, summaryDescription, mutationsEnabled, actions)
+                else -> WideTaskSummary(summary, summaryDescription, mutationsEnabled, actions)
+            }
         }
     }
 }
+
+internal enum class TaskRowLayout {
+    Table,
+    Stacked,
+}
+
+// AND-15: the table puts the title, the two counts and the buttons on one
+// line. It is used only when every column can show its content on one line:
+// the title column a typical short title, and each column its heading;
+// otherwise the row stacks, and the title gets the full row width. Phones in
+// portrait stack; tablets and landscape windows get the table. A narrow pane,
+// such as the task board beside the timer, stacks when a heading would be cut.
+// Enlarged text (font scale 1.3 and up) always stacks.
+internal fun taskRowLayout(rowWidth: Dp, needs: TaskTableColumnNeeds, fontScale: Float): TaskRowLayout {
+    if (fontScale >= TaskRowStackedFontScale) return TaskRowLayout.Stacked
+    val content = rowWidth - TaskRowHorizontalPadding * 2
+    val weights = TableTaskRowWeights
+    val fits = content * weights.titleShare >= needs.title &&
+        content * weights.finishedShare >= needs.finished &&
+        content * weights.timeShare >= needs.time &&
+        content * weights.actionShare >= needs.action
+    return if (fits) TaskRowLayout.Table else TaskRowLayout.Stacked
+}
+
+/** The width each table column needs to show its content on one line. */
+internal data class TaskTableColumnNeeds(val title: Dp, val finished: Dp, val time: Dp, val action: Dp)
+
+@Composable
+private fun rememberTaskRowLayout(rowWidth: Dp): TaskRowLayout =
+    taskRowLayout(rowWidth, rememberTaskTableColumnNeeds(), LocalConfiguration.current.fontScale)
+
+// The typical title is measured in the title style and the headings in the
+// label style, so the decision follows the font, the display density, the
+// user's font scale and the language.
+@Composable
+private fun rememberTaskTableColumnNeeds(): TaskTableColumnNeeds {
+    val measurer = rememberTextMeasurer()
+    val titleStyle = MaterialTheme.typography.titleLarge
+    val headingStyle = MaterialTheme.typography.labelMedium
+    val density = LocalDensity.current
+    val task = stringResource(R.string.task)
+    val finished = stringResource(R.string.finished)
+    val time = stringResource(R.string.time)
+    val action = stringResource(R.string.action)
+    return remember(measurer, titleStyle, headingStyle, density, task, finished, time, action) {
+        fun width(text: String, style: TextStyle): Dp {
+            val layout = measurer.measure(text, style, maxLines = 1, softWrap = false)
+            return with(density) { layout.size.width.toDp() }
+        }
+        TaskTableColumnNeeds(
+            title = maxOf(width(TypicalTaskTitle, titleStyle), width(task, headingStyle)),
+            finished = width(finished, headingStyle),
+            time = width(time, headingStyle),
+            action = width(action, headingStyle),
+        )
+    }
+}
+
+// A measuring sample only; it is never shown. It is the short title from the
+// AND-15 audit, which the old table cut to "Write / releas / e no…" at 320 dp.
+private const val TypicalTaskTitle = "Write release notes"
+
+private const val TaskRowStackedFontScale = 1.3f
+
+private val TaskRowHorizontalPadding = 14.dp
 
 @Composable
 private fun StackedTaskSummary(
@@ -409,7 +493,7 @@ private fun StackedTaskSummary(
     enabled: Boolean,
     actions: TaskRowActions,
 ) {
-    Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+    Column(Modifier.padding(horizontal = TaskRowHorizontalPadding, vertical = 12.dp)) {
         Column(Modifier.clearAndSetSemantics { contentDescription = description }) {
             Text(
                 summary.task.title,
@@ -439,8 +523,8 @@ private fun WideTaskSummary(
     enabled: Boolean,
     actions: TaskRowActions,
 ) {
-    BoxWithConstraints(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
-        val weights = taskRowWeights(isNarrow = maxWidth < 360.dp)
+    val weights = TableTaskRowWeights
+    Box(Modifier.padding(horizontal = TaskRowHorizontalPadding, vertical = 12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Row(
                 modifier = Modifier.weight(weights.content).clearAndSetSemantics {
@@ -477,18 +561,24 @@ internal data class TaskRowWeights(
     val finished: Float,
     val time: Float,
     val action: Float,
-)
+) {
+    // Each share is of the row's inner width. A column in the content group
+    // gets the group's share of the row, times its share of that group.
+    val titleShare: Float get() = contentGroupShare * title / contentGroupWeight
+    val finishedShare: Float get() = contentGroupShare * finished / contentGroupWeight
+    val timeShare: Float get() = contentGroupShare * time / contentGroupWeight
+    val actionShare: Float get() = action / (content + action)
 
-// Rebalanced from 4.55f/2f/1.2f/1.35f/0.9f: title keeps flex but metrics
-// hold minimum widths so long titles ellipsize instead of squeezing
-// counts at 320dp. Narrow screens grant metrics a larger relative share.
-// The action column holds the rename icon and the Delete text side by
-// side, so it takes a larger share than a lone Delete button needed.
-internal fun taskRowWeights(isNarrow: Boolean): TaskRowWeights = if (isNarrow) {
-    TaskRowWeights(content = 1f, title = 1f, finished = 0.7f, time = 0.85f, action = 0.85f)
-} else {
-    TaskRowWeights(content = 1f, title = 1f, finished = 0.55f, time = 0.65f, action = 0.7f)
+    private val contentGroupShare: Float get() = content / (content + action)
+    private val contentGroupWeight: Float get() = title + finished + time
 }
+
+// AND-15: the title takes the largest share of a table row. The counts keep
+// minimum widths so they never squeeze. The action column holds the rename
+// icon and the Delete text side by side, so it takes a larger share than a
+// lone Delete button needed.
+internal val TableTaskRowWeights =
+    TaskRowWeights(content = 1f, title = 2f, finished = 0.55f, time = 0.65f, action = 0.7f)
 
 @Composable
 private fun TaskSummaryMetric(text: String, modifier: Modifier, monospace: Boolean) {
