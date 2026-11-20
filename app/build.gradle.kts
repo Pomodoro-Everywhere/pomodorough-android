@@ -44,8 +44,8 @@ android {
         applicationId = "me.egigoka.pomodorough"
         minSdk = 26
         targetSdk = 36
-        versionCode = 72
-        versionName = "0.57.1"
+        versionCode = 73
+        versionName = "0.57.2"
 
         testInstrumentationRunner = if (requestedTestBuildType == "release") {
             "me.egigoka.pomodorough.releaseiroh.ReleaseIrohSmokeInstrumentation"
